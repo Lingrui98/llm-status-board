@@ -100,7 +100,8 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
   };
 
   const handleImport = async () => {
-    const confirmed = window.confirm(
+    // 注意：不能用 window.confirm —— macOS WKWebView 下它不弹窗且返回 undefined
+    const confirmed = await api.confirmDialog(
       "导入会替换通用设置，账号按 ID 合并（同 ID 覆盖、新 ID 追加），当前未保存的编辑会丢失。继续？",
     );
     if (!confirmed) return;

@@ -10,9 +10,19 @@ afterEach(cleanup);
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+// mock dialog 插件（jsdom 无原生对话框；macOS 上 window.confirm 也不可用）
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  save: vi.fn(),
+  open: vi.fn(),
+  confirm: vi.fn(),
+}));
 import { invoke } from "@tauri-apps/api/core";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 
 const mockInvoke = vi.mocked(invoke);
+const mockSave = vi.mocked(save);
+const mockOpen = vi.mocked(open);
+const mockConfirm = vi.mocked(confirm);
 
 function makeConfig(accounts: AppConfig["accounts"]): AppConfig {
   return {
@@ -193,5 +203,130 @@ describe("App 设置页", () => {
     expect(nameInput).toBeTruthy();
     // Base URL 带初始值
     expect(screen.getByDisplayValue("https://relay.example.com")).toBeTruthy();
+  });
+});
+
+describe("App 配置导入/导出", () => {
+  const baseAccount = {
+    id: "acc-1",
+    name: "本机账号",
+    kind: "deepSeek" as const,
+    enabled: true,
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "sk-1",
+    token: "",
+    refreshToken: "",
+    userId: null,
+    username: "",
+    password: "",
+    quotaPerUnit: null,
+    custom: null,
+  };
+
+  const importedConfig: AppConfig = {
+    version: 1,
+    settings: { autoRefreshSec: 600, refreshOnStart: true, proxy: null },
+    accounts: [
+      baseAccount,
+      {
+        ...baseAccount,
+        id: "acc-2",
+        name: "导入的新账号",
+        kind: "sub2Api",
+        baseUrl: "https://relay.example.com",
+      },
+    ],
+  };
+
+  it("导出：选路径后调用 export_config", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeConfig([baseAccount]));
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      if (cmd === "export_config") return Promise.resolve(undefined);
+      return Promise.resolve([]);
+    });
+    mockSave.mockResolvedValue("C:/Users/x/Desktop/lsb-config.json");
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("本机账号")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => {
+      expect(screen.getByText("账号管理")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "导出配置" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("export_config", {
+        path: "C:/Users/x/Desktop/lsb-config.json",
+      });
+    });
+    // 成功提示包含路径
+    await waitFor(() => {
+      expect(screen.getByText(/已导出到/)).toBeTruthy();
+    });
+  });
+
+  it("导入：确认后合并账号并刷新表单", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeConfig([baseAccount]));
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      if (cmd === "import_config") return Promise.resolve(importedConfig);
+      return Promise.resolve([]);
+    });
+    mockConfirm.mockResolvedValue(true);
+    mockOpen.mockResolvedValue("C:/Users/x/Desktop/lsb-config.json");
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("本机账号")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => {
+      expect(screen.getByText("账号管理")).toBeTruthy();
+    });
+
+    // 导入前只有 1 个账号
+    expect(screen.queryByText("导入的新账号")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "导入配置" }));
+    // 合并后的新账号出现在表格里
+    await waitFor(() => {
+      expect(screen.getByText("导入的新账号")).toBeTruthy();
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("import_config", {
+      path: "C:/Users/x/Desktop/lsb-config.json",
+    });
+    // 成功提示显示账号数
+    expect(screen.getByText("已导入 2 个账号")).toBeTruthy();
+  });
+
+  it("导入取消确认后不做任何事", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeConfig([baseAccount]));
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      return Promise.resolve([]);
+    });
+    mockConfirm.mockResolvedValue(false);
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("本机账号")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => {
+      expect(screen.getByText("账号管理")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "导入配置" }));
+
+    await waitFor(() => {
+      expect(mockConfirm).toHaveBeenCalled();
+    });
+    expect(mockOpen).not.toHaveBeenCalled();
+    expect(mockInvoke).not.toHaveBeenCalledWith("import_config", expect.anything());
   });
 });

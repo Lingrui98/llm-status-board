@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import type { AccountConfig, AccountInfo, AppConfig, RefreshOutcome } from "./types";
 
 export async function getConfig(): Promise<AppConfig> {
@@ -48,4 +48,9 @@ export async function pickImportPath(): Promise<string | null> {
 
 export async function importConfig(path: string): Promise<AppConfig> {
   return invoke<AppConfig>("import_config", { path });
+}
+
+/// 原生确认框（macOS WKWebView 的 window.confirm 不弹窗，必须用插件实现）
+export async function confirmDialog(message: string): Promise<boolean> {
+  return confirm(message, { title: "确认", kind: "warning" });
 }
