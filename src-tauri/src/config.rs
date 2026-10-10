@@ -98,4 +98,98 @@ mod tests {
         assert!(err.contains("配置文件格式错误"), "错误信息应可读: {err}");
         let _ = fs::remove_file(&path);
     }
+
+    /// 导入合并语义验证：设置替换、账号同 id 覆盖 + 新 id 追加
+    #[test]
+    fn test_import_merge_semantics() {
+        let base_path = temp_config_path("import-base");
+        let import_path = temp_config_path("import-file");
+
+        // 当前配置：acc1 + acc2
+        let mut base = AppConfig::default();
+        base.accounts.push(AccountConfig {
+            id: "acc1".into(),
+            name: "旧名1".into(),
+            kind: ProviderKind::DeepSeek,
+            base_url: "https://api.deepseek.com".into(),
+            api_key: "sk-old".into(),
+            ..Default::default()
+        });
+        base.accounts.push(AccountConfig {
+            id: "acc2".into(),
+            name: "保留2".into(),
+            ..Default::default()
+        });
+        save_to_path(&base_path, &base).unwrap();
+
+        // 导入文件：acc1（新内容）+ acc3（新账号）
+        let mut imported = AppConfig::default();
+        imported.settings.auto_refresh_sec = 300;
+        imported.accounts.push(AccountConfig {
+            id: "acc1".into(),
+            name: "新名1".into(),
+            kind: ProviderKind::Sub2Api,
+            base_url: "https://relay.example.com".into(),
+            api_key: "sk-new".into(),
+            ..Default::default()
+        });
+        imported.accounts.push(AccountConfig {
+            id: "acc3".into(),
+            name: "新增3".into(),
+            ..Default::default()
+        });
+        save_to_path(&import_path, &imported).unwrap();
+
+        // 合并（模拟 import_config 的核心逻辑）
+        let mut current = load_from_path(&base_path).unwrap();
+        current.settings = imported.settings.clone();
+        for acc in imported.accounts {
+            match current.accounts.iter_mut().find(|a| a.id == acc.id) {
+                Some(old) => *old = acc,
+                None => current.accounts.push(acc),
+            }
+        }
+
+        assert_eq!(current.accounts.len(), 3);
+        let acc1 = current.accounts.iter().find(|a| a.id == "acc1").unwrap();
+        assert_eq!(acc1.name, "新名1");
+        assert_eq!(acc1.kind, ProviderKind::Sub2Api);
+        assert_eq!(acc1.api_key, "sk-new");
+        assert!(current
+            .accounts
+            .iter()
+            .any(|a| a.id == "acc2" && a.name == "保留2"));
+        assert!(current.accounts.iter().any(|a| a.id == "acc3"));
+        assert_eq!(current.settings.auto_refresh_sec, 300);
+
+        let _ = fs::remove_file(&base_path);
+        let _ = fs::remove_file(&import_path);
+    }
+
+    /// 导出文件应与源配置内容一致（可直接再导入）
+    #[test]
+    fn test_export_round_trip() {
+        let src = temp_config_path("export-src");
+        let dst = temp_config_path("export-dst");
+        let _ = fs::remove_file(&dst);
+
+        let mut cfg = AppConfig::default();
+        cfg.accounts.push(AccountConfig {
+            id: "a".into(),
+            name: "测试".into(),
+            kind: ProviderKind::OneApi,
+            base_url: "https://x.example.com".into(),
+            token: "tok".into(),
+            ..Default::default()
+        });
+        save_to_path(&src, &cfg).unwrap();
+        // 导出 = 把同一份配置写到另一路径
+        save_to_path(&dst, &cfg).unwrap();
+
+        let back = load_from_path(&dst).unwrap();
+        assert_eq!(back.accounts.len(), 1);
+        assert_eq!(back.accounts[0].token, "tok");
+        let _ = fs::remove_file(&src);
+        let _ = fs::remove_file(&dst);
+    }
 }

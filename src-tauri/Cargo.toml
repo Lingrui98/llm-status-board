@@ -16,6 +16,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
+tauri-plugin-dialog = "2.8.1"
 
 [profile.release]
 codegen-units = 1

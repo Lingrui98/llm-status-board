@@ -88,6 +88,36 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
     setAccounts((prev) => [...prev, { ...acc, id: newAccountId(), name: acc.name + " 副本" }]);
   };
 
+  const handleExport = async () => {
+    try {
+      const path = await api.pickExportPath();
+      if (!path) return;
+      await api.exportConfig(path);
+      showTip(`已导出到 ${path}`);
+    } catch (e) {
+      showTip(`导出失败: ${String(e)}`);
+    }
+  };
+
+  const handleImport = async () => {
+    const confirmed = window.confirm(
+      "导入会替换通用设置，账号按 ID 合并（同 ID 覆盖、新 ID 追加），当前未保存的编辑会丢失。继续？",
+    );
+    if (!confirmed) return;
+    try {
+      const path = await api.pickImportPath();
+      if (!path) return;
+      const merged = await api.importConfig(path);
+      setAccounts(merged.accounts);
+      setAutoRefreshSec(merged.settings.autoRefreshSec);
+      setRefreshOnStart(merged.settings.refreshOnStart);
+      setProxy(merged.settings.proxy ?? "");
+      showTip(`已导入 ${merged.accounts.length} 个账号`);
+    } catch (e) {
+      showTip(`导入失败: ${String(e)}`);
+    }
+  };
+
   if (editing) {
     return (
       <main className="main">
@@ -112,6 +142,12 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
           </button>
           <button className="btn ghost" onClick={() => onRefresh()} title="先用当前已保存的配置刷新一次">
             刷新数据
+          </button>
+          <button className="btn ghost" onClick={handleImport} title="从导出的配置文件合并账号（跨设备迁移）">
+            导入配置
+          </button>
+          <button className="btn ghost" onClick={handleExport} title="导出全部账号与设置（含 API Key）">
+            导出配置
           </button>
           <button className="btn primary" onClick={handleSaveAll} disabled={saving}>
             {saving ? "保存中…" : "保存全部"}

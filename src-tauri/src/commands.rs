@@ -22,6 +22,46 @@ pub async fn config_path(app: AppHandle) -> Result<String, String> {
         .into_owned())
 }
 
+/// 导出当前配置到指定路径（含 API Key，前端已提示用户注意文件安全）
+#[tauri::command]
+pub async fn export_config(app: AppHandle, path: String) -> Result<(), String> {
+    if path.trim().is_empty() {
+        return Err("导出路径为空".into());
+    }
+    let cfg = config::load(&app)?;
+    config::save_to_path(std::path::Path::new(&path), &cfg)
+}
+
+/// 从指定路径导入配置：返回导入后的完整配置（设置替换、账号按 id 合并去重）
+#[tauri::command]
+pub async fn import_config(app: AppHandle, path: String) -> Result<AppConfig, String> {
+    if path.trim().is_empty() {
+        return Err("导入路径为空".into());
+    }
+    let imported: AppConfig = config::load_from_path(std::path::Path::new(&path))
+        .map_err(|e| format!("导入失败: {e}"))?;
+    if imported.version != 1 {
+        return Err(format!(
+            "不支持的配置版本: {}（本应用为 v1）",
+            imported.version
+        ));
+    }
+
+    let mut current = config::load(&app)?;
+    // 设置整体替换
+    current.settings = imported.settings;
+    // 账号按 id 合并：导入的覆盖同 id 的旧账号，其余追加
+    for acc in imported.accounts {
+        match current.accounts.iter_mut().find(|a| a.id == acc.id) {
+            Some(old) => *old = acc,
+            None => current.accounts.push(acc),
+        }
+    }
+    current.version = 1;
+    config::save(&app, &current)?;
+    Ok(current)
+}
+
 #[tauri::command]
 pub async fn test_account(app: AppHandle, account: AccountConfig) -> Result<AccountInfo, String> {
     let cfg = config::load(&app)?;
