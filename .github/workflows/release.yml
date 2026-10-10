@@ -9,6 +9,8 @@ on:
 permissions:
   contents: write
 
+# 注意：本仓库根目录就是 llm-status-board 项目本身（package.json / src-tauri 都在根下），
+# 不要再给各步骤加 llm-status-board/ 前缀的 working-directory 或 projectPath。
 jobs:
   build:
     strategy:
@@ -34,7 +36,7 @@ jobs:
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: llm-status-board/src-tauri
+          workspaces: src-tauri
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -42,8 +44,7 @@ jobs:
           node-version: 22
 
       - name: Install frontend deps
-        working-directory: llm-status-board
-        run: npm install --no-fund --no-audit
+        run: npm ci --no-fund --no-audit
 
       # macOS 签名（可选）：在 repo Settings → Secrets 配置后取消注释
       # - name: Import signing certificate
@@ -65,7 +66,6 @@ jobs:
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: llm-status-board
           tagName: ${{ github.ref_name }}
           releaseName: "LLM Status Board ${{ github.ref_name }}"
           releaseBody: "Win / macOS 安装包见 Assets。"

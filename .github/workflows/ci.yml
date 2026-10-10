@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps
+        run: npm ci --no-fund --no-audit
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: UI tests (vitest)
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Format check
+        working-directory: src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        working-directory: src-tauri
+        run: cargo clippy -- -D warnings
+
+      - name: Unit tests
+        working-directory: src-tauri
+        # 仅单元测试；--ignored 的真实网络测试不在 CI 跑（第三方端点对 CI IP 可能限流）
+        run: cargo test

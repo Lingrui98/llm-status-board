@@ -60,7 +60,12 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 
 ### macOS 构建（GitHub Actions）
 
-仓库带 `.github/workflows/release.yml`：push 一个 tag（如 `v0.1.0`）即可自动构建 Windows + macOS 安装包并发布到 GitHub Release。签名相关变量见工作流注释。
+仓库带两个工作流（`.github/workflows/`）：
+
+- **ci.yml**：push / PR 时自动跑前端测试（vitest + tsc + build）与 Rust 检查（fmt / clippy / 单测，Windows + macOS 双矩阵）
+- **release.yml**：push 一个 tag（如 `v0.1.0`）自动构建 Windows + macOS（Apple Silicon / Intel）安装包并发布到 GitHub Release；macOS 签名相关变量见工作流注释
+
+> 注意：本仓库根目录就是项目本身（package.json / src-tauri 在根下），工作流按此布局配置。
 
 ## 使用
 
