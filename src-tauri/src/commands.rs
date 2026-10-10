@@ -3,7 +3,7 @@ use crate::http;
 use crate::providers;
 use crate::types::{AccountConfig, AccountInfo, AppConfig, RefreshOutcome};
 use futures::future::join_all;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 #[tauri::command]
 pub async fn get_config(app: AppHandle) -> Result<AppConfig, String> {
@@ -159,15 +159,9 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
 
     // 结果持久化：下次启动时直接展示上次数据（时间戳保持为旧值）
     let outcomes: Vec<RefreshOutcome> = results.into_iter().map(|(_, o)| o).collect();
-    if let Ok(dir) = app.path().app_config_dir() {
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("results.json");
-        if let Ok(text) = serde_json::to_string_pretty(&outcomes) {
-            let tmp = dir.join("results.json.tmp");
-            if std::fs::write(&tmp, &text).is_ok() {
-                let _ = std::fs::rename(&tmp, &path);
-            }
-        }
+    if let Ok(path) = config::results_file_path(&app) {
+        // 持久化失败不影响本次刷新结果返回
+        let _ = config::save_results(&path, &outcomes);
     }
 
     Ok(outcomes)
@@ -176,14 +170,5 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
 /// 上次刷新结果（启动时加载展示；无记录返回空数组）
 #[tauri::command]
 pub async fn get_last_results(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> {
-    let path = app
-        .path()
-        .app_config_dir()
-        .map_err(|e| format!("{e}"))?
-        .join("results.json");
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("读取结果失败: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("结果文件格式错误: {e}"))
+    config::load_results(&config::results_file_path(&app)?)
 }

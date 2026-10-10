@@ -1,4 +1,4 @@
-use crate::types::AppConfig;
+use crate::types::{AppConfig, RefreshOutcome};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -9,6 +9,36 @@ pub fn config_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_config_dir()
         .map_err(|e| format!("无法确定配置目录: {e}"))?;
     Ok(dir.join("config.json"))
+}
+
+pub fn results_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法确定配置目录: {e}"))?;
+    Ok(dir.join("results.json"))
+}
+
+/// 原子写入刷新结果（与配置同目录的 results.json）
+pub fn save_results(path: &Path, outcomes: &[RefreshOutcome]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建结果目录失败: {e}"))?;
+    }
+    let text =
+        serde_json::to_string_pretty(outcomes).map_err(|e| format!("序列化结果失败: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &text).map_err(|e| format!("写入结果失败: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| format!("替换结果文件失败: {e}"))?;
+    Ok(())
+}
+
+/// 读取上次刷新结果；文件不存在返回空数组（首次启动）
+pub fn load_results(path: &Path) -> Result<Vec<RefreshOutcome>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(path).map_err(|e| format!("读取结果失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("结果文件格式错误: {e}"))
 }
 
 pub fn load(app: &tauri::AppHandle) -> Result<AppConfig, String> {
@@ -191,5 +221,63 @@ mod tests {
         assert_eq!(back.accounts[0].token, "tok");
         let _ = fs::remove_file(&src);
         let _ = fs::remove_file(&dst);
+    }
+
+    /// 刷新结果持久化：写读往返、首次启动空数组、损坏文件可读错误
+    #[test]
+    fn test_results_round_trip() {
+        let path = temp_config_path("results").with_file_name("results.json");
+        let _ = fs::remove_file(&path);
+
+        // 首次启动：文件不存在 → 空数组
+        assert!(load_results(&path).unwrap().is_empty());
+
+        // 写入两条结果（一成功一失败）
+        let outcomes = vec![
+            crate::types::RefreshOutcome {
+                account_id: "a1".into(),
+                ok: true,
+                info: Some(crate::types::AccountInfo {
+                    balance: Some(crate::types::Money {
+                        amount: 5.5,
+                        currency: "USD".into(),
+                    }),
+                    fetched_at: "2026-10-10T10:00:00+08:00".into(),
+                    ..Default::default()
+                }),
+                error: None,
+            },
+            crate::types::RefreshOutcome {
+                account_id: "a2".into(),
+                ok: false,
+                info: None,
+                error: Some("HTTP 401".into()),
+            },
+        ];
+        save_results(&path, &outcomes).unwrap();
+
+        let back = load_results(&path).unwrap();
+        assert_eq!(back.len(), 2);
+        assert!(back[0].ok);
+        assert_eq!(
+            back[0]
+                .info
+                .as_ref()
+                .unwrap()
+                .balance
+                .as_ref()
+                .unwrap()
+                .amount,
+            5.5
+        );
+        assert_eq!(back[1].error.as_deref(), Some("HTTP 401"));
+        // 原子写不残留 .tmp
+        assert!(!path.with_extension("json.tmp").exists());
+
+        // 损坏文件 → 可读错误
+        fs::write(&path, "###").unwrap();
+        let err = load_results(&path).expect_err("损坏结果应报错");
+        assert!(err.contains("结果文件格式错误"), "错误应可读: {err}");
+        let _ = fs::remove_file(&path);
     }
 }
