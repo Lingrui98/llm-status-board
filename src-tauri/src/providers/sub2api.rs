@@ -1,0 +1,504 @@
+//! sub2api（Wei-Shaw/sub2api）适配器
+//!
+//! 凭证优先级：
+//! 1. API Key（sk-）→ GET {base}/v1/usage —— 裸 JSON，一次拿全余额/key 额度/窗口用量
+//! 2. 用户名+密码 → POST /api/v1/auth/login 换 JWT（轮转出新的 access/refresh token 会回写配置）
+//! 3. access token（+可选 refresh token 自动续期）→ GET /api/v1/auth/me + /api/v1/usage/dashboard/stats
+//!
+//! 金额单位：全部为美元（USD）浮点数。
+
+use crate::http;
+use crate::jsonpath::{lookup_number, lookup_string};
+use crate::types::{AccountConfig, AccountInfo, KeyValue, Money};
+use serde_json::{json, Value};
+
+pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
+    if !acc.api_key.is_empty() {
+        fetch_with_api_key(client, acc).await
+    } else if !acc.username.is_empty() && !acc.password.is_empty() {
+        fetch_with_password(client, acc).await
+    } else if !acc.token.is_empty() || !acc.refresh_token.is_empty() {
+        fetch_with_token(client, acc).await
+    } else {
+        Err("需要填写 API Key、或用户名+密码、或访问令牌".into())
+    }
+}
+
+/// GET /v1/usage（API key，裸 JSON）
+async fn fetch_with_api_key(
+    client: &reqwest::Client,
+    acc: &AccountConfig,
+) -> Result<AccountInfo, String> {
+    let base = acc.base();
+    let url = format!("{base}/v1/usage");
+    let (hk, hv) = http::bearer(&acc.api_key);
+    let v = http::send_json(client, "GET", &url, &[(hk.as_str(), hv)], None).await?;
+
+    let mut info = AccountInfo {
+        raw: Some(v.clone()),
+        fetched_at: crate::types::now_iso(),
+        ..Default::default()
+    };
+
+    let mode = lookup_string(&v, "mode").unwrap_or_default();
+    match mode.as_str() {
+        "quota_limited" => {
+            let (bal, used, total, extras) = parse_quota_limited(&v);
+            info.balance = bal;
+            info.used = used;
+            info.total = total;
+            info.extras.extend(extras);
+        }
+        "unrestricted" => {
+            let (bal, extras) = parse_unrestricted(&v);
+            info.balance = bal;
+            info.extras.extend(extras);
+        }
+        other => {
+            // 兼容无 mode 字段的旧版本/fork：先按 quota 结构解析，拿不到再按钱包/订阅结构解析
+            let (bal, used, total, extras) = parse_quota_limited(&v);
+            if bal.is_some() {
+                info.balance = bal;
+                info.used = used;
+                info.total = total;
+                info.extras.extend(extras);
+            } else {
+                let (bal2, extras2) = parse_unrestricted(&v);
+                info.balance = bal2;
+                info.extras.extend(extras2);
+                if info.balance.is_none() && info.extras.is_empty() {
+                    return Err(format!(
+                        "无法解析 /v1/usage 响应（mode={other:?}），请确认站点是 sub2api；可在卡片里展开「原始数据」查看响应"
+                    ));
+                }
+            }
+        }
+    }
+
+    // 窗口速率限制（quota_limited）
+    if let Some(limits) = v.get("rate_limits").and_then(|r| r.as_array()) {
+        for l in limits.iter().take(3) {
+            let window = l.get("window").and_then(|w| w.as_str()).unwrap_or("?");
+            let used = l.get("used").and_then(|u| u.as_f64()).unwrap_or(0.0);
+            let limit = l.get("limit").and_then(|u| u.as_f64()).unwrap_or(0.0);
+            if limit > 0.0 {
+                info.extras.push(KeyValue {
+                    key: format!("{window} 窗口"),
+                    value: format!("{used:.2} / {limit:.2} USD"),
+                });
+            }
+        }
+    }
+
+    // 今日 / 累计用量
+    if let Some(reqs) = lookup_number(&v, "usage.today.requests") {
+        info.requests = Some(reqs as i64);
+    }
+    if let Some(cost) = lookup_number(&v, "usage.today.actual_cost") {
+        info.extras.push(KeyValue {
+            key: "今日花费".into(),
+            value: format!("{cost:.4} USD"),
+        });
+    }
+    if let Some(cost) = lookup_number(&v, "usage.total.actual_cost") {
+        info.extras.push(KeyValue {
+            key: "累计花费".into(),
+            value: format!("{cost:.4} USD"),
+        });
+    }
+
+    Ok(info)
+}
+
+/// quota_limited 模式解析：key 配了额度/速率限制
+/// 返回 (余额, 已用, 总额度, 附加行)
+fn parse_quota_limited(v: &Value) -> (Option<Money>, Option<Money>, Option<Money>, Vec<KeyValue>) {
+    let mut extras = Vec::new();
+    let remaining = lookup_number(v, "quota.remaining").or_else(|| lookup_number(v, "remaining"));
+    let used = lookup_number(v, "quota.used");
+    let limit = lookup_number(v, "quota.limit");
+    if let Some(status) = lookup_string(v, "status") {
+        extras.push(KeyValue {
+            key: "Key 状态".into(),
+            value: status,
+        });
+    }
+    if let Some(d) = lookup_number(v, "days_until_expiry") {
+        extras.push(KeyValue {
+            key: "Key 剩余天数".into(),
+            value: format!("{d:.0}"),
+        });
+    }
+    let usd = || "USD".to_string();
+    (
+        remaining.map(|r| Money {
+            amount: r,
+            currency: usd(),
+        }),
+        used.map(|u| Money {
+            amount: u,
+            currency: usd(),
+        }),
+        limit.filter(|l| *l > 0.0).map(|l| Money {
+            amount: l,
+            currency: usd(),
+        }),
+        extras,
+    )
+}
+
+/// unrestricted 模式解析：钱包（balance）或订阅（subscription）
+/// 返回 (余额, 附加行)
+fn parse_unrestricted(v: &Value) -> (Option<Money>, Vec<KeyValue>) {
+    let mut extras = Vec::new();
+    // 钱包模式：balance 字段；订阅模式：remaining
+    let balance = lookup_number(v, "balance")
+        .or_else(|| lookup_number(v, "remaining"))
+        .map(|b| Money {
+            amount: b,
+            currency: "USD".into(),
+        });
+    if let Some(plan) = lookup_string(v, "planName") {
+        extras.push(KeyValue {
+            key: "计划".into(),
+            value: plan,
+        });
+    }
+    if let Some(sub) = v.get("subscription") {
+        for (label, path) in [
+            ("日用量", "daily_usage_usd"),
+            ("周用量", "weekly_usage_usd"),
+            ("月用量", "monthly_usage_usd"),
+        ] {
+            if let Some(n) = lookup_number(sub, path) {
+                extras.push(KeyValue {
+                    key: label.to_string(),
+                    value: format!("{n:.2} USD"),
+                });
+            }
+        }
+        for (label, path) in [
+            ("日上限", "daily_limit_usd"),
+            ("周上限", "weekly_limit_usd"),
+            ("月上限", "monthly_limit_usd"),
+        ] {
+            if let Some(n) = lookup_number(sub, path).filter(|l| *l > 0.0) {
+                extras.push(KeyValue {
+                    key: label.to_string(),
+                    value: format!("{n:.2} USD"),
+                });
+            }
+        }
+    }
+    (balance, extras)
+}
+
+/// 邮箱+密码登录（信封 {code:0, data}），成功后回写轮转的 token
+async fn fetch_with_password(
+    client: &reqwest::Client,
+    acc: &AccountConfig,
+) -> Result<AccountInfo, String> {
+    let base = acc.base();
+    let url = format!("{base}/api/v1/auth/login");
+    let body = json!({ "email": acc.username, "password": acc.password }).to_string();
+    let v = http::send_json(client, "POST", &url, &[], Some(&body)).await?;
+
+    // 2FA / 验证码情形
+    if v.get("requires_2fa")
+        .and_then(|r| r.as_bool())
+        .unwrap_or(false)
+    {
+        return Err("该站点开启了两步验证（2FA），暂不支持自动登录；请改用 API Key 查询".into());
+    }
+    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+    if code != 0 {
+        let msg = v
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("登录失败");
+        return Err(format!("登录失败: {msg}"));
+    }
+    let data = v.get("data").ok_or("登录响应缺少 data")?;
+    let access = lookup_string(data, "access_token").ok_or("登录响应缺少 access_token")?;
+    let refresh = lookup_string(data, "refresh_token").unwrap_or_default();
+    let user = data.get("user").cloned().unwrap_or(Value::Null);
+
+    let mut info = AccountInfo {
+        new_token: Some(access.clone()),
+        new_refresh_token: if refresh.is_empty() {
+            None
+        } else {
+            Some(refresh)
+        },
+        fetched_at: crate::types::now_iso(),
+        ..Default::default()
+    };
+    if let Some(bal) = lookup_number(&user, "balance") {
+        info.balance = Some(Money {
+            amount: bal,
+            currency: "USD".into(),
+        });
+    }
+    if let Some(u) = lookup_string(&user, "username") {
+        info.note = Some(format!("已登录：{u}"));
+    }
+
+    // 面板统计（今日请求数 / 今日花费 / 累计花费）
+    let (requests, today_cost, total_cost) = panel_stats(client, &base, &access).await;
+    if let Some(r) = requests {
+        info.requests = Some(r);
+    }
+    if let Some(c) = today_cost {
+        info.extras.push(KeyValue {
+            key: "今日花费".into(),
+            value: format!("{c:.4} USD"),
+        });
+    }
+    if let Some(c) = total_cost {
+        info.used = Some(Money {
+            amount: c,
+            currency: "USD".into(),
+        });
+    }
+    Ok(info)
+}
+
+/// 面板用量统计：兼容两个版本的端点
+/// - /api/v1/usage/dashboard/stats（字段 today.requests / today.actual_cost / total.actual_cost）
+/// - /api/v1/usage/stats?period=today（字段 total_requests / total_actual_cost，all-api-hub 验证过）
+///
+/// 返回 (今日请求数, 今日花费 USD, 累计花费 USD)
+async fn panel_stats(
+    client: &reqwest::Client,
+    base: &str,
+    access: &str,
+) -> (Option<i64>, Option<f64>, Option<f64>) {
+    let mut requests: Option<i64> = None;
+    let mut today_cost: Option<f64> = None;
+    let mut total_cost: Option<f64> = None;
+    let auth = ("Authorization", format!("Bearer {access}"));
+
+    if let Ok(stats) = http::send_json(
+        client,
+        "GET",
+        &format!("{base}/api/v1/usage/dashboard/stats"),
+        std::slice::from_ref(&auth),
+        None,
+    )
+    .await
+    {
+        let d = stats.get("data").cloned().unwrap_or(Value::Null);
+        requests = crate::jsonpath::lookup_i64(&d, "today.requests")
+            .or_else(|| crate::jsonpath::lookup_i64(&d, "today.total_requests"))
+            .or(requests);
+        today_cost = lookup_number(&d, "today.actual_cost")
+            .or_else(|| lookup_number(&d, "today.cost"))
+            .or(today_cost);
+        total_cost = lookup_number(&d, "total.actual_cost")
+            .or_else(|| lookup_number(&d, "total.cost"))
+            .or(total_cost);
+    }
+
+    // 回退端点（period=today 的 total_* 即今日数据）
+    if requests.is_none() || today_cost.is_none() {
+        if let Ok(stats) = http::send_json(
+            client,
+            "GET",
+            &format!("{base}/api/v1/usage/stats?period=today"),
+            &[auth],
+            None,
+        )
+        .await
+        {
+            let d = stats.get("data").cloned().unwrap_or(Value::Null);
+            requests = crate::jsonpath::lookup_i64(&d, "total_requests").or(requests);
+            today_cost = lookup_number(&d, "total_actual_cost").or(today_cost);
+        }
+    }
+    (requests, today_cost, total_cost)
+}
+
+/// 已有 token（可选用 refresh token 续期）
+async fn fetch_with_token(
+    client: &reqwest::Client,
+    acc: &AccountConfig,
+) -> Result<AccountInfo, String> {
+    let base = acc.base();
+    let mut access = acc.token.clone();
+    let mut new_refresh: Option<String> = None;
+    let mut new_access: Option<String> = None;
+
+    // 无 access token 或已失效时，用 refresh token 换新
+    if access.is_empty() && !acc.refresh_token.is_empty() {
+        let (a, r) = refresh_login(client, &base, &acc.refresh_token).await?;
+        access = a.clone();
+        new_access = Some(a);
+        new_refresh = Some(r);
+    }
+
+    let me_url = format!("{base}/api/v1/auth/me");
+    let result = http::send_json(
+        client,
+        "GET",
+        &me_url,
+        &[("Authorization", format!("Bearer {access}"))],
+        None,
+    )
+    .await;
+
+    let v = match result {
+        Ok(v) => v,
+        Err(e) => {
+            // 无 refresh token 时直接报错
+            if acc.refresh_token.is_empty() {
+                return Err(format!(
+                    "{e}（token 可能已过期，请填写 refresh_token 或重新登录）"
+                ));
+            }
+            // 有 refresh token：续期后重试一次
+            let (a, r) = match refresh_login(client, &base, &acc.refresh_token).await {
+                Ok(pair) => pair,
+                Err(_) => return Err(e),
+            };
+            new_access = Some(a.clone());
+            new_refresh = Some(r);
+            http::send_json(
+                client,
+                "GET",
+                &me_url,
+                &[("Authorization", format!("Bearer {a}"))],
+                None,
+            )
+            .await?
+        }
+    };
+
+    let data = v.get("data").cloned().unwrap_or(Value::Null);
+    let mut info = AccountInfo {
+        balance: lookup_number(&data, "balance").map(|b| Money {
+            amount: b,
+            currency: "USD".into(),
+        }),
+        note: lookup_string(&data, "username").map(|u| format!("已登录：{u}")),
+        new_token: new_access,
+        new_refresh_token: new_refresh,
+        fetched_at: crate::types::now_iso(),
+        ..Default::default()
+    };
+    if let Some(fb) = lookup_number(&data, "frozen_balance").filter(|f| *f > 0.0) {
+        info.extras.push(KeyValue {
+            key: "冻结余额".into(),
+            value: format!("{fb:.2} USD"),
+        });
+    }
+
+    // 面板统计
+    let (requests, today_cost, total_cost) = panel_stats(client, &base, &access).await;
+    if let Some(r) = requests {
+        info.requests = Some(r);
+    }
+    if let Some(c) = today_cost {
+        info.extras.push(KeyValue {
+            key: "今日花费".into(),
+            value: format!("{c:.4} USD"),
+        });
+    }
+    if let Some(c) = total_cost {
+        info.used = Some(Money {
+            amount: c,
+            currency: "USD".into(),
+        });
+    }
+    Ok(info)
+}
+
+async fn refresh_login(
+    client: &reqwest::Client,
+    base: &str,
+    refresh_token: &str,
+) -> Result<(String, String), String> {
+    let url = format!("{base}/api/v1/auth/refresh");
+    let body = json!({ "refresh_token": refresh_token }).to_string();
+    let v = http::send_json(client, "POST", &url, &[], Some(&body)).await?;
+    let code = v.get("code").and_then(|c| c.as_i64()).unwrap_or(0);
+    if code != 0 {
+        let msg = v
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("refresh 失败");
+        return Err(format!("刷新令牌失败: {msg}"));
+    }
+    let data = v.get("data").ok_or("refresh 响应缺少 data")?;
+    let access = lookup_string(data, "access_token").ok_or("refresh 响应缺少 access_token")?;
+    let refresh = lookup_string(data, "refresh_token").ok_or("refresh 响应缺少 refresh_token")?;
+    Ok((access, refresh))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// 源码调研报告里 quota_limited 模式的响应结构（Wei-Shaw/sub2api gateway_handler.go）
+    #[test]
+    fn test_parse_quota_limited() {
+        let v = json!({
+            "mode": "quota_limited",
+            "status": "active",
+            "quota": { "limit": 10.0, "used": 3.5, "remaining": 6.5, "unit": "USD" },
+            "remaining": 6.5,
+            "days_until_expiry": 42,
+            "usage": { "today": { "requests": 17, "actual_cost": 0.1234 } }
+        });
+        let (bal, used, total, extras) = parse_quota_limited(&v);
+        assert_eq!(bal.as_ref().unwrap().amount, 6.5);
+        assert_eq!(used.as_ref().unwrap().amount, 3.5);
+        assert_eq!(total.as_ref().unwrap().amount, 10.0);
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "Key 状态" && e.value == "active"));
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "Key 剩余天数" && e.value == "42"));
+    }
+
+    /// 钱包（unrestricted）模式：balance 字段
+    #[test]
+    fn test_parse_unrestricted_wallet() {
+        let v = json!({
+            "mode": "unrestricted",
+            "planName": "钱包余额",
+            "balance": 12.34,
+            "unit": "USD",
+            "subscription": { "daily_usage_usd": 1.5, "monthly_limit_usd": 30.0 }
+        });
+        let (bal, extras) = parse_unrestricted(&v);
+        assert_eq!(bal.as_ref().unwrap().amount, 12.34);
+        assert_eq!(bal.as_ref().unwrap().currency, "USD");
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "计划" && e.value == "钱包余额"));
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "日用量" && e.value == "1.50 USD"));
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "月上限" && e.value == "30.00 USD"));
+    }
+
+    /// 订阅（unrestricted）模式：remaining + subscription 字段，无 balance
+    #[test]
+    fn test_parse_unrestricted_subscription() {
+        let v = json!({
+            "mode": "unrestricted",
+            "planName": "Claude Max",
+            "remaining": 0.75,
+            "subscription": { "weekly_usage_usd": 5.25, "weekly_limit_usd": 40.0 }
+        });
+        let (bal, extras) = parse_unrestricted(&v);
+        assert_eq!(bal.as_ref().unwrap().amount, 0.75);
+        assert!(extras
+            .iter()
+            .any(|e| e.key == "周用量" && e.value == "5.25 USD"));
+    }
+}

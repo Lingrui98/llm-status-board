@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "settings": {
+    "autoRefreshSec": 0,
+    "refreshOnStart": true
+  },
+  "accounts": [
+    {
+      "id": "示例-中转站-new-api",
+      "name": "某某 new-api 中转",
+      "kind": "newApi",
+      "enabled": true,
+      "baseUrl": "https://your-relay-site.com",
+      "apiKey": "",
+      "token": "把浏览器 F12 里 Authorization: Bearer 后面的串贴到这里",
+      "refreshToken": "",
+      "userId": 1234,
+      "username": "",
+      "password": "",
+      "quotaPerUnit": 500000,
+      "custom": null
+    },
+    {
+      "id": "示例-中转站-sub2api",
+      "name": "某某 sub2api 站",
+      "kind": "sub2Api",
+      "enabled": true,
+      "baseUrl": "https://your-sub2api-site.com",
+      "apiKey": "sk-xxxxxxxx",
+      "token": "",
+      "refreshToken": "",
+      "userId": null,
+      "username": "",
+      "password": "",
+      "quotaPerUnit": null,
+      "custom": null
+    },
+    {
+      "id": "示例-官方-deepseek",
+      "name": "DeepSeek 官方",
+      "kind": "deepSeek",
+      "enabled": true,
+      "baseUrl": "https://api.deepseek.com",
+      "apiKey": "sk-xxxxxxxx",
+      "token": "",
+      "refreshToken": "",
+      "userId": null,
+      "username": "",
+      "password": "",
+      "quotaPerUnit": null,
+      "custom": null
+    }
+  ]
+}

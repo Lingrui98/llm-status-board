@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: llm-status-board/src-tauri
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install frontend deps
+        working-directory: llm-status-board
+        run: npm install --no-fund --no-audit
+
+      # macOS 签名（可选）：在 repo Settings → Secrets 配置后取消注释
+      # - name: Import signing certificate
+      #   if: matrix.platform == 'macos-latest'
+      #   uses: apple-actions/import-codesign-certs@v3
+      #   with:
+      #     p12-file-base64: ${{ secrets.MACOS_CERT_P12 }}
+      #     p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # macOS 签名/公证（可选）
+          # APPLE_CERTIFICATE: ${{ secrets.MACOS_CERT_P12 }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: llm-status-board
+          tagName: ${{ github.ref_name }}
+          releaseName: "LLM Status Board ${{ github.ref_name }}"
+          releaseBody: "Win / macOS 安装包见 Assets。"
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
