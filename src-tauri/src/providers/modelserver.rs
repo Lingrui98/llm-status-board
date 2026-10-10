@@ -78,9 +78,11 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
         return Ok(info);
     }
 
-    // 汇总所有项目
-    let mut total_balance_cny = 0.0;
+    // 汇总所有项目（钱包余额可能以 CNY 或 USD 计价）
+    let mut total_cny = 0.0;
+    let mut total_usd = 0.0;
     let mut has_wallet = false;
+    let mut credits_without_price: Vec<(String, f64)> = Vec::new();
     let mut project_names: Vec<String> = Vec::new();
     let mut raws: Vec<Value> = Vec::new();
 
@@ -89,8 +91,13 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
             Some(id) => id,
             None => continue,
         };
-        if let Some(name) = p.get("name").and_then(|n| n.as_str()) {
-            project_names.push(name.to_string());
+        let project_name = p
+            .get("name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("")
+            .to_string();
+        if !project_name.is_empty() {
+            project_names.push(project_name.clone());
         }
 
         // 钱包余额（extra-usage）
@@ -105,23 +112,30 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
         match extra {
             Ok(v) => {
                 let d = v.get("data").cloned().unwrap_or(v.clone());
-                let enabled = d.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false);
                 let credits = lookup_number(&d, "balance_credits");
-                let price = lookup_number(&d, "credit_unit_prices.cny_fen_per_million");
-                if enabled || credits.is_some() {
-                    has_wallet = true;
-                    if let (Some(c), Some(p)) = (credits, price) {
-                        // credits × 元/百万credits：fen_per_million / 1e6 = 元/credit
-                        total_balance_cny += c * p / 1_000_000.0;
+                let price = credit_price(&d);
+                match (credits, price) {
+                    (Some(c), Some((per_credit, currency))) => {
+                        let amount = c * per_credit;
+                        has_wallet = true;
+                        match currency {
+                            "CNY" => total_cny += amount,
+                            _ => total_usd += amount,
+                        }
+                        // 本月钱包消费（同一单价）
+                        if let Some(spent) = lookup_number(&d, "monthly_spent_credits") {
+                            info.extras.push(KeyValue {
+                                key: "本月钱包消费".into(),
+                                value: format!("{:.2} {currency}", spent * per_credit),
+                            });
+                        }
                     }
-                }
-                // 本月消费
-                if let Some(spent) = lookup_number(&d, "monthly_spent_credits") {
-                    if let Some(p) = price {
-                        info.extras.push(KeyValue {
-                            key: "本月钱包消费".into(),
-                            value: format!("{:.2} CNY", spent * p / 1_000_000.0),
-                        });
+                    (Some(c), None) => {
+                        // 有 credits 但没有单价：展示原始值，不折算
+                        credits_without_price.push((project_name.clone(), c));
+                    }
+                    (None, _) => {
+                        // 未启用钱包（纯订阅制）
                     }
                 }
                 raws.push(d);
@@ -165,9 +179,40 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
     }
 
     if has_wallet {
-        info.balance = Some(Money {
-            amount: total_balance_cny,
-            currency: "CNY".into(),
+        // 优先展示人民币钱包；两种币都有时把美元作为附加行
+        if total_cny > 0.0 {
+            info.balance = Some(Money {
+                amount: total_cny,
+                currency: "CNY".into(),
+            });
+            if total_usd > 0.0 {
+                info.extras.push(KeyValue {
+                    key: "美元钱包合计".into(),
+                    value: format!("{total_usd:.2} USD"),
+                });
+            }
+        } else {
+            info.balance = Some(Money {
+                amount: total_usd,
+                currency: "USD".into(),
+            });
+        }
+    } else if !credits_without_price.is_empty() {
+        // 有 credits 但没有可折算的单价：展示原始值
+        let shown = credits_without_price
+            .iter()
+            .map(|(name, c)| {
+                if name.is_empty() {
+                    format!("{c:.0} credits")
+                } else {
+                    format!("{name}: {c:.0}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("、");
+        info.extras.push(KeyValue {
+            key: "钱包 credits".into(),
+            value: shown,
         });
     } else {
         // 保留已有的「已登录：xxx」备注，只追加订阅模式说明
@@ -193,4 +238,54 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
     });
 
     Ok(info)
+}
+
+/// 从 extra-usage 数据里取 credits 单价：返回 (每 credit 价格, 币种)
+/// - cny_fen_per_million：每百万 credits 的人民币分 → 元/credit = fen / 1e6
+/// - usd_cents_per_million：每百万 credits 的美分 → 美元/credit = cents / 1e6
+fn credit_price(data: &Value) -> Option<(f64, &'static str)> {
+    if let Some(fen) = lookup_number(data, "credit_unit_prices.cny_fen_per_million") {
+        return Some((fen / 1_000_000.0, "CNY"));
+    }
+    if let Some(cents) = lookup_number(data, "credit_unit_prices.usd_cents_per_million") {
+        return Some((cents / 1_000_000.0, "USD"));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::credit_price;
+    use serde_json::json;
+
+    #[test]
+    fn test_credit_price_cny_preferred() {
+        let d = json!({
+            "balance_credits": 5000,
+            "credit_unit_prices": { "cny_fen_per_million": 40000, "usd_cents_per_million": 5600 }
+        });
+        let (per_credit, currency) = credit_price(&d).unwrap();
+        assert_eq!(currency, "CNY");
+        assert!(
+            (per_credit - 0.04).abs() < 1e-12,
+            "40000 分/百万 = 0.04 元/credit"
+        );
+        // 5000 credits × 0.04 = 200 元
+        assert!((5000.0 * per_credit - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_credit_price_usd_fallback() {
+        let d = json!({ "credit_unit_prices": { "usd_cents_per_million": 5600 } });
+        let (per_credit, currency) = credit_price(&d).unwrap();
+        assert_eq!(currency, "USD");
+        assert!((per_credit - 0.0056).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_credit_price_missing() {
+        let d = json!({ "balance_credits": 100 });
+        assert!(credit_price(&d).is_none());
+        assert!(credit_price(&json!({})).is_none());
+    }
 }
