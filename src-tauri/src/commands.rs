@@ -24,7 +24,8 @@ pub async fn config_path(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn test_account(app: AppHandle, account: AccountConfig) -> Result<AccountInfo, String> {
-    let client = http::make_client();
+    let cfg = config::load(&app)?;
+    let client = http::make_client(cfg.settings.proxy.as_deref())?;
     let info = providers::fetch_account(&client, &account).await?;
 
     // 一次性 refresh token 轮换回写：如果测试的是已保存在配置里的账号，
@@ -57,7 +58,7 @@ pub async fn test_account(app: AppHandle, account: AccountConfig) -> Result<Acco
 #[tauri::command]
 pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> {
     let cfg = config::load(&app)?;
-    let client = http::make_client();
+    let client = http::make_client(cfg.settings.proxy.as_deref())?;
 
     let enabled: Vec<AccountConfig> = cfg.accounts.iter().filter(|a| a.enabled).cloned().collect();
 

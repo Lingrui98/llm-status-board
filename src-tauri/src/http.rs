@@ -1,13 +1,40 @@
-use reqwest::{Client, Method, Response};
+use reqwest::{Client, Method, Proxy, Response};
 use std::time::Duration;
 
-pub fn make_client() -> Client {
-    Client::builder()
+/// 构建 HTTP 客户端。
+/// - proxy: 形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；None 时回退到环境变量（http_proxy 等）
+pub fn make_client(proxy: Option<&str>) -> Result<Client, String> {
+    let mut builder = Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(15))
-        .user_agent("llm-status-board/0.1")
+        .user_agent("llm-status-board/0.1");
+    if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
+        let proxy = Proxy::all(p).map_err(|e| format!("代理地址无效（{p}）: {e}"))?;
+        builder = builder.proxy(proxy);
+    }
+    builder
         .build()
-        .expect("failed to build http client")
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::make_client;
+
+    #[test]
+    fn test_make_client_with_proxies() {
+        // 无代理
+        assert!(make_client(None).is_ok());
+        // 合法 http / socks5 代理
+        assert!(make_client(Some("http://127.0.0.1:7890")).is_ok());
+        assert!(make_client(Some("socks5://127.0.0.1:1080")).is_ok());
+        // 空串/空白 = 未配置，不报错
+        assert!(make_client(Some("")).is_ok());
+        assert!(make_client(Some("   ")).is_ok());
+        // 非法地址：应返回可读错误而不是 panic
+        let err = make_client(Some("not a url")).expect_err("非法代理应报错");
+        assert!(err.contains("代理地址无效"), "错误应可读: {err}");
+    }
 }
 
 pub async fn send_json(

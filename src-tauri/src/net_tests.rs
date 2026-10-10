@@ -10,7 +10,7 @@ const MODEL_SERVER_API: &str = "https://codeapi.cs.ac.cn";
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn modelserver_public_auth_config_ok() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let v = http::send_json(
         &client,
         "GET",
@@ -29,7 +29,7 @@ async fn modelserver_public_auth_config_ok() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn modelserver_unauthorized_gives_clean_error() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let err = http::send_json(
         &client,
         "GET",
@@ -50,7 +50,7 @@ async fn modelserver_unauthorized_gives_clean_error() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn modelserver_invalid_refresh_token_clean_error() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let acc = AccountConfig {
         base_url: MODEL_SERVER_API.into(),
         refresh_token: "invalid-token-for-test".into(),
@@ -65,7 +65,7 @@ async fn modelserver_invalid_refresh_token_clean_error() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn deepseek_bad_key_gives_clean_error() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let err = http::send_json(
         &client,
         "GET",
@@ -81,7 +81,7 @@ async fn deepseek_bad_key_gives_clean_error() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn deepseek_provider_bad_key_full_path() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let acc = AccountConfig {
         kind: crate::types::ProviderKind::DeepSeek,
         base_url: "https://api.deepseek.com".into(),
@@ -98,7 +98,7 @@ async fn deepseek_provider_bad_key_full_path() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn siliconflow_bad_key_not_treated_as_success() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let acc = AccountConfig {
         kind: crate::types::ProviderKind::SiliconFlow,
         base_url: "https://api.siliconflow.cn".into(),
@@ -121,7 +121,7 @@ async fn siliconflow_bad_key_not_treated_as_success() {
 #[tokio::test]
 #[ignore = "访问真实公网端点"]
 async fn moonshot_bad_key_gives_clean_error() {
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let acc = AccountConfig {
         kind: crate::types::ProviderKind::Moonshot,
         base_url: "https://api.moonshot.cn".into(),
@@ -138,7 +138,7 @@ async fn moonshot_bad_key_gives_clean_error() {
 #[test]
 fn missing_credentials_give_friendly_errors_without_network() {
     // 各类型在缺凭证时应返回友好错误，而不是 panic 或空错误
-    let client = http::make_client();
+    let client = http::make_client(None).unwrap();
     let cases = [
         crate::types::ProviderKind::OneApi,
         crate::types::ProviderKind::Sub2Api,

@@ -2,7 +2,8 @@
   "version": 1,
   "settings": {
     "autoRefreshSec": 0,
-    "refreshOnStart": true
+    "refreshOnStart": true,
+    "proxy": null
   },
   "accounts": [
     {

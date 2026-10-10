@@ -14,6 +14,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
   const [accounts, setAccounts] = useState<AccountConfig[]>(config.accounts);
   const [autoRefreshSec, setAutoRefreshSec] = useState(config.settings.autoRefreshSec);
   const [refreshOnStart, setRefreshOnStart] = useState(config.settings.refreshOnStart);
+  const [proxy, setProxy] = useState(config.settings.proxy ?? "");
   const [editing, setEditing] = useState<AccountConfig | null>(null); // null=列表, {}=新增
   const [saving, setSaving] = useState(false);
   const [savedTip, setSavedTip] = useState("");
@@ -31,7 +32,11 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
   const handleSaveAll = async () => {
     setSaving(true);
     try {
-      await onSave({ ...config, accounts, settings: { autoRefreshSec, refreshOnStart } });
+      await onSave({
+        ...config,
+        accounts,
+        settings: { autoRefreshSec, refreshOnStart, proxy: proxy.trim() || null },
+      });
       showTip("已保存");
     } catch (e) {
       showTip(`保存失败: ${String(e)}`);
@@ -202,7 +207,17 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
             onChange={(e) => setRefreshOnStart(e.target.checked)}
           />
         </label>
+        <label className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: 5 }}>
+          <span>网络代理（可选，全部查询共用）</span>
+          <input
+            value={proxy}
+            onChange={(e) => setProxy(e.target.value)}
+            placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空则不走代理"
+            style={{ width: "100%" }}
+          />
+        </label>
         <p className="muted small">
+          访问 OpenAI 等境外官方接口通常需要代理；中转站和国内厂商一般直连即可。
           API Key / Token 只保存在本机配置文件中，不会上传到任何服务器（查询请求直连各提供商）。
         </p>
       </div>

@@ -65,6 +65,7 @@ export interface AccountConfig {
 export interface Settings {
   autoRefreshSec: number;
   refreshOnStart: boolean;
+  proxy?: string | null;
 }
 
 export interface AppConfig {

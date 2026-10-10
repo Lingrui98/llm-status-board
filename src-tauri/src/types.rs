@@ -138,6 +138,8 @@ impl AccountConfig {
 pub struct Settings {
     pub auto_refresh_sec: u32,
     pub refresh_on_start: bool,
+    /// 全局代理（http://… 或 socks5://…），留空用环境变量
+    pub proxy: Option<String>,
 }
 
 impl Default for Settings {
@@ -145,6 +147,7 @@ impl Default for Settings {
         Self {
             auto_refresh_sec: 0,
             refresh_on_start: true,
+            proxy: None,
         }
     }
 }
