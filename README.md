@@ -41,6 +41,14 @@ npm install
 npm run tauri dev
 ```
 
+### 测试
+
+```bash
+npm test                 # 前端 UI 测试（vitest + jsdom，无需 GUI）
+cd src-tauri && cargo test                      # Rust 单元测试
+cd src-tauri && cargo test -- --ignored        # 真实网络集成测试（需联网）
+```
+
 ### 构建安装包
 
 ```bash

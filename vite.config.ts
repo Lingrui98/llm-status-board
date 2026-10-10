@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -15,5 +16,10 @@ export default defineConfig({
     outDir: "dist",
     minify: "esbuild",
     sourcemap: false,
+  },
+  test: {
+    environment: "jsdom",
+    css: false,
+    include: ["src/**/*.test.{ts,tsx}"],
   },
 });
