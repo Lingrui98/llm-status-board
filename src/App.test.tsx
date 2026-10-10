@@ -144,6 +144,74 @@ describe("App 看板", () => {
     expect(screen.getByText("2")).toBeTruthy();
     expect(screen.getByText("¥110.50")).toBeTruthy();
   });
+  it("启动时加载上次刷新结果（无需点刷新即可见旧数据）", async () => {
+    const lastOutcome: RefreshOutcome = {
+      accountId: "acc-ds",
+      ok: true,
+      info: {
+        balance: { amount: 88.88, currency: "CNY" },
+        used: null,
+        total: null,
+        requests: null,
+        note: null,
+        extras: [],
+        raw: null,
+        fetchedAt: "2026-10-09T08:30:00+08:00",
+        newToken: null,
+        newRefreshToken: null,
+      },
+      error: null,
+    };
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeConfig([dsAccount]));
+      if (cmd === "get_last_results") return Promise.resolve([lastOutcome]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    // 无需任何交互，上次余额直接出现
+    await waitFor(() => {
+      expect(screen.getByText("88.88 CNY")).toBeTruthy();
+    });
+    // 卡片时间戳显示为上次会话的旧时间（08:30）
+    expect(screen.getByText(/08:30/)).toBeTruthy();
+    // refresh_all 不应被自动调用（refreshOnStart=false）
+    expect(mockInvoke).not.toHaveBeenCalledWith("refresh_all");
+  });
+
+  it("启动时跳过已删除账号的旧结果", async () => {
+    const staleOutcome: RefreshOutcome = {
+      accountId: "acc-deleted",
+      ok: true,
+      info: {
+        balance: { amount: 1.23, currency: "USD" },
+        used: null,
+        total: null,
+        requests: null,
+        note: null,
+        extras: [],
+        raw: null,
+        fetchedAt: "2026-10-01T00:00:00+08:00",
+        newToken: null,
+        newRefreshToken: null,
+      },
+      error: null,
+    };
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeConfig([dsAccount]));
+      if (cmd === "get_last_results") return Promise.resolve([staleOutcome]);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek 官方")).toBeTruthy();
+    });
+    // 已删除账号（acc-deleted）的旧数据不应出现
+    await waitFor(() => {
+      expect(screen.queryByText("1.23 USD")).toBeNull();
+    });
+  });
 });
 
 describe("App 设置页", () => {

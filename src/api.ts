@@ -18,6 +18,11 @@ export async function refreshAll(): Promise<RefreshOutcome[]> {
   return invoke<RefreshOutcome[]>("refresh_all");
 }
 
+/// 上次刷新结果（持久化在本地，重启后加载展示）
+export async function getLastResults(): Promise<RefreshOutcome[]> {
+  return invoke<RefreshOutcome[]>("get_last_results");
+}
+
 export async function configPath(): Promise<string> {
   return invoke<string>("config_path");
 }

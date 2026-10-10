@@ -18,6 +18,7 @@ pub fn run() {
             commands::config_path,
             commands::test_account,
             commands::refresh_all,
+            commands::get_last_results,
             commands::export_config,
             commands::import_config,
         ])

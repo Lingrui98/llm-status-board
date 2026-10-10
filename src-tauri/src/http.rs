@@ -17,26 +17,6 @@ pub fn make_client(proxy: Option<&str>) -> Result<Client, String> {
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::make_client;
-
-    #[test]
-    fn test_make_client_with_proxies() {
-        // 无代理
-        assert!(make_client(None).is_ok());
-        // 合法 http / socks5 代理
-        assert!(make_client(Some("http://127.0.0.1:7890")).is_ok());
-        assert!(make_client(Some("socks5://127.0.0.1:1080")).is_ok());
-        // 空串/空白 = 未配置，不报错
-        assert!(make_client(Some("")).is_ok());
-        assert!(make_client(Some("   ")).is_ok());
-        // 非法地址：应返回可读错误而不是 panic
-        let err = make_client(Some("not a url")).expect_err("非法代理应报错");
-        assert!(err.contains("代理地址无效"), "错误应可读: {err}");
-    }
-}
-
 pub async fn send_json(
     client: &Client,
     method: &str,
@@ -64,6 +44,14 @@ pub async fn send_json(
         .await
         .map_err(|e| format!("读取响应失败: {e}"))?;
     let trimmed = text.trim();
+
+    // Cloudflare 人机验证页识别（中转站常见）：返回 HTML 而非 JSON，状态码可能是 200/403/503
+    if looks_like_cf_challenge(trimmed) {
+        return Err(format!(
+            "HTTP {status}: 站点可能开启了 Cloudflare 人机验证，桌面客户端无法通过；请稍后重试或联系站点管理员"
+        ));
+    }
+
     let value: serde_json::Value = if trimmed.is_empty() {
         serde_json::Value::Null
     } else {
@@ -79,6 +67,14 @@ pub async fn send_json(
         return Err(msg);
     }
     Ok(value)
+}
+
+/// 识别 Cloudflare 挑战页特征（"Just a moment..." / challenge-platform 脚本 / cf-mitigated 头）
+fn looks_like_cf_challenge(body: &str) -> bool {
+    body.contains("Just a moment")
+        || body.contains("challenge-platform")
+        || body.contains("cf-chl")
+        || body.contains("Attention Required! | Cloudflare")
 }
 
 /// 从常见错误结构里提取可读信息
@@ -103,4 +99,44 @@ fn extract_error_message(v: &serde_json::Value) -> Option<String> {
 
 pub fn bearer(token: &str) -> (String, String) {
     ("Authorization".to_string(), format!("Bearer {token}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{looks_like_cf_challenge, make_client};
+
+    #[test]
+    fn test_make_client_with_proxies() {
+        // 无代理
+        assert!(make_client(None).is_ok());
+        // 合法 http / socks5 代理
+        assert!(make_client(Some("http://127.0.0.1:7890")).is_ok());
+        assert!(make_client(Some("socks5://127.0.0.1:1080")).is_ok());
+        // 空串/空白 = 未配置，不报错
+        assert!(make_client(Some("")).is_ok());
+        assert!(make_client(Some("   ")).is_ok());
+        // 非法地址：应返回可读错误而不是 panic
+        let err = make_client(Some("not a url")).expect_err("非法代理应报错");
+        assert!(err.contains("代理地址无效"), "错误应可读: {err}");
+    }
+
+    #[test]
+    fn test_cf_challenge_detection() {
+        // CF 挑战页特征
+        assert!(looks_like_cf_challenge(
+            "<html><head><title>Just a moment...</title></head></html>"
+        ));
+        assert!(looks_like_cf_challenge(
+            "<script src=\"/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1\"></script>"
+        ));
+        assert!(looks_like_cf_challenge(
+            "<html><body>Attention Required! | Cloudflare</body></html>"
+        ));
+        // 正常 JSON 与普通页面不误报
+        assert!(!looks_like_cf_challenge("{\"code\":0,\"data\":{}}"));
+        assert!(!looks_like_cf_challenge(
+            "<html><body>正常站点页面</body></html>"
+        ));
+        assert!(!looks_like_cf_challenge(""));
+    }
 }

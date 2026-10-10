@@ -50,6 +50,21 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const c = await loadConfig();
+      // 先加载上次结果（立即可见的旧数据），再决定是否自动刷新
+      try {
+        const last = await api.getLastResults();
+        if (last.length > 0 && c) {
+          // 只保留当前配置里仍存在的账号，避免展示已删除账号的旧数据
+          const ids = new Set(c.accounts.filter((a) => a.enabled).map((a) => a.id));
+          const map: Record<string, RefreshOutcome> = {};
+          for (const o of last) {
+            if (ids.has(o.accountId)) map[o.accountId] = o;
+          }
+          setStatuses(map);
+        }
+      } catch {
+        // 上次结果读取失败不影响启动
+      }
       if (c && c.settings.refreshOnStart && c.accounts.some((a) => a.enabled)) {
         refresh();
       }
