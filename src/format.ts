@@ -70,6 +70,13 @@ export function formatCompact(n?: number | null): string {
   return n.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
 }
 
+/** 刷新耗时：不足 1s 显示毫秒（320ms），否则保留一位小数的秒数（2.4s）；非法输入回退占位符 */
+export function formatDurationMs(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  if (ms < 1000) return `${Math.max(1, Math.round(ms))}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 /** 通用小数格式化（花费等，精度自适应） */
 export function formatDecimal(v: number): string {
   const abs = Math.abs(v);

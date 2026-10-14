@@ -10,6 +10,8 @@ interface Props {
   onMarkRead: (id: string) => void;
   onMarkAllRead: () => void;
   onClose: () => void;
+  /** 「刷新失败」通知点击：关闭本抽屉并定位到对应账号详情（App 侧重用 focusRequest 机制） */
+  onOpenAccount?: (accountId: string) => void;
 }
 
 function NotifIcon({ kind }: { kind: NotificationKind }) {
@@ -56,7 +58,7 @@ function NotifIcon({ kind }: { kind: NotificationKind }) {
  * 通知本体每次刷新后由 RefreshOutcome[] 重新推导，这里只负责展示与已读管理；
  * 不做系统弹窗/声音，全部提醒停留在应用内（不打扰原则）。
  */
-export default function NotificationCenter({ notifications, readMap, onMarkRead, onMarkAllRead, onClose }: Props) {
+export default function NotificationCenter({ notifications, readMap, onMarkRead, onMarkAllRead, onClose, onOpenAccount }: Props) {
   const unread = notifications.filter((n) => !readMap[n.id]).length;
 
   return (
@@ -94,19 +96,39 @@ export default function NotificationCenter({ notifications, readMap, onMarkRead,
         <div className="notif-list">
           {notifications.map((n) => {
             const isUnread = !readMap[n.id];
+            // 「刷新失败」通知主体可点击：标为已读 + 跳转到对应账号详情抽屉
+            const jumpToAccount = n.kind === "refreshError" && onOpenAccount;
+            const main = (
+              <>
+                <div className="notif-head">
+                  <span className="notif-account">{n.accountName}</span>
+                  <span className={`notif-kind ${n.severity}`}>{KIND_LABELS[n.kind]}</span>
+                  <span className="notif-time">{formatTimeAgo(n.at)}</span>
+                </div>
+                {n.detail && <p className="notif-detail">{n.detail}</p>}
+                {jumpToAccount && <span className="notif-jump-hint">查看账号详情 →</span>}
+              </>
+            );
             return (
               <div key={n.id} className={`notif-item${isUnread ? " unread" : ""}`}>
                 <span className={`notif-ico ${n.severity}`}>
                   <NotifIcon kind={n.kind} />
                 </span>
-                <div className="notif-main">
-                  <div className="notif-head">
-                    <span className="notif-account">{n.accountName}</span>
-                    <span className={`notif-kind ${n.severity}`}>{KIND_LABELS[n.kind]}</span>
-                    <span className="notif-time">{formatTimeAgo(n.at)}</span>
-                  </div>
-                  {n.detail && <p className="notif-detail">{n.detail}</p>}
-                </div>
+                {jumpToAccount ? (
+                  <button
+                    type="button"
+                    className="notif-main notif-jump"
+                    title="查看该账号详情"
+                    onClick={() => {
+                      onMarkRead(n.id);
+                      onOpenAccount(n.accountId);
+                    }}
+                  >
+                    {main}
+                  </button>
+                ) : (
+                  <div className="notif-main">{main}</div>
+                )}
                 {isUnread && (
                   <button
                     type="button"

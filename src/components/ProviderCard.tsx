@@ -82,6 +82,9 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const [showAllExtras, setShowAllExtras] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
+  // 新数据高亮：fetchedAt 前进时触发一次性边框闪示（tick 作为 key 重启动画；首次挂载/旧数据回填不闪）
+  const [flashTick, setFlashTick] = useState(0);
+  const prevFetchedAtRef = useRef<string | null>(null);
   const info = outcome?.info ?? null;
   const err = outcome?.error ?? null;
   const st = statusClass(outcome, refreshing);
@@ -100,6 +103,16 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       setDetailOpen(true);
     }
   }, [focusRequest, account.id]);
+
+  // 一次性高亮：仅当「本卡已有旧数据 → 刷新带回了更新的数据」时触发。
+  // 挂载后首次见到数据（启动回填/切回看板）不算，fetchedAt 是后端打的新数据锚点。
+  const fetchedAt = outcome?.info?.fetchedAt ?? null;
+  useEffect(() => {
+    if (fetchedAt && prevFetchedAtRef.current && fetchedAt !== prevFetchedAtRef.current) {
+      setFlashTick((t) => t + 1);
+    }
+    if (fetchedAt) prevFetchedAtRef.current = fetchedAt;
+  }, [fetchedAt]);
 
   // 用量进度条
   const used = info?.used?.amount;
@@ -134,6 +147,10 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
 
   return (
     <div className={`card status-${st}`}>
+      {/* 刷新进行中的顶部细微 shimmer（有/无旧数据都提示「正在更新」；reduced-motion 静态化） */}
+      {refreshing && <span className="card-refresh-line" aria-hidden="true" />}
+      {/* 新数据到达的一次性主色高亮（key 变化重启动画；元素终态 opacity 0，pointer-events 关闭） */}
+      {flashTick > 0 && <span key={flashTick} className="card-flash" aria-hidden="true" />}
       <div className="card-head">
         <div className="card-title">
           <span className={`dot ${st}`} />

@@ -8,6 +8,7 @@ import NotificationCenter from "./components/NotificationCenter";
 import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from "./types";
+import { formatDurationMs } from "./format";
 import {
   DEFAULT_NOTIFY_THRESHOLDS,
   computeProblemNotifications,
@@ -47,6 +48,10 @@ export default function App() {
   const [statuses, setStatuses] = useState<Record<string, RefreshOutcome>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
+  // 本次刷新耗时（毫秒）：从 refreshing 起止时间戳推导，纯前端，不新增 IPC
+  const [lastRefreshMs, setLastRefreshMs] = useState<number | null>(null);
+  // 顶栏进度条可见性：刷新结束后短暂保留「完成态」供淡出动画播放，再卸载元素
+  const [progressVisible, setProgressVisible] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [history, setHistory] = useState<BalanceSnapshot[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -60,6 +65,8 @@ export default function App() {
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const refreshTimer = useRef<number | null>(null);
   const refreshingRef = useRef(false);
+  // 刷新开始时间戳（performance.now 单调时钟，不受系统时间调整影响）
+  const refreshStartRef = useRef<number | null>(null);
 
   // 通知中心：面板开关 + 已读映射（localStorage 持久化）+ 「已恢复」瞬时记录
   const [notifOpen, setNotifOpen] = useState(false);
@@ -128,6 +135,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
+    refreshStartRef.current = performance.now();
     setRefreshing(true);
     try {
       const outcomes = await api.refreshAll();
@@ -141,6 +149,11 @@ export default function App() {
       setLoadError(String(e));
     } finally {
       refreshingRef.current = false;
+      // 耗时统计：成功与失败都记录（失败也是一次真实等待），与 IPC 逻辑解耦
+      if (refreshStartRef.current !== null) {
+        setLastRefreshMs(performance.now() - refreshStartRef.current);
+        refreshStartRef.current = null;
+      }
       setRefreshing(false);
     }
   }, [loadHistory]);
@@ -311,6 +324,46 @@ export default function App() {
 
   const openNotifications = useCallback(() => setNotifOpen(true), []);
 
+  // 通知中心「刷新失败」→ 关闭抽屉 + 复用 focusRequest 机制打开对应账号详情（第五轮机制，不另造）
+  const handleOpenAccountFromNotification = useCallback((accountId: string) => {
+    setNotifOpen(false);
+    setFocusRequest({ accountId, nonce: Date.now() });
+    setView("dashboard");
+  }, []);
+
+  // 顶栏进度条：刷新开始即出现；结束后进入完成态（整条淡出）再卸载，避免戛然而止
+  useEffect(() => {
+    if (refreshing) {
+      setProgressVisible(true);
+      return;
+    }
+    if (!progressVisible) return;
+    const t = window.setTimeout(() => setProgressVisible(false), 480);
+    return () => window.clearTimeout(t);
+  }, [refreshing, progressVisible]);
+
+  // 窗口标题动态化：异常数 + 刷新中状态（tauri.conf.json 的静态 title 仍为初始值；纯前端 document.title）
+  const failedCount = visibleOutcomes.reduce((n, o) => n + (o.ok ? 0 : 1), 0);
+  useEffect(() => {
+    const base = "LLM Status Board";
+    let title = failedCount > 0 ? `⚠ ${failedCount} 个异常 · ${base}` : base;
+    if (refreshing) title += "（刷新中…）";
+    document.title = title;
+  }, [failedCount, refreshing]);
+
+  // 警示条 hover 提示内容：未读通知涉及的账号（错误优先、按时间序去重，最多列 3 个 +「等 N 个」）
+  const alertTip = useMemo(() => {
+    const unread = notifications.filter((n) => !notifRead[n.id]);
+    if (unread.length === 0) return null;
+    const ordered = [...unread].sort((a, b) => Number(b.severity === "err") - Number(a.severity === "err"));
+    const names: string[] = [];
+    for (const n of ordered) {
+      if (!names.includes(n.accountName)) names.push(n.accountName);
+    }
+    const head = names.slice(0, 3).join("、");
+    return names.length > 3 ? `${head} 等 ${names.length} 个账号` : head;
+  }, [notifications, notifRead]);
+
   if (!config) {
     return (
       <div className="boot-screen">
@@ -340,7 +393,6 @@ export default function App() {
               className={`alert-chip${hasUnreadError ? " err" : ""}`}
               onClick={openNotifications}
               aria-label={`有 ${unreadCount} 条未读通知，点击查看`}
-              title="查看未读通知"
             >
               <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M8 2.2 14.6 13.4H1.4Z" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinejoin="round" />
@@ -348,6 +400,11 @@ export default function App() {
                 <circle cx="8" cy="11.4" r="0.9" fill="currentColor" />
               </svg>
               <span>{unreadCount}</span>
+              {alertTip && (
+                <span className="alert-tip" role="tooltip">
+                  {alertTip}
+                </span>
+              )}
             </button>
           )}
           <button
@@ -402,6 +459,10 @@ export default function App() {
             {view === "settings" ? "返回看板" : "设置"}
           </button>
         </div>
+        {/* 刷新进度条：indeterminate 流动（无单账号完成度数据），结束后淡出卸载 */}
+        {progressVisible && (
+          <div className={`topbar-progress${refreshing ? " active" : " done"}`} aria-hidden="true" />
+        )}
       </header>
 
       {view === "dashboard" ? (
@@ -410,6 +471,7 @@ export default function App() {
           statuses={statuses}
           refreshing={refreshing}
           lastRefreshAt={lastRefreshAt}
+          lastRefreshMs={lastRefreshMs}
           autoRefreshSec={config.settings.autoRefreshSec}
           snapshots={history}
           focusRequest={focusRequest}
@@ -418,6 +480,7 @@ export default function App() {
           onAddAccount={handleAddAccount}
           onOpenHelp={() => setHelpOpen(true)}
           onOpenNotifications={openNotifications}
+          onRefresh={refresh}
         />
       ) : (
         <SettingsView
@@ -449,6 +512,7 @@ export default function App() {
           onMarkRead={markNotificationRead}
           onMarkAllRead={markAllNotificationsRead}
           onClose={() => setNotifOpen(false)}
+          onOpenAccount={handleOpenAccountFromNotification}
         />
       )}
 
@@ -462,6 +526,7 @@ export default function App() {
       <footer className="footer">
         <span className="muted">
           数据直接来自各家提供商接口，仅保存在本机。上次刷新：{lastRefreshAt ? new Date(lastRefreshAt).toLocaleString("zh-CN", { hour12: false }) : "—"}
+          {lastRefreshMs !== null && ` · 本次耗时 ${formatDurationMs(lastRefreshMs)}`}
         </span>
         <span className="muted footer-hint">
           <kbd>Ctrl</kbd>+<kbd>K</kbd> 快速操作

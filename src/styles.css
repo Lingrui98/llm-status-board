@@ -410,6 +410,7 @@ body::before {
 }
 
 .card {
+  position: relative; /* 承载刷新 shimmer / 新数据高亮浮层 */
   background: linear-gradient(180deg, var(--bg-2), color-mix(in srgb, var(--bg-2) 86%, var(--bg)));
   border: 1px solid var(--border);
   border-radius: var(--radius-l);
@@ -2185,6 +2186,19 @@ code {
     animation: none !important;
     background: var(--bg-3);
   }
+
+  /* 刷新进度反馈静态降级：进度条/shimmer 退化为整条静态细条（仍在传达「刷新中」） */
+  .topbar-progress.active::before,
+  .card-refresh-line::before {
+    animation: none !important;
+    left: 0;
+    width: 100%;
+  }
+
+  /* 新数据高亮：reduced-motion 下不做边框闪烁（瞬间消散也无意义，直接不渲染视觉效果） */
+  .card-flash {
+    display: none;
+  }
 }
 
 /* ---------- 新手引导（WelcomeGuide）：居中卡片浮层，z 高于抽屉/命令面板 ---------- */
@@ -2504,6 +2518,7 @@ code {
 
 /* 顶栏紧凑警示条（「立即刷新」左侧）：默认琥珀，含错误级未读时转红 */
 .alert-chip {
+  position: relative; /* 承载 hover 提示浮层 .alert-tip */
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -2718,4 +2733,181 @@ code {
   border-top: 1px dashed var(--border);
   padding-top: 10px;
   line-height: 1.6;
+}
+
+/* ---------- 刷新过程感知（第 9 轮）：顶栏进度条 / 卡片 shimmer / 新数据高亮 / 警示条提示 ---------- */
+
+/* 顶栏底部 2px indeterminate 进度条：无单账号完成度数据，用流动条表达「正在工作」；
+   结束后进入 .done 完成态（铺满整条并淡出），元素由 React 在淡出后卸载 */
+.topbar-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px; /* 与顶栏下边框重叠，进度条像从分界线上长出 */
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.topbar-progress::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, var(--accent) 60%, color-mix(in srgb, var(--accent) 55%, var(--ok)));
+  opacity: 0;
+}
+
+.topbar-progress.active::before {
+  opacity: 1;
+  animation: topbar-progress-flow 1.15s var(--ease-out) infinite;
+}
+
+.topbar-progress.done::before {
+  width: 100%;
+  opacity: 0;
+  transition: width 0.16s var(--ease-out), opacity 0.38s ease 0.04s;
+}
+
+@keyframes topbar-progress-flow {
+  from {
+    left: -38%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+/* 卡片顶部细微 shimmer：刷新进行中、该账号新数据尚未落盘时的等待反馈（所有卡统一出现） */
+.card-refresh-line {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: var(--radius-l) var(--radius-l) 0 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.card-refresh-line::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 72%, transparent), transparent);
+  opacity: 0.85;
+  animation: topbar-progress-flow 1.35s ease-in-out infinite;
+}
+
+/* 刷新完成并带回新数据的卡片：主色边框一次性闪示（约 1.8s 内消散，reduced-motion 下不渲染） */
+.card-flash {
+  position: absolute;
+  inset: -1px;
+  border-radius: var(--radius-l);
+  border: 1px solid var(--accent);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent) 28%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  animation: card-flash-out 1.8s ease-out forwards;
+}
+
+@keyframes card-flash-out {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 警示条 hover 提示：未读提醒涉及的账号（纯 CSS 浮层，hover/键盘聚焦均可触发） */
+.alert-tip {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 30;
+  max-width: 260px;
+  padding: 6px 11px;
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-2) 96%, transparent);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity 0.15s var(--ease-out), transform 0.15s var(--ease-out), visibility 0.15s;
+  pointer-events: none;
+}
+
+.alert-chip:hover .alert-tip,
+.alert-chip:focus-visible .alert-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+/* 总览条「刷新」时间可点击 = 立即刷新快捷入口（排版与 .summary-value.small 一致，仅加交互反馈） */
+.summary-refresh-btn {
+  background: none;
+  border: none;
+  padding: 0; /* padding-top 由 .summary-value.small（更高优先级）保留，切换 span/button 不抖动 */
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+  align-self: flex-start;
+  transition: color 0.15s var(--ease-out);
+}
+
+.summary-refresh-btn:hover {
+  color: var(--accent);
+}
+
+/* 「刷新失败」通知主体可点击：跳转到对应账号详情（视觉保持通知排版，仅加交互反馈） */
+button.notif-jump {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+button.notif-jump:hover .notif-account {
+  color: var(--accent);
+}
+
+.notif-jump-hint {
+  align-self: flex-start;
+  font-size: 11.5px;
+  color: var(--accent);
+  opacity: 0.75;
+  transition: opacity 0.15s ease;
+}
+
+button.notif-jump:hover .notif-jump-hint,
+button.notif-jump:focus-visible .notif-jump-hint {
+  opacity: 1;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

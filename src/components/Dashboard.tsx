@@ -7,13 +7,15 @@ import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalan
 import CostBreakdownChart from "./charts/CostBreakdownChart";
 import { ChartSection } from "./charts/shared";
 import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome } from "../types";
-import { formatTimeAgo } from "../format";
+import { formatDurationMs, formatTimeAgo } from "../format";
 
 interface Props {
   config: AppConfig;
   statuses: Record<string, RefreshOutcome>;
   refreshing: boolean;
   lastRefreshAt: string | null;
+  /** 本次刷新耗时（毫秒，App 层从 refreshing 起止推导）；null = 本会话尚未刷新过 */
+  lastRefreshMs?: number | null;
   autoRefreshSec: number;
   snapshots: BalanceSnapshot[];
   /** 外部「跳转到账号」请求（命令面板 / 数字键），透传给卡片开抽屉 */
@@ -28,6 +30,8 @@ interface Props {
   onOpenHelp?: () => void;
   /** 总览条「正常/异常」有异常时点击 → 打开通知中心查看失败项 */
   onOpenNotifications?: () => void;
+  /** 点总览条「刷新」时间 = 立即刷新（快捷入口，等同顶栏按钮） */
+  onRefresh?: () => void;
 }
 
 function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
@@ -42,7 +46,7 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
@@ -78,6 +82,16 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
   // 首次刷新（无任何旧数据）时显示骨架卡片，避免网格从空白突然跳入
   const showSkeleton = refreshing && Object.keys(statuses).length === 0;
   const skeletonCount = Math.min(Math.max(enabled.length, 3), 4);
+
+  // 总览条「刷新」文本：时刻 + 相对时间 + 刷新方式 + 本次耗时（耗时仅刷新完成后显示）
+  const refreshSummary =
+    (refreshing
+      ? "进行中…"
+      : lastRefreshAt
+        ? `${new Date(lastRefreshAt).toLocaleTimeString("zh-CN", { hour12: false })} · ${formatTimeAgo(lastRefreshAt, now)}`
+        : "—") +
+    (autoRefreshSec > 0 ? ` · 每 ${autoRefreshSec}s` : " · 手动") +
+    (!refreshing && lastRefreshMs != null ? ` · 耗时 ${formatDurationMs(lastRefreshMs)}` : "");
 
   if (enabled.length === 0) {
     return (
@@ -164,14 +178,18 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         </div>
         <div className="summary-item">
           <span className="summary-label">刷新</span>
-          <span className="summary-value small">
-            {refreshing
-              ? "进行中…"
-              : lastRefreshAt
-                ? `${new Date(lastRefreshAt).toLocaleTimeString("zh-CN", { hour12: false })} · ${formatTimeAgo(lastRefreshAt, now)}`
-                : "—"}
-            {autoRefreshSec > 0 ? ` · 每 ${autoRefreshSec}s` : " · 手动"}
-          </span>
+          {refreshing || !onRefresh ? (
+            <span className="summary-value small">{refreshSummary}</span>
+          ) : (
+            <button
+              type="button"
+              className="summary-value small summary-refresh-btn"
+              onClick={onRefresh}
+              title="点击立即刷新"
+            >
+              {refreshSummary}
+            </button>
+          )}
         </div>
       </div>
 
