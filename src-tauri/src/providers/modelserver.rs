@@ -112,9 +112,13 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
     let mut raws: Vec<Value> = Vec::new();
 
     for p in list.iter().take(10) {
-        let pid = match p.get("id").and_then(|i| i.as_i64()) {
-            Some(id) => id,
-            None => continue,
+        // 项目 ID 可能是数字也可能是 UUID 字符串（取决于部署版本），统一取字符串形式
+        let pid = if let Some(id) = p.get("id").and_then(|i| i.as_i64()) {
+            id.to_string()
+        } else if let Some(id) = p.get("id").and_then(|i| i.as_str()) {
+            id.to_string()
+        } else {
+            continue;
         };
         let project_name = p
             .get("name")
