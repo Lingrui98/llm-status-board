@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
 import * as api from "./api";
-import type { AppConfig, RefreshOutcome } from "./types";
+import type { AppConfig, BalanceSnapshot, RefreshOutcome } from "./types";
 
 type View = "dashboard" | "settings";
 
@@ -13,8 +13,18 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [history, setHistory] = useState<BalanceSnapshot[]>([]);
   const refreshTimer = useRef<number | null>(null);
   const refreshingRef = useRef(false);
+
+  // 余额历史快照（趋势图数据源）：失败静默，不影响主流程
+  const loadHistory = useCallback(async () => {
+    try {
+      setHistory(await api.getHistory());
+    } catch {
+      // 历史读取失败不影响看板展示
+    }
+  }, []);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -38,13 +48,15 @@ export default function App() {
       for (const o of outcomes) map[o.accountId] = o;
       setStatuses(map);
       setLastRefreshAt(new Date().toISOString());
+      // 刷新成功后重新拉取余额历史（后端已追加本次快照）
+      await loadHistory();
     } catch (e) {
       setLoadError(String(e));
     } finally {
       refreshingRef.current = false;
       setRefreshing(false);
     }
-  }, []);
+  }, [loadHistory]);
 
   // 初始化：加载配置 → 按设置决定是否自动刷新一次
   useEffect(() => {
@@ -65,6 +77,8 @@ export default function App() {
       } catch {
         // 上次结果读取失败不影响启动
       }
+      // 拉取余额历史（供卡片内趋势图使用）
+      await loadHistory();
       if (c && c.settings.refreshOnStart && c.accounts.some((a) => a.enabled)) {
         refresh();
       }
@@ -163,6 +177,7 @@ export default function App() {
           refreshing={refreshing}
           lastRefreshAt={lastRefreshAt}
           autoRefreshSec={config.settings.autoRefreshSec}
+          snapshots={history}
         />
       ) : (
         <SettingsView

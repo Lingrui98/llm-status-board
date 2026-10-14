@@ -102,10 +102,7 @@ mod tests {
             crate::jsonpath::lookup_string(l, "window.timeUnit").as_deref(),
             Some("HOUR")
         );
-        assert_eq!(
-            crate::jsonpath::lookup_number(l, "detail.used"),
-            Some(40.0)
-        );
+        assert_eq!(crate::jsonpath::lookup_number(l, "detail.used"), Some(40.0));
         // 并发 / 加油包 / 等级
         assert_eq!(
             crate::jsonpath::lookup_number(&v, "parallel.limit"),

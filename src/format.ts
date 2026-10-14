@@ -25,6 +25,56 @@ export function formatTime(iso?: string | null): string {
   return d.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
+/** 相对过去时间：刚刚 / N秒前 / N分钟前 / N小时前 / N天前（未来时间按“刚刚”处理，容忍时钟偏差） */
+export function formatTimeAgo(iso?: string | null, now: number = Date.now()): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return iso;
+  const diff = Math.max(0, now - t);
+  if (diff < 30_000) return "刚刚";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}秒前`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}小时前`;
+  return `${Math.floor(diff / 86_400_000)}天前`;
+}
+
+/** 相对未来时间（如配额重置）：1分钟内 / N分钟后 / N小时后 / N天后；已过返回“已到期” */
+export function formatTimeUntil(iso?: string | null, now: number = Date.now()): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return iso;
+  const diff = t - now;
+  if (diff <= 0) return "已到期";
+  if (diff < 60_000) return "1分钟内";
+  if (diff < 3_600_000) return `${Math.ceil(diff / 60_000)}分钟后`;
+  if (diff < 86_400_000) return `${Math.ceil(diff / 3_600_000)}小时后`;
+  return `${Math.ceil(diff / 86_400_000)}天后`;
+}
+
+/** 紧凑数字（坐标轴用）：1.2万 / 3.4亿 */
+export function formatCompact(n?: number | null): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  const trim = (v: number) => v.toFixed(1).replace(/\.0$/, "");
+  if (abs >= 1e8) return `${trim(n / 1e8)}亿`;
+  if (abs >= 1e4) return `${trim(n / 1e4)}万`;
+  if (abs >= 1000) return n.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
+  if (abs >= 1) return n.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  return n.toLocaleString("zh-CN", { maximumFractionDigits: 4 });
+}
+
+/** 通用小数格式化（花费等，精度自适应） */
+export function formatDecimal(v: number): string {
+  const abs = Math.abs(v);
+  let digits = 2;
+  if (abs > 0 && abs < 0.01) digits = 6;
+  else if (abs < 1) digits = 4;
+  return v.toLocaleString("zh-CN", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+}
+
 export function kindLabel(kind: string): string {
   const map: Record<string, string> = {
     oneApi: "one-api",

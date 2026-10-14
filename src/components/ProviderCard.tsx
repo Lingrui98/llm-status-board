@@ -1,11 +1,17 @@
 import { useState } from "react";
-import type { AccountConfig, RefreshOutcome } from "../types";
+import type { AccountConfig, BalanceSnapshot, RefreshOutcome } from "../types";
 import { formatMoney, formatNumber, formatTime, kindLabel } from "../format";
+import DailyUsageChart from "./charts/DailyUsageChart";
+import ModelUsageChart from "./charts/ModelUsageChart";
+import QuotaWindowBars from "./charts/QuotaWindowBars";
+import BalanceTrendChart from "./charts/BalanceTrendChart";
+import { ChartSection } from "./charts/shared";
 
 interface Props {
   account: AccountConfig;
   outcome?: RefreshOutcome;
   refreshing: boolean;
+  snapshots: BalanceSnapshot[];
 }
 
 function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): string {
@@ -13,10 +19,18 @@ function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): string {
   return outcome.ok ? "ok" : "error";
 }
 
-export default function ProviderCard({ account, outcome, refreshing }: Props) {
+function usageLevel(pct: number): "ok" | "warn" | "err" {
+  if (pct > 80) return "err";
+  if (pct >= 60) return "warn";
+  return "ok";
+}
+
+export default function ProviderCard({ account, outcome, refreshing, snapshots }: Props) {
   const [showRaw, setShowRaw] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const info = outcome?.info ?? null;
   const err = outcome?.error ?? null;
+  const st = statusClass(outcome, refreshing);
 
   // 用量进度条
   const used = info?.used?.amount;
@@ -33,10 +47,10 @@ export default function ProviderCard({ account, outcome, refreshing }: Props) {
   const lowBalance = balance !== null && balance.amount >= 0 && balance.amount < 1 && (balance.currency === "USD" || balance.currency === "CNY");
 
   return (
-    <div className={`card status-${statusClass(outcome, refreshing)}`}>
+    <div className={`card status-${st}${expanded ? " expanded" : ""}`}>
       <div className="card-head">
         <div className="card-title">
-          <span className={`dot ${statusClass(outcome, refreshing)}`} />
+          <span className={`dot ${st}`} />
           <span className="card-name">{account.name}</span>
         </div>
         <span className="kind-badge">{kindLabel(account.kind)}</span>
@@ -48,9 +62,19 @@ export default function ProviderCard({ account, outcome, refreshing }: Props) {
       </div>
 
       {pct !== null && (
-        <div className="usage-bar">
-          <div className="usage-bar-fill" style={{ width: `${pct.toFixed(1)}%` }} />
+        <div className="usage-block">
+          <div className="usage-head">
+            <span>额度使用</span>
+            <span className={`usage-pct ${usageLevel(pct)}`}>{pct.toFixed(0)}%</span>
+          </div>
+          <div className="usage-bar">
+            <div className={`usage-bar-fill ${usageLevel(pct)}`} style={{ width: `${pct.toFixed(1)}%` }} />
+          </div>
         </div>
+      )}
+
+      {info?.quotaWindows && info.quotaWindows.length > 0 && (
+        <QuotaWindowBars windows={info.quotaWindows} />
       )}
 
       <div className="card-rows">
@@ -84,15 +108,41 @@ export default function ProviderCard({ account, outcome, refreshing }: Props) {
         <span className="muted small">
           {info ? `更新于 ${formatTime(info.fetchedAt)}` : refreshing && !outcome ? "等待数据…" : "尚未刷新"}
         </span>
-        {info?.raw !== undefined && info?.raw !== null && (
-          <button className="link-btn" onClick={() => setShowRaw(!showRaw)}>
-            {showRaw ? "隐藏原始数据" : "原始数据"}
+        <div className="card-actions">
+          {info?.raw !== undefined && info?.raw !== null && (
+            <button className="link-btn" onClick={() => setShowRaw(!showRaw)}>
+              {showRaw ? "隐藏原始数据" : "原始数据"}
+            </button>
+          )}
+          <button
+            className="link-btn expand-toggle"
+            aria-expanded={expanded}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? "收起" : "详情"}
+            <svg className="chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
-        )}
+        </div>
       </div>
 
       {showRaw && info?.raw != null && (
         <pre className="raw-json">{JSON.stringify(info.raw, null, 2) as string}</pre>
+      )}
+
+      {expanded && (
+        <div className="card-charts">
+          <ChartSection title="近 14 天用量">
+            <DailyUsageChart data={info?.dailyUsage} />
+          </ChartSection>
+          <ChartSection title="模型用量 TOP 8">
+            <ModelUsageChart data={info?.modelUsage} />
+          </ChartSection>
+          <ChartSection title="余额趋势">
+            <BalanceTrendChart snapshots={snapshots} accountId={account.id} />
+          </ChartSection>
+        </div>
       )}
     </div>
   );

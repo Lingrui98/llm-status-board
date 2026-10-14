@@ -22,7 +22,7 @@
 | DeepSeek | `GET /user/balance` | 充值/赠送余额，CNY/USD |
 | OpenAI | `GET /v1/organization/costs` | 本月用量（需 Admin key；OpenAI 不提供 key 级余额） |
 | SiliconFlow 硅基流动 | `GET /v1/user/info` | 总余额/充值/赠送，币种按域名（.cn=CNY） |
-| Moonshot / Kimi | `GET /v1/users/me/balance` | 可用/现金/代金券余额（官方接口） |
+| Moonshot / Kimi | 按 Key 前缀自动分流 | `sk-kimi-`（Kimi for Coding 订阅）→ 查订阅额度：5h/7d/月度窗口、并发、加油包；其他 `sk-` → 开放平台余额接口 |
 | 智谱 GLM | 控制台内部接口 | 可用余额/累计消费，CNY（非官方 API，有变动风险） |
 | 阿里云百炼 | — | sk- key 无余额接口（计费在阿里云主账号），卡片会显示说明 |
 
@@ -77,6 +77,15 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 4. 顶栏「立即刷新」或开启自动刷新间隔
 5. 访问 OpenAI 等境外接口不通时，在「设置 → 通用设置」里填网络代理（支持 `http://` / `socks5://`，全局生效）
 6. 跨设备迁移（比如 Windows 配好后搬到 Mac）：「设置 → 导出配置」得到 JSON 文件，在另一台机器上「导入配置」——设置替换、账号按 ID 合并（**导出文件包含 API Key，请妥善保管**）
+
+### 官方提供商：Kimi 订阅（Kimi for Coding）
+
+Kimi 的订阅不在开放平台体系里（开放平台是按量计费），走的是独立的 `api.kimi.com/coding/v1`。本应用按 **Key 前缀自动分流**：
+
+- `sk-kimi-` 前缀（在 www.kimi.com/code/console 生成）→ 订阅模式：展示 5h/7d/月度用量窗口、并发上限、加油包剩余、会员等级
+- 其他 `sk-` 前缀（开放平台 key）→ 按量计费模式：展示可用/现金/代金券余额
+
+> 注：订阅额度接口为官方 CLI 背后的未公开文档端点，若 Kimi 侧调整接口结构，展示可能需要跟随更新。
 
 ### 凭证怎么填（以中转站为例）
 

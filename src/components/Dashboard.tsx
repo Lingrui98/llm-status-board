@@ -1,6 +1,7 @@
+import { useEffect, useState } from "react";
 import ProviderCard from "./ProviderCard";
-import type { AppConfig, Money, RefreshOutcome } from "../types";
-import { formatMoney } from "../format";
+import type { AppConfig, BalanceSnapshot, Money, RefreshOutcome } from "../types";
+import { formatTimeAgo } from "../format";
 
 interface Props {
   config: AppConfig;
@@ -8,6 +9,7 @@ interface Props {
   refreshing: boolean;
   lastRefreshAt: string | null;
   autoRefreshSec: number;
+  snapshots: BalanceSnapshot[];
 }
 
 function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
@@ -22,11 +24,18 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots }: Props) {
   const enabled = config.accounts.filter((a) => a.enabled);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
   const totals = aggregate(statuses);
+
+  // 相对时间（"3分钟前"）每 30s 重算一次
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
 
   if (enabled.length === 0) {
     return (
@@ -67,7 +76,11 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         <div className="summary-item">
           <span className="summary-label">刷新</span>
           <span className="summary-value small">
-            {refreshing ? "进行中…" : lastRefreshAt ? new Date(lastRefreshAt).toLocaleTimeString("zh-CN", { hour12: false }) : "—"}
+            {refreshing
+              ? "进行中…"
+              : lastRefreshAt
+                ? `${new Date(lastRefreshAt).toLocaleTimeString("zh-CN", { hour12: false })} · ${formatTimeAgo(lastRefreshAt, now)}`
+                : "—"}
             {autoRefreshSec > 0 ? ` · 每 ${autoRefreshSec}s` : " · 手动"}
           </span>
         </div>
@@ -75,7 +88,13 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
 
       <div className="card-grid">
         {enabled.map((acc) => (
-          <ProviderCard key={acc.id} account={acc} outcome={statuses[acc.id]} refreshing={refreshing} />
+          <ProviderCard
+            key={acc.id}
+            account={acc}
+            outcome={statuses[acc.id]}
+            refreshing={refreshing}
+            snapshots={snapshots}
+          />
         ))}
       </div>
     </main>
