@@ -15,6 +15,8 @@ import { ChartEmpty, tsLabel } from "./shared";
 interface Props {
   snapshots: BalanceSnapshot[];
   accountId: string;
+  /** 空数据时的具体原因说明 */
+  emptyNote?: string;
 }
 
 interface Row {
@@ -46,7 +48,7 @@ function TrendTip({ active, payload }: TipProps) {
 }
 
 /** 单账号余额趋势折线图（数据点 <2 时降级为占位） */
-export default function BalanceTrendChart({ snapshots, accountId }: Props) {
+export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: Props) {
   const rows = useMemo<Row[]>(
     () =>
       snapshots
@@ -65,7 +67,7 @@ export default function BalanceTrendChart({ snapshots, accountId }: Props) {
     [snapshots, accountId],
   );
 
-  if (rows.length < 2) return <ChartEmpty />;
+  if (rows.length < 2) return <ChartEmpty text={emptyNote} />;
 
   return (
     <ResponsiveContainer width="100%" height={160} className="chart-box">

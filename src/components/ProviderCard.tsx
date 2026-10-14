@@ -134,16 +134,45 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots }
       {expanded && (
         <div className="card-charts">
           <ChartSection title="近 14 天用量">
-            <DailyUsageChart data={info?.dailyUsage} />
+            <DailyUsageChart data={info?.dailyUsage} emptyNote={chartEmptyNote("daily")} />
           </ChartSection>
           <ChartSection title="模型用量 TOP 8">
-            <ModelUsageChart data={info?.modelUsage} />
+            <ModelUsageChart data={info?.modelUsage} emptyNote={chartEmptyNote("model")} />
           </ChartSection>
           <ChartSection title="余额趋势">
-            <BalanceTrendChart snapshots={snapshots} accountId={account.id} />
+            <BalanceTrendChart
+              snapshots={snapshots}
+              accountId={account.id}
+              emptyNote={chartEmptyNote("balance")}
+            />
           </ChartSection>
         </div>
       )}
     </div>
   );
+
+  /** 按账号类型与图表维度生成「无数据」说明（区分"不支持"与"暂无记录"） */
+  function chartEmptyNote(dimension: "daily" | "model" | "balance"): string | undefined {
+    const kind = account.kind;
+    // 官方按量计费接口只提供余额快照，无历史用量
+    if (kind === "deepSeek" && dimension !== "balance") {
+      return "DeepSeek 官方接口不提供历史用量，只返回当前余额";
+    }
+    if (kind === "moonshot" && dimension !== "balance") {
+      return "Kimi 订阅接口只返回当前窗口用量百分比，无历史序列";
+    }
+    if (kind === "moonshot" && dimension === "balance") {
+      return "订阅模式按窗口额度计费，没有余额概念（加油包/会员等级见卡片统计行）";
+    }
+    if (kind === "openAi" && dimension !== "balance") {
+      return "此图表依赖站点返回的按日/按模型统计；OpenAI 成本接口仅有按月聚合";
+    }
+    if (dimension === "balance" && info?.balance == null && info?.quotaWindows?.length) {
+      return "该账号为订阅/配额模式，无余额记录（窗口用量见卡片进度条）";
+    }
+    if (dimension === "daily" || dimension === "model") {
+      return "该站点尚未返回用量统计（新 key 或零消费时为空）";
+    }
+    return "刷新几次后会随历史快照积累出趋势线";
+  }
 }

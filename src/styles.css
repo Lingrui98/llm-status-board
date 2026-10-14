@@ -732,6 +732,14 @@ body::before {
   color: var(--text-3);
   font-size: 12px;
   background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  padding: 0 14px;
+}
+
+/* 空态说明文字（可能是整句原因说明，居中换行） */
+.chart-empty-note {
+  max-width: 100%;
+  line-height: 1.6;
+  text-align: center;
 }
 
 /* recharts 容器：tick/标签通过 currentColor 跟随主题 */

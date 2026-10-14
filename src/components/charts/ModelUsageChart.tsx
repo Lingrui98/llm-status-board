@@ -14,6 +14,8 @@ import { ChartEmpty } from "./shared";
 
 interface Props {
   data: UsagePoint[] | null | undefined;
+  /** 空数据时的具体原因说明 */
+  emptyNote?: string;
 }
 
 interface Row {
@@ -80,7 +82,7 @@ function renderBarValue(props: any) {
 }
 
 /** 按模型用量水平条形图：按 cost（无 cost 时按 tokens）降序取 Top 8 */
-export default function ModelUsageChart({ data }: Props) {
+export default function ModelUsageChart({ data, emptyNote }: Props) {
   const { rows, mode, unit } = useMemo(() => {
     const pts = (data ?? []).filter((p): p is UsagePoint & { model: string } => !!p && !!p.model);
     const useCost = pts.some((p) => p.cost !== null && p.cost !== undefined);
@@ -101,7 +103,7 @@ export default function ModelUsageChart({ data }: Props) {
     return { rows, mode: (useCost ? "cost" : "tokens") as "cost" | "tokens", unit };
   }, [data]);
 
-  if (rows.length === 0) return <ChartEmpty />;
+  if (rows.length === 0) return <ChartEmpty text={emptyNote} />;
 
   const height = Math.max(140, rows.length * 34 + 24);
 

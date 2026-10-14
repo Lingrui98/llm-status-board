@@ -14,6 +14,8 @@ import { ChartEmpty, dayLabel } from "./shared";
 
 interface Props {
   data: UsagePoint[] | null | undefined;
+  /** 空数据时的具体原因说明（如"官方接口不提供历史用量"） */
+  emptyNote?: string;
 }
 
 interface Row {
@@ -55,7 +57,7 @@ function DailyTip({ active, payload, label, unit }: TipProps) {
 }
 
 /** 近 14 天用量面积图：有 cost 优先画花费（单位跟随 costUnit），否则画请求数 */
-export default function DailyUsageChart({ data }: Props) {
+export default function DailyUsageChart({ data, emptyNote }: Props) {
   const gid = useId().replace(/:/g, "");
   const { rows, unit } = useMemo(() => {
     const pts = (data ?? [])
@@ -82,7 +84,7 @@ export default function DailyUsageChart({ data }: Props) {
     return { rows: rows.filter((r) => r.value !== null), unit };
   }, [data]);
 
-  if (rows.length < 2) return <ChartEmpty />;
+  if (rows.length < 2) return <ChartEmpty text={emptyNote} />;
 
   return (
     <ResponsiveContainer width="100%" height={180} className="chart-box">

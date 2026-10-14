@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 
-/** 图表空态占位：数据为空 / 数据点不足时替代空图 */
+/** 图表空态占位：数据为空 / 数据点不足时替代空图；text 较长时自动换行居中 */
 export function ChartEmpty({ height = 140, text = "暂无数据" }: { height?: number; text?: string }) {
   return (
     <div className="chart-empty" style={{ height }} role="img" aria-label={text}>
-      <span>{text}</span>
+      <span className="chart-empty-note">{text}</span>
     </div>
   );
 }
