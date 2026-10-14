@@ -26,6 +26,8 @@ interface Props {
   onAddAccount?: (kind: ProviderKind) => void;
   /** 空状态步骤 ③：打开帮助面板（凭证教程） */
   onOpenHelp?: () => void;
+  /** 总览条「正常/异常」有异常时点击 → 打开通知中心查看失败项 */
+  onOpenNotifications?: () => void;
 }
 
 function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
@@ -40,7 +42,7 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
@@ -133,11 +135,24 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         </div>
         <div className="summary-item">
           <span className="summary-label">正常 / 异常</span>
-          <span className="summary-value">
-            <span className="ok-text">{okCount}</span>
-            <span className="muted"> / </span>
-            <span className="fail-text">{failCount}</span>
-          </span>
+          {failCount > 0 && onOpenNotifications ? (
+            <button
+              type="button"
+              className="summary-value summary-jump"
+              onClick={onOpenNotifications}
+              title="查看异常详情（打开通知中心）"
+            >
+              <span className="ok-text">{okCount}</span>
+              <span className="muted"> / </span>
+              <span className="fail-text">{failCount}</span>
+            </button>
+          ) : (
+            <span className="summary-value">
+              <span className="ok-text">{okCount}</span>
+              <span className="muted"> / </span>
+              <span className="fail-text">{failCount}</span>
+            </span>
+          )}
         </div>
         <div className="summary-item">
           <span className="summary-label">余额合计 (USD)</span>

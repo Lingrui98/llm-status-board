@@ -13,9 +13,11 @@ interface Props {
   onNavigate: (view: View) => void;
   onFocusAccount: (accountId: string) => void;
   onOpenHelp: () => void;
+  /** 打开通知中心 */
+  onOpenNotifications: () => void;
 }
 
-type IconKind = "refresh" | "settings" | "board" | "account" | "help";
+type IconKind = "refresh" | "settings" | "board" | "account" | "help" | "bell";
 
 interface Cmd {
   id: string;
@@ -72,6 +74,19 @@ function CmdIcon({ kind }: { kind: IconKind }) {
           <circle cx="8" cy="11.4" r="0.9" fill="currentColor" />
         </svg>
       );
+    case "bell":
+      return (
+        <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M8 1.8a4.4 4.4 0 0 0-4.4 4.4v2.2c0 .8-.32 1.6-.9 2.2l-.6.6h11.8l-.6-.6a3.1 3.1 0 0 1-.9-2.2V6.2A4.4 4.4 0 0 0 8 1.8Z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            fill="none"
+            strokeLinejoin="round"
+          />
+          <path d="M6.4 13.4a1.7 1.7 0 0 0 3.2 0" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+        </svg>
+      );
   }
 }
 
@@ -81,7 +96,7 @@ function CmdIcon({ kind }: { kind: IconKind }) {
  * 焦点始终留在搜索框，↑↓ 仅移动"活动项"，因此 Tab 天然无需循环陷阱（拦截即可）。
  * 与 DetailDrawer 同样做：ESC 关闭、遮罩点击关闭、焦点还原、背景滚动锁定。
  */
-export default function CommandPalette({ view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp }: Props) {
+export default function CommandPalette({ view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp, onOpenNotifications }: Props) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -124,6 +139,16 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
             },
           },
       {
+        id: "open-notifications",
+        group: "操作",
+        label: "打开通知",
+        icon: "bell",
+        run: () => {
+          onClose();
+          onOpenNotifications();
+        },
+      },
+      {
         id: "open-help",
         group: "操作",
         label: "打开帮助（快捷键 / 凭证教程）",
@@ -149,7 +174,7 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
       });
     });
     return list;
-  }, [view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp]);
+  }, [view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp, onOpenNotifications]);
 
   // 即时过滤：简单 includes（大小写不敏感）
   const q = query.trim().toLowerCase();

@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
 import CommandPalette from "./components/CommandPalette";
 import WelcomeGuide from "./components/WelcomeGuide";
 import HelpPanel from "./components/HelpPanel";
+import NotificationCenter from "./components/NotificationCenter";
 import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from "./types";
+import {
+  DEFAULT_NOTIFY_THRESHOLDS,
+  computeProblemNotifications,
+  diffRecovered,
+  filterActiveRecovered,
+  loadReadMap,
+  mergeRecovered,
+  pruneReadMap,
+  saveReadMap,
+  type AppNotification,
+  type NotificationReadMap,
+} from "./notifications";
 
 /** localStorage 键：新手引导已关闭标记（桌面 WebView 的 localStorage 持久） */
 const GUIDE_DISMISSED_KEY = "lsb-guide-dismissed";
@@ -47,6 +60,13 @@ export default function App() {
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const refreshTimer = useRef<number | null>(null);
   const refreshingRef = useRef(false);
+
+  // 通知中心：面板开关 + 已读映射（localStorage 持久化）+ 「已恢复」瞬时记录
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifRead, setNotifRead] = useState<NotificationReadMap>(loadReadMap);
+  const [recoveredNotes, setRecoveredNotes] = useState<AppNotification[]>([]);
+  // 上一轮问题键集合（恢复检测比对基准；null = 首轮不算恢复）
+  const prevProblemKeys = useRef<Set<string> | null>(null);
 
   const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
   const clearAddRequest = useCallback(() => setAddRequest(null), []);
@@ -228,6 +248,69 @@ export default function App() {
     [config],
   );
 
+  // ---------- 通知推导（纯前端，从 refresh / get_last_results 的结果计算，不动 IPC 逻辑） ----------
+
+  // 启用账号的 id → 显示名（同时充当 statuses 的白名单过滤：只看当前可见账号）
+  const accountNames = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of config?.accounts ?? []) if (a.enabled) m[a.id] = a.name;
+    return m;
+  }, [config]);
+
+  const visibleOutcomes = useMemo(
+    () => Object.values(statuses).filter((o) => accountNames[o.accountId] !== undefined),
+    [statuses, accountNames],
+  );
+
+  // 问题类通知（余额不足 / 刷新失败 / 配额将满）+ 当前问题键集合
+  const problemResult = useMemo(
+    () => computeProblemNotifications(visibleOutcomes, accountNames, DEFAULT_NOTIFY_THRESHOLDS, lastRefreshAt ?? undefined),
+    [visibleOutcomes, accountNames, lastRefreshAt],
+  );
+
+  // 恢复检测：上轮有、本轮消失且账号本轮刷新成功 → 追加一条「已恢复」（首轮不比）
+  useEffect(() => {
+    const prev = prevProblemKeys.current;
+    const cur = problemResult.problemKeys;
+    if (prev !== null) {
+      const okIds = new Set(visibleOutcomes.filter((o) => o.ok).map((o) => o.accountId));
+      const newly = diffRecovered(prev, cur, okIds, accountNames);
+      if (newly.length > 0) setRecoveredNotes((rs) => mergeRecovered(rs, newly));
+    }
+    prevProblemKeys.current = cur;
+  }, [problemResult, visibleOutcomes, accountNames]);
+
+  // 可见通知 = 当前问题 + 仍有效的恢复（问题复发时对应恢复记录被剔除），按时间倒序
+  const notifications = useMemo(() => {
+    const active = filterActiveRecovered(recoveredNotes, problemResult.problemKeys);
+    return [...problemResult.notifications, ...active].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  }, [problemResult, recoveredNotes]);
+
+  const unreadCount = notifications.reduce((n, x) => n + (notifRead[x.id] ? 0 : 1), 0);
+  const hasUnreadError = notifications.some((x) => !notifRead[x.id] && x.severity === "err");
+
+  // 已读写入：合并 → 修剪到当前存活 id → 持久化（通知本体不持久化，每次刷新重算）
+  const markNotificationRead = useCallback(
+    (id: string) => {
+      setNotifRead((m) => {
+        if (m[id]) return m;
+        const next = { ...m, [id]: true };
+        saveReadMap(pruneReadMap(next, new Set(notifications.map((n) => n.id))));
+        return next;
+      });
+    },
+    [notifications],
+  );
+
+  const markAllNotificationsRead = useCallback(() => {
+    const next: NotificationReadMap = {};
+    for (const n of notifications) next[n.id] = true;
+    saveReadMap(next);
+    setNotifRead(next);
+  }, [notifications]);
+
+  const openNotifications = useCallback(() => setNotifOpen(true), []);
+
   if (!config) {
     return (
       <div className="boot-screen">
@@ -251,6 +334,45 @@ export default function App() {
           <h1>LLM Status Board</h1>
         </div>
         <div className="topbar-actions">
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              className={`alert-chip${hasUnreadError ? " err" : ""}`}
+              onClick={openNotifications}
+              aria-label={`有 ${unreadCount} 条未读通知，点击查看`}
+              title="查看未读通知"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 2.2 14.6 13.4H1.4Z" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinejoin="round" />
+                <path d="M8 6.4v3.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <circle cx="8" cy="11.4" r="0.9" fill="currentColor" />
+              </svg>
+              <span>{unreadCount}</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn ghost bell-btn"
+            onClick={openNotifications}
+            aria-label={unreadCount > 0 ? `通知中心（${unreadCount} 条未读）` : "通知中心"}
+            title="通知中心"
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M8 1.8a4.4 4.4 0 0 0-4.4 4.4v2.2c0 .8-.32 1.6-.9 2.2l-.6.6h11.8l-.6-.6a3.1 3.1 0 0 1-.9-2.2V6.2A4.4 4.4 0 0 0 8 1.8Z"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                fill="none"
+                strokeLinejoin="round"
+              />
+              <path d="M6.4 13.4a1.7 1.7 0 0 0 3.2 0" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+            </svg>
+            {unreadCount > 0 && (
+              <span className="bell-badge" aria-hidden="true">
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </button>
           <button className="btn ghost refresh-btn" onClick={refresh} disabled={refreshing}>
             <svg
               className={`refresh-icon${refreshing ? " spinning" : ""}`}
@@ -295,6 +417,7 @@ export default function App() {
           onGoSettings={() => setView("settings")}
           onAddAccount={handleAddAccount}
           onOpenHelp={() => setHelpOpen(true)}
+          onOpenNotifications={openNotifications}
         />
       ) : (
         <SettingsView
@@ -315,6 +438,17 @@ export default function App() {
           onNavigate={setView}
           onFocusAccount={handleFocusAccount}
           onOpenHelp={() => setHelpOpen(true)}
+          onOpenNotifications={openNotifications}
+        />
+      )}
+
+      {notifOpen && (
+        <NotificationCenter
+          notifications={notifications}
+          readMap={notifRead}
+          onMarkRead={markNotificationRead}
+          onMarkAllRead={markAllNotificationsRead}
+          onClose={() => setNotifOpen(false)}
         />
       )}
 
