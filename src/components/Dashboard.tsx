@@ -3,6 +3,7 @@ import ProviderCard from "./ProviderCard";
 import GlobalDailyUsageChart from "./charts/GlobalDailyUsageChart";
 import GlobalModelUsageChart from "./charts/GlobalModelUsageChart";
 import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalanceTrendChart";
+import CostBreakdownChart from "./charts/CostBreakdownChart";
 import { ChartSection } from "./charts/shared";
 import type { AppConfig, BalanceSnapshot, Money, RefreshOutcome } from "../types";
 import { formatTimeAgo } from "../format";
@@ -137,7 +138,7 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
           {statsOpen && (
             <div className="global-stats-grid">
               <div className="global-chart span-2">
-                <ChartSection title="全账号请求趋势（近 14 天）">
+                <ChartSection title="全账号用量趋势（近 14 天）">
                   <GlobalDailyUsageChart accounts={enabled} statuses={statuses} />
                 </ChartSection>
               </div>
@@ -149,6 +150,11 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
               <div className="global-chart">
                 <ChartSection title={trendCurrency ? `余额趋势（多账号 · ${trendCurrency}）` : "余额趋势（多账号）"}>
                   <GlobalBalanceTrendChart snapshots={snapshots} accounts={enabled} />
+                </ChartSection>
+              </div>
+              <div className="global-chart span-2">
+                <ChartSection title="今日费用构成（按账号 · 分币种）">
+                  <CostBreakdownChart accounts={enabled} statuses={statuses} />
                 </ChartSection>
               </div>
             </div>

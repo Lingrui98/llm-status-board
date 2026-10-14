@@ -5,6 +5,8 @@ import DailyUsageChart from "./charts/DailyUsageChart";
 import ModelUsageChart from "./charts/ModelUsageChart";
 import QuotaWindowBars from "./charts/QuotaWindowBars";
 import BalanceTrendChart from "./charts/BalanceTrendChart";
+import BalanceBreakdownChart from "./charts/BalanceBreakdownChart";
+import TokenSplitChart from "./charts/TokenSplitChart";
 import { ChartSection } from "./charts/shared";
 import DetailDrawer from "./DetailDrawer";
 
@@ -270,11 +272,17 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           onClose={() => setDetailOpen(false)}
         >
           <div className="drawer-charts">
+            <ChartSection title="额度构成">
+              <BalanceBreakdownChart info={info} emptyNote={chartEmptyNote("breakdown")} />
+            </ChartSection>
             <ChartSection title="近 14 天用量">
               <DailyUsageChart data={info?.dailyUsage} emptyNote={chartEmptyNote("daily")} />
             </ChartSection>
             <ChartSection title="模型用量 TOP 8">
               <ModelUsageChart data={info?.modelUsage} emptyNote={chartEmptyNote("model")} />
+            </ChartSection>
+            <ChartSection title="Token 输入 / 输出构成">
+              <TokenSplitChart data={info?.modelUsage} emptyNote={chartEmptyNote("token")} />
             </ChartSection>
             <ChartSection title="余额趋势">
               <BalanceTrendChart
@@ -308,20 +316,26 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   );
 
   /** 按账号类型与图表维度生成「无数据」说明（区分"不支持"与"暂无记录"） */
-  function chartEmptyNote(dimension: "daily" | "model" | "balance"): string | undefined {
+  function chartEmptyNote(dimension: "daily" | "model" | "balance" | "breakdown" | "token"): string | undefined {
     const kind = account.kind;
     // 官方按量计费接口只提供余额快照，无历史用量
-    if (kind === "deepSeek" && dimension !== "balance") {
+    if (kind === "deepSeek" && dimension !== "balance" && dimension !== "breakdown") {
       return "DeepSeek 官方接口不提供历史用量，只返回当前余额";
     }
-    if (kind === "moonshot" && dimension !== "balance") {
+    if (kind === "moonshot" && dimension !== "balance" && dimension !== "breakdown") {
       return "Kimi 订阅接口只返回当前窗口用量百分比，无历史序列";
     }
     if (kind === "moonshot" && dimension === "balance") {
       return "订阅模式按窗口额度计费，没有余额概念（加油包/会员等级见卡片统计行）";
     }
-    if (kind === "openAi" && dimension !== "balance") {
+    if (kind === "openAi" && dimension !== "balance" && dimension !== "breakdown") {
       return "此图表依赖站点返回的按日/按模型统计；OpenAI 成本接口仅有按月聚合";
+    }
+    if (dimension === "breakdown") {
+      return "该账号既无总额度/余额构成，也无配额窗口数据，无法绘制额度构成";
+    }
+    if (dimension === "token") {
+      return "该站点尚未返回分模型 Token 明细（新 key 或零消费时为空）";
     }
     if (dimension === "balance" && info?.balance == null && info?.quotaWindows?.length) {
       return "该账号为订阅/配额模式，无余额记录（窗口用量见卡片进度条）";

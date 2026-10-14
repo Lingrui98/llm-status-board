@@ -1,4 +1,23 @@
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+
+/** 是否开启「减弱动态效果」：recharts 的 JS 动画不受全局 CSS 媒体查询约束，需要组件层显式关闭 */
+export function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState<boolean>(
+    () =>
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener?.("change", onChange);
+    return () => mq.removeEventListener?.("change", onChange);
+  }, []);
+  return reduced;
+}
 
 /** 图表空态占位：数据为空 / 数据点不足时替代空图；text 较长时自动换行居中 */
 export function ChartEmpty({ height = 140, text = "暂无数据" }: { height?: number; text?: string }) {

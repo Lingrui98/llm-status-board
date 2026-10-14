@@ -1106,6 +1106,241 @@ button.error-copy.copied .copy-hint {
   grid-column: 1 / -1;
 }
 
+/* ---------- 额度构成环形图（DetailDrawer 顶部） ---------- */
+.donut-wrap {
+  position: relative;
+}
+
+/* 中心百分比叠加层（指针穿透，不挡 tooltip） */
+.donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  text-align: center;
+  padding: 0 60px; /* 避开环形本体 */
+}
+
+.donut-pct {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.donut-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.donut-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.donut-legend-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+}
+
+.donut-legend-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+
+.donut-legend-row b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.donut-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ---------- Token 输入/输出构成（纯 CSS 堆叠条） ---------- */
+.token-split {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.ts-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.ts-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ts-dot-in {
+  background: var(--accent);
+}
+
+.ts-dot-out {
+  background: #b48bff;
+}
+
+.ts-dot-total {
+  background: var(--text-3);
+  opacity: 0.55;
+}
+
+.ts-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ts-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 11px;
+}
+
+.ts-model {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ts-vals {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ts-track {
+  display: flex;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--bg-1);
+  overflow: hidden;
+}
+
+.ts-seg {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.ts-seg.in {
+  background: var(--accent);
+}
+
+.ts-seg.out {
+  background: #b48bff;
+}
+
+.ts-seg.total {
+  background: var(--text-3);
+  opacity: 0.55;
+}
+
+/* ---------- 指标切换 Tab（全局趋势图） ---------- */
+.chart-with-tabs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.chart-with-tabs .chart-box,
+.chart-with-tabs .chart-empty {
+  align-self: stretch;
+}
+
+.metric-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+  margin-bottom: 8px;
+}
+
+.metric-tab {
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.metric-tab:hover {
+  color: var(--text-2);
+}
+
+.metric-tab.active {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+/* 图表脚注（口径说明） */
+.chart-footnote {
+  font-size: 11px;
+  color: var(--text-3);
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+/* 图例可点击（隐藏/显示序列） */
+.recharts-legend-item {
+  cursor: pointer;
+}
+
+/* ---------- 今日费用构成（全局，分币种小节） ---------- */
+.cost-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.cost-section {
+  min-width: 0;
+}
+
+.cost-cur-title {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-2);
+}
+
 /* ---------- 设置页 ---------- */
 .settings-header {
   display: flex;
