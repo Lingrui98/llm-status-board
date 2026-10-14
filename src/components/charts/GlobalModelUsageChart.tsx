@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { AccountConfig, RefreshOutcome, UsagePoint } from "../../types";
 import { formatCompact, formatNumber } from "../../format";
-import { ChartEmpty } from "./shared";
+import { ChartEmpty, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   accounts: AccountConfig[];
@@ -72,6 +72,7 @@ function renderBarValue(props: any) {
  * 同名模型 requests 求和后降序排列（水平条形图）。
  */
 export default function GlobalModelUsageChart({ accounts, statuses }: Props) {
+  const reducedMotion = usePrefersReducedMotion();
   const rows = useMemo<Row[]>(() => {
     const byModel = new Map<string, { requests: number; tokens: number; hasTokens: boolean; accountIds: Set<string> }>();
     for (const acc of accounts) {
@@ -118,8 +119,16 @@ export default function GlobalModelUsageChart({ accounts, statuses }: Props) {
           tick={{ fontSize: 11, fill: "currentColor" }}
           tickFormatter={(s: string) => (s.length > 17 ? `${s.slice(0, 16)}…` : s)}
         />
-        <Tooltip content={<GlobalModelTip />} cursor={{ fill: "rgba(127,147,175,0.10)" }} />
-        <Bar dataKey="requests" name="请求数" fill="#3ecf8e" radius={[0, 4, 4, 0]} barSize={16}>
+        <Tooltip content={<GlobalModelTip />} cursor={{ fill: "var(--chart-cursor-fill)" }} />
+        <Bar
+          dataKey="requests"
+          name="请求数"
+          fill="var(--ok)"
+          radius={[0, 4, 4, 0]}
+          barSize={16}
+          isAnimationActive={!reducedMotion}
+          animationDuration={500}
+        >
           <LabelList dataKey="requests" content={renderBarValue} />
         </Bar>
       </BarChart>

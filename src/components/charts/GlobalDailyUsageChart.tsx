@@ -11,22 +11,22 @@ import {
 } from "recharts";
 import type { AccountConfig, RefreshOutcome, UsagePoint } from "../../types";
 import { formatCompact, formatDecimal, formatNumber } from "../../format";
-import { ChartEmpty, dayLabel } from "./shared";
+import { ChartEmpty, dayLabel, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   accounts: AccountConfig[];
   statuses: Record<string, RefreshOutcome>;
 }
 
-/** 多账号配色（堆叠面积 / 折线共用，按排名取色） */
+/** 多账号配色（堆叠面积 / 折线共用，按排名取色）：引用 CSS 变量，随暗/亮主题切换 */
 export const SERIES_COLORS = [
-  "#4da3ff",
-  "#3ecf8e",
-  "#f0b44c",
-  "#b48bff",
-  "#ff8fb0",
-  "#4dd0e1",
-  "#8d99ae",
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+  "var(--chart-6)",
+  "var(--chart-7)",
 ];
 
 const MAX_SERIES = 6;
@@ -121,6 +121,7 @@ function pickPrimaryUnit(list: AccountSeries[]): string {
  */
 export default function GlobalDailyUsageChart({ accounts, statuses }: Props) {
   const gid = useId().replace(/:/g, "");
+  const reducedMotion = usePrefersReducedMotion();
   const [metric, setMetric] = useState<Metric>("requests");
   /** 图例点击隐藏的序列（key 集合）；指标切换时重置，避免误藏另一指标的序列 */
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(new Set());
@@ -266,7 +267,7 @@ export default function GlobalDailyUsageChart({ accounts, statuses }: Props) {
                 </linearGradient>
               ))}
             </defs>
-            <CartesianGrid stroke="rgba(127,147,175,0.14)" vertical={false} />
+            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
             <XAxis
               dataKey="date"
               tickLine={false}
@@ -283,7 +284,7 @@ export default function GlobalDailyUsageChart({ accounts, statuses }: Props) {
             />
             <Tooltip
               content={<GlobalDailyTip series={series} metric={metric} unit={unit} />}
-              cursor={{ stroke: "rgba(127,147,175,0.35)", strokeDasharray: "3 3" }}
+              cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
             />
             {stacked && (
               <Legend
@@ -305,6 +306,8 @@ export default function GlobalDailyUsageChart({ accounts, statuses }: Props) {
                 fill={`url(#gd-${gid}-${s.key})`}
                 dot={false}
                 activeDot={{ r: 3, strokeWidth: 0 }}
+                isAnimationActive={!reducedMotion}
+                animationDuration={500}
                 hide={hiddenKeys.has(s.key)}
               />
             ))}

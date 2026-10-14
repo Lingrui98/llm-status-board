@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { AccountConfig, RefreshOutcome, UsagePoint } from "../../types";
 import { formatDecimal } from "../../format";
-import { ChartEmpty, dayLabel } from "./shared";
+import { ChartEmpty, dayLabel, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   accounts: AccountConfig[];
@@ -82,6 +82,7 @@ function unitOrder(a: string, b: string): number {
  * 不同 costUnit 不混轴：USD / CNY 各自成节，credits 类单位单独一节。
  */
 export default function CostBreakdownChart({ accounts, statuses }: Props) {
+  const reducedMotion = usePrefersReducedMotion();
   const { sections, mixed } = useMemo(() => {
     const byUnit = new Map<string, Row[]>();
     let distinctDates = 0;
@@ -135,8 +136,15 @@ export default function CostBreakdownChart({ accounts, statuses }: Props) {
                   tick={{ fontSize: 11, fill: "currentColor" }}
                   tickFormatter={(s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)}
                 />
-                <Tooltip content={<CostTip unit={sec.unit} />} cursor={{ fill: "rgba(127,147,175,0.10)" }} />
-                <Bar dataKey="cost" fill="var(--accent)" radius={[0, 4, 4, 0]} barSize={16}>
+                <Tooltip content={<CostTip unit={sec.unit} />} cursor={{ fill: "var(--chart-cursor-fill)" }} />
+                <Bar
+                  dataKey="cost"
+                  fill="var(--accent)"
+                  radius={[0, 4, 4, 0]}
+                  barSize={16}
+                  isAnimationActive={!reducedMotion}
+                  animationDuration={500}
+                >
                   <LabelList dataKey="cost" content={renderCostValue} />
                 </Bar>
               </BarChart>

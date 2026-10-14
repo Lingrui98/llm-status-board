@@ -158,6 +158,7 @@ export default function BalanceBreakdownChart({ info, emptyNote }: Props) {
               cornerRadius={data.mode === "amount" ? 5 : 0}
               stroke="none"
               isAnimationActive={!reducedMotion}
+              animationDuration={500}
             >
               {data.slices.map((s) => (
                 <Cell key={s.name} fill={s.color} fillOpacity={s.faded ? 0.42 : 1} />

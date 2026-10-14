@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { UsagePoint } from "../../types";
 import { formatCompact, formatDecimal, formatNumber } from "../../format";
-import { ChartEmpty, dayLabel } from "./shared";
+import { ChartEmpty, dayLabel, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   data: UsagePoint[] | null | undefined;
@@ -59,6 +59,7 @@ function DailyTip({ active, payload, label, unit }: TipProps) {
 /** 近 14 天用量面积图：有 cost 优先画花费（单位跟随 costUnit），否则画请求数 */
 export default function DailyUsageChart({ data, emptyNote }: Props) {
   const gid = useId().replace(/:/g, "");
+  const reducedMotion = usePrefersReducedMotion();
   const { rows, unit } = useMemo(() => {
     const pts = (data ?? [])
       .filter((p): p is UsagePoint & { date: string } => !!p && !!p.date)
@@ -91,11 +92,11 @@ export default function DailyUsageChart({ data, emptyNote }: Props) {
       <AreaChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
         <defs>
           <linearGradient id={`du-${gid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#4da3ff" stopOpacity={0.32} />
-            <stop offset="100%" stopColor="#4da3ff" stopOpacity={0.02} />
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.32} />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <CartesianGrid stroke="rgba(127,147,175,0.14)" vertical={false} />
+        <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
         <XAxis
           dataKey="date"
           tickLine={false}
@@ -112,17 +113,19 @@ export default function DailyUsageChart({ data, emptyNote }: Props) {
         />
         <Tooltip
           content={<DailyTip unit={unit} />}
-          cursor={{ stroke: "rgba(127,147,175,0.35)", strokeDasharray: "3 3" }}
+          cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
         />
         <Area
           type="monotone"
           dataKey="value"
           name={unit ? `花费 (${unit})` : "请求数"}
-          stroke="#4da3ff"
+          stroke="var(--accent)"
           strokeWidth={2}
           fill={`url(#du-${gid})`}
           dot={false}
           activeDot={{ r: 3, strokeWidth: 0 }}
+          isAnimationActive={!reducedMotion}
+          animationDuration={500}
         />
       </AreaChart>
     </ResponsiveContainer>

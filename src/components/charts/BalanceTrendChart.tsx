@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { BalanceSnapshot } from "../../types";
 import { formatCompact, formatDecimal } from "../../format";
-import { ChartEmpty, tsLabel } from "./shared";
+import { ChartEmpty, tsLabel, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   snapshots: BalanceSnapshot[];
@@ -49,6 +49,7 @@ function TrendTip({ active, payload }: TipProps) {
 
 /** 单账号余额趋势折线图（数据点 <2 时降级为占位） */
 export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: Props) {
+  const reducedMotion = usePrefersReducedMotion();
   const rows = useMemo<Row[]>(
     () =>
       snapshots
@@ -72,7 +73,7 @@ export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: P
   return (
     <ResponsiveContainer width="100%" height={160} className="chart-box">
       <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke="rgba(127,147,175,0.14)" vertical={false} />
+        <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
         <XAxis
           dataKey="label"
           tickLine={false}
@@ -91,15 +92,17 @@ export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: P
         />
         <Tooltip
           content={<TrendTip />}
-          cursor={{ stroke: "rgba(127,147,175,0.35)", strokeDasharray: "3 3" }}
+          cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
         />
         <Line
           type="monotone"
           dataKey="balance"
-          stroke="#4da3ff"
+          stroke="var(--accent)"
           strokeWidth={2}
-          dot={{ r: 2, strokeWidth: 0, fill: "#4da3ff" }}
+          dot={{ r: 2, strokeWidth: 0, fill: "var(--accent)" }}
           activeDot={{ r: 3, strokeWidth: 0 }}
+          isAnimationActive={!reducedMotion}
+          animationDuration={500}
         />
       </LineChart>
     </ResponsiveContainer>

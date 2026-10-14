@@ -11,7 +11,7 @@ import {
 } from "recharts";
 import type { AccountConfig, BalanceSnapshot } from "../../types";
 import { formatCompact, formatDecimal } from "../../format";
-import { ChartEmpty, tsLabel } from "./shared";
+import { ChartEmpty, tsLabel, usePrefersReducedMotion } from "./shared";
 import { SERIES_COLORS } from "./GlobalDailyUsageChart";
 
 interface Props {
@@ -65,6 +65,7 @@ function MultiTrendTip({ active, payload, series, currency }: TipProps) {
  * 账号 > 6 时只画最新余额最高的 6 条。
  */
 export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) {
+  const reducedMotion = usePrefersReducedMotion();
   const { rows, series, currency } = useMemo(() => {
     const nameOf = new Map(accounts.map((a) => [a.id, a.name || a.id]));
 
@@ -133,7 +134,7 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
   return (
     <ResponsiveContainer width="100%" height={200} className="chart-box">
       <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke="rgba(127,147,175,0.14)" vertical={false} />
+        <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
         <XAxis
           dataKey="label"
           tickLine={false}
@@ -152,7 +153,7 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
         />
         <Tooltip
           content={<MultiTrendTip series={series} currency={currency} />}
-          cursor={{ stroke: "rgba(127,147,175,0.35)", strokeDasharray: "3 3" }}
+          cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
         />
         {multi && (
           <Legend iconType="plainline" iconSize={10} wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
@@ -167,6 +168,8 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
             strokeWidth={2}
             dot={multi ? false : { r: 2, strokeWidth: 0, fill: s.color }}
             activeDot={{ r: 3, strokeWidth: 0 }}
+            isAnimationActive={!reducedMotion}
+            animationDuration={500}
             connectNulls
           />
         ))}

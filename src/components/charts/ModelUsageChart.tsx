@@ -10,7 +10,7 @@ import {
 } from "recharts";
 import type { UsagePoint } from "../../types";
 import { formatCompact, formatDecimal, formatNumber } from "../../format";
-import { ChartEmpty } from "./shared";
+import { ChartEmpty, usePrefersReducedMotion } from "./shared";
 
 interface Props {
   data: UsagePoint[] | null | undefined;
@@ -83,6 +83,7 @@ function renderBarValue(props: any) {
 
 /** 按模型用量水平条形图：按 cost（无 cost 时按 tokens）降序取 Top 8 */
 export default function ModelUsageChart({ data, emptyNote }: Props) {
+  const reducedMotion = usePrefersReducedMotion();
   const { rows, mode, unit } = useMemo(() => {
     const pts = (data ?? []).filter((p): p is UsagePoint & { model: string } => !!p && !!p.model);
     const useCost = pts.some((p) => p.cost !== null && p.cost !== undefined);
@@ -122,9 +123,16 @@ export default function ModelUsageChart({ data, emptyNote }: Props) {
         />
         <Tooltip
           content={<ModelTip mode={mode} unit={unit} />}
-          cursor={{ fill: "rgba(127,147,175,0.10)" }}
+          cursor={{ fill: "var(--chart-cursor-fill)" }}
         />
-        <Bar dataKey="value" fill="#4da3ff" radius={[0, 4, 4, 0]} barSize={16}>
+        <Bar
+          dataKey="value"
+          fill="var(--accent)"
+          radius={[0, 4, 4, 0]}
+          barSize={16}
+          isAnimationActive={!reducedMotion}
+          animationDuration={500}
+        >
           <LabelList dataKey="value" content={renderBarValue} />
         </Bar>
       </BarChart>
