@@ -800,16 +800,135 @@ button.error-copy.copied .copy-hint {
   margin: 0;
 }
 
-/* ---------- 图表区（展开详情） ---------- */
-.card-charts {
-  border-top: 1px dashed var(--border-strong);
-  padding-top: 14px;
+/* ---------- 详情抽屉（右侧滑入浮层，脱离卡片网格，展开不影响其他卡片） ---------- */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-  animation: charts-in 0.22s ease;
+  justify-content: flex-end;
+  background: rgba(4, 8, 14, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drawer-fade 0.18s ease;
 }
 
+@keyframes drawer-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.drawer-panel {
+  width: min(640px, calc(100vw - 48px));
+  height: 100%;
+  background: var(--bg-1);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -18px 0 48px -18px rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  animation: drawer-in 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  .drawer-backdrop {
+    background: rgba(15, 23, 42, 0.32);
+  }
+
+  .drawer-panel {
+    box-shadow: -18px 0 48px -18px rgba(15, 23, 42, 0.28);
+  }
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(28px);
+    opacity: 0.5;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.drawer-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.drawer-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.drawer-close:hover {
+  background: var(--bg-3);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.drawer-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.drawer-raw {
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.drawer-raw .raw-json {
+  width: 100%;
+  max-height: 320px;
+}
+
+/* ---------- 图表通用 ---------- */
 @keyframes charts-in {
   from {
     opacity: 0;

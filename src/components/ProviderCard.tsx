@@ -6,6 +6,7 @@ import ModelUsageChart from "./charts/ModelUsageChart";
 import QuotaWindowBars from "./charts/QuotaWindowBars";
 import BalanceTrendChart from "./charts/BalanceTrendChart";
 import { ChartSection } from "./charts/shared";
+import DetailDrawer from "./DetailDrawer";
 
 interface Props {
   account: AccountConfig;
@@ -64,8 +65,9 @@ const EXTRAS_COLLAPSE_AT = 6;
 const EXTRAS_PREVIEW = 5;
 
 export default function ProviderCard({ account, outcome, refreshing, snapshots, now }: Props) {
-  const [showRaw, setShowRaw] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // 详情抽屉：图表与原始数据都放入右侧浮层，卡片高度不再随展开变化（grid 行稳定）
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [rawOpen, setRawOpen] = useState(false);
   const [showAllExtras, setShowAllExtras] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
@@ -112,7 +114,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   };
 
   return (
-    <div className={`card status-${st}${expanded ? " expanded" : ""}`}>
+    <div className={`card status-${st}`}>
       <div className="card-head">
         <div className="card-title">
           <span className={`dot ${st}`} />
@@ -231,16 +233,29 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
         </span>
         <div className="card-actions">
           {info?.raw !== undefined && info?.raw !== null && (
-            <button className="link-btn" onClick={() => setShowRaw(!showRaw)}>
-              {showRaw ? "隐藏原始数据" : "原始数据"}
+            <button
+              className="link-btn"
+              onClick={() => {
+                setRawOpen(true);
+                setDetailOpen(true);
+              }}
+            >
+              原始数据
             </button>
           )}
           <button
             className="link-btn expand-toggle"
-            aria-expanded={expanded}
-            onClick={() => setExpanded(!expanded)}
+            aria-expanded={detailOpen}
+            onClick={() => {
+              if (detailOpen) {
+                setDetailOpen(false);
+              } else {
+                setRawOpen(false);
+                setDetailOpen(true);
+              }
+            }}
           >
-            {expanded ? "收起" : "详情"}
+            {detailOpen ? "收起" : "详情"}
             <svg className="chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
               <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -248,26 +263,46 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
         </div>
       </div>
 
-      {showRaw && info?.raw != null && (
-        <pre className="raw-json">{JSON.stringify(info.raw, null, 2) as string}</pre>
-      )}
-
-      {expanded && (
-        <div className="card-charts">
-          <ChartSection title="近 14 天用量">
-            <DailyUsageChart data={info?.dailyUsage} emptyNote={chartEmptyNote("daily")} />
-          </ChartSection>
-          <ChartSection title="模型用量 TOP 8">
-            <ModelUsageChart data={info?.modelUsage} emptyNote={chartEmptyNote("model")} />
-          </ChartSection>
-          <ChartSection title="余额趋势">
-            <BalanceTrendChart
-              snapshots={snapshots}
-              accountId={account.id}
-              emptyNote={chartEmptyNote("balance")}
-            />
-          </ChartSection>
-        </div>
+      {detailOpen && (
+        <DetailDrawer
+          title={account.name}
+          subtitle={kindLabel(account.kind)}
+          onClose={() => setDetailOpen(false)}
+        >
+          <div className="drawer-charts">
+            <ChartSection title="近 14 天用量">
+              <DailyUsageChart data={info?.dailyUsage} emptyNote={chartEmptyNote("daily")} />
+            </ChartSection>
+            <ChartSection title="模型用量 TOP 8">
+              <ModelUsageChart data={info?.modelUsage} emptyNote={chartEmptyNote("model")} />
+            </ChartSection>
+            <ChartSection title="余额趋势">
+              <BalanceTrendChart
+                snapshots={snapshots}
+                accountId={account.id}
+                emptyNote={chartEmptyNote("balance")}
+              />
+            </ChartSection>
+          </div>
+          {info?.raw !== undefined && info?.raw !== null && (
+            <div className="drawer-raw">
+              <button
+                type="button"
+                className="link-btn extras-toggle"
+                aria-expanded={rawOpen}
+                onClick={() => setRawOpen((v) => !v)}
+              >
+                {rawOpen ? "隐藏原始数据" : "原始数据"}
+                <svg className="chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                  <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {rawOpen && (
+                <pre className="raw-json">{JSON.stringify(info.raw, null, 2) as string}</pre>
+              )}
+            </div>
+          )}
+        </DetailDrawer>
       )}
     </div>
   );
