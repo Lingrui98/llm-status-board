@@ -158,7 +158,23 @@ export default function App() {
           <h1>LLM Status Board</h1>
         </div>
         <div className="topbar-actions">
-          <button className="btn ghost" onClick={refresh} disabled={refreshing}>
+          <button className="btn ghost refresh-btn" onClick={refresh} disabled={refreshing}>
+            <svg
+              className={`refresh-icon${refreshing ? " spinning" : ""}`}
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path
+                d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                fill="none"
+                strokeLinecap="round"
+              />
+              <path d="M13.7 1.8v2.6h-2.6" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
             {refreshing ? "刷新中…" : "立即刷新"}
           </button>
           <button

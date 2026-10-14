@@ -1,5 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ProviderCard from "./ProviderCard";
+import GlobalDailyUsageChart from "./charts/GlobalDailyUsageChart";
+import GlobalModelUsageChart from "./charts/GlobalModelUsageChart";
+import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalanceTrendChart";
+import { ChartSection } from "./charts/shared";
 import type { AppConfig, BalanceSnapshot, Money, RefreshOutcome } from "../types";
 import { formatTimeAgo } from "../format";
 
@@ -37,14 +41,45 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
     return () => window.clearInterval(t);
   }, []);
 
+  // 全局统计区块：可折叠（默认展开）；三类数据全无时整个区块不渲染
+  const [statsOpen, setStatsOpen] = useState(true);
+  const hasStats = useMemo(
+    () =>
+      enabled.some((acc) => {
+        const info = statuses[acc.id]?.info;
+        return (info?.dailyUsage?.length ?? 0) > 0 || (info?.modelUsage?.length ?? 0) > 0;
+      }) || snapshots.length >= 2,
+    [enabled, statuses, snapshots],
+  );
+  const trendCurrency = useMemo(() => pickTrendCurrency(snapshots), [snapshots]);
+
   if (enabled.length === 0) {
     return (
       <main className="main">
         <div className="empty-state">
+          <div className="empty-icon" aria-hidden="true">
+            <svg width="52" height="52" viewBox="0 0 52 52" fill="none">
+              <rect x="6" y="10" width="40" height="30" rx="5" stroke="currentColor" strokeWidth="2" />
+              <path d="M14 30l7-8 5 5 6-7 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M18 44h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </div>
           <h2>还没有任何账号</h2>
-          <p className="muted">
-            点击右上角「设置」添加你想监控的 LLM 提供商 / 中转站账号，然后回到看板查看余额与用量。
-          </p>
+          <p className="muted">添加你想监控的 LLM 提供商 / 中转站账号，余额与用量会集中展示在这里。</p>
+          <ol className="empty-steps">
+            <li>
+              <span className="step-num">1</span>
+              点击右上角「设置」
+            </li>
+            <li>
+              <span className="step-num">2</span>
+              「+ 添加账号」，选择提供商类型
+            </li>
+            <li>
+              <span className="step-num">3</span>
+              填入 Base URL 与密钥，保存后返回看板
+            </li>
+          </ol>
         </div>
       </main>
     );
@@ -85,6 +120,41 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
           </span>
         </div>
       </div>
+
+      {hasStats && (
+        <section className="global-stats">
+          <button
+            className="global-stats-head"
+            onClick={() => setStatsOpen((v) => !v)}
+            aria-expanded={statsOpen}
+          >
+            <span className="global-stats-title">全局统计</span>
+            <span className="muted small">跨账号汇总视图</span>
+            <svg className="chevron" width="12" height="12" viewBox="0 0 10 10" aria-hidden="true">
+              <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {statsOpen && (
+            <div className="global-stats-grid">
+              <div className="global-chart span-2">
+                <ChartSection title="全账号请求趋势（近 14 天）">
+                  <GlobalDailyUsageChart accounts={enabled} statuses={statuses} />
+                </ChartSection>
+              </div>
+              <div className="global-chart">
+                <ChartSection title="全账号模型用量 TOP 8">
+                  <GlobalModelUsageChart accounts={enabled} statuses={statuses} />
+                </ChartSection>
+              </div>
+              <div className="global-chart">
+                <ChartSection title={trendCurrency ? `余额趋势（多账号 · ${trendCurrency}）` : "余额趋势（多账号）"}>
+                  <GlobalBalanceTrendChart snapshots={snapshots} accounts={enabled} />
+                </ChartSection>
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       <div className="card-grid">
         {enabled.map((acc) => (

@@ -309,13 +309,15 @@ body::before {
 .summary-label {
   font-size: 11px;
   color: var(--text-3);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
 }
 
 .summary-value {
-  font-size: 19px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
 }
 
@@ -323,7 +325,30 @@ body::before {
   font-size: 12.5px;
   font-weight: 500;
   color: var(--text-2);
-  padding-top: 4px;
+  padding-top: 6px;
+}
+
+/* 刷新按钮：旋转图标 */
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.refresh-icon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.refresh-icon.spinning {
+  animation: spin 0.9s linear infinite;
+  opacity: 1;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ---------- 卡片网格 ---------- */
@@ -356,6 +381,11 @@ body::before {
 
 .card.status-error {
   border-color: color-mix(in srgb, var(--err) 45%, var(--border));
+  border-left: 3px solid var(--err);
+}
+
+.card.status-error .card-name {
+  color: color-mix(in srgb, var(--err) 78%, var(--text));
 }
 
 .card.status-pending {
@@ -750,6 +780,85 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
+.tt-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+
+.tt-total {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+/* ---------- 全局统计区块 ---------- */
+.global-stats {
+  background: linear-gradient(180deg, var(--bg-2), color-mix(in srgb, var(--bg-2) 84%, var(--bg)));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-card);
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.global-stats-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 18px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.global-stats-head:hover {
+  background: color-mix(in srgb, var(--bg-3) 45%, transparent);
+}
+
+.global-stats-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.global-stats-head .chevron {
+  margin-left: auto;
+  color: var(--text-3);
+  transition: transform 0.18s ease;
+}
+
+.global-stats-head[aria-expanded="false"] .chevron {
+  transform: rotate(-90deg);
+}
+
+.global-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  padding: 4px 18px 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+  animation: charts-in 0.22s ease;
+}
+
+.global-chart {
+  min-width: 0;
+}
+
+.global-chart.span-2 {
+  grid-column: 1 / -1;
+}
+
 /* ---------- 设置页 ---------- */
 .settings-header {
   display: flex;
@@ -859,6 +968,15 @@ body::before {
 
 .cell-actions {
   white-space: nowrap;
+}
+
+.cell-actions .link-btn {
+  padding: 4px 8px;
+  margin-right: 2px;
+}
+
+.cell-actions .link-btn:last-child {
+  margin-right: 0;
 }
 
 .settings-section {
@@ -1034,7 +1152,20 @@ body::before {
 /* ---------- 其他 ---------- */
 .empty-state {
   text-align: center;
-  padding: 80px 20px;
+  padding: 72px 20px;
+}
+
+.empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 24px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  margin-bottom: 18px;
 }
 
 .empty-state h2 {
@@ -1046,6 +1177,43 @@ body::before {
 .empty-state p {
   margin: 0 auto;
   max-width: 460px;
+}
+
+.empty-steps {
+  list-style: none;
+  margin: 22px auto 0;
+  padding: 0;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.empty-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 9px 14px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.step-num {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .footer {
@@ -1091,5 +1259,11 @@ code {
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+
+  /* 无限循环动画直接关闭（0.01ms 的 infinite 会高速闪烁） */
+  .refresh-icon.spinning,
+  .dot.pending {
+    animation: none !important;
   }
 }
