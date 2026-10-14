@@ -232,6 +232,18 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
           onClick={handleTest}
           disabled={testing || !valid}
         >
+          {testing && (
+            <svg className="refresh-icon spinning" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+              <path
+                d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                fill="none"
+                strokeLinecap="round"
+              />
+              <path d="M13.7 1.8v2.6h-2.6" stroke="currentColor" strokeWidth="1.7" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          )}
           {testing ? "测试中…" : "测试连接"}
         </button>
         <div className="spacer" />

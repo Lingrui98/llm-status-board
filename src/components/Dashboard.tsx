@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import ProviderCard from "./ProviderCard";
+import ProviderCard, { type FocusRequest } from "./ProviderCard";
+import SkeletonCard from "./SkeletonCard";
 import GlobalDailyUsageChart from "./charts/GlobalDailyUsageChart";
 import GlobalModelUsageChart from "./charts/GlobalModelUsageChart";
 import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalanceTrendChart";
@@ -15,6 +16,10 @@ interface Props {
   lastRefreshAt: string | null;
   autoRefreshSec: number;
   snapshots: BalanceSnapshot[];
+  /** 外部「跳转到账号」请求（命令面板 / 数字键），透传给卡片开抽屉 */
+  focusRequest?: FocusRequest | null;
+  /** 请求已投递给匹配卡片后调用，App 据此清除请求（防重挂载复开） */
+  onFocusRequestHandled?: () => void;
 }
 
 function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
@@ -29,11 +34,19 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots }: Props) {
-  const enabled = config.accounts.filter((a) => a.enabled);
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled }: Props) {
+  const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
   const totals = aggregate(statuses);
+
+  // 跳转请求投递：匹配卡片的抽屉在子组件副作用中打开（子 effect 先于父 effect 执行），
+  // 随后这里通知 App 清除请求，避免视图切换导致卡片重挂载时抽屉意外复开
+  useEffect(() => {
+    if (focusRequest && enabled.some((a) => a.id === focusRequest.accountId)) {
+      onFocusRequestHandled?.();
+    }
+  }, [focusRequest, enabled, onFocusRequestHandled]);
 
   // 相对时间（"3分钟前"）每 30s 重算一次
   const [now, setNow] = useState(() => Date.now());
@@ -53,6 +66,10 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
     [enabled, statuses, snapshots],
   );
   const trendCurrency = useMemo(() => pickTrendCurrency(snapshots), [snapshots]);
+
+  // 首次刷新（无任何旧数据）时显示骨架卡片，避免网格从空白突然跳入
+  const showSkeleton = refreshing && Object.keys(statuses).length === 0;
+  const skeletonCount = Math.min(Math.max(enabled.length, 3), 4);
 
   if (enabled.length === 0) {
     return (
@@ -163,16 +180,19 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
       )}
 
       <div className="card-grid">
-        {enabled.map((acc) => (
-          <ProviderCard
-            key={acc.id}
-            account={acc}
-            outcome={statuses[acc.id]}
-            refreshing={refreshing}
-            snapshots={snapshots}
-            now={now}
-          />
-        ))}
+        {showSkeleton
+          ? Array.from({ length: skeletonCount }, (_, i) => <SkeletonCard key={`skl-${i}`} />)
+          : enabled.map((acc) => (
+              <ProviderCard
+                key={acc.id}
+                account={acc}
+                outcome={statuses[acc.id]}
+                refreshing={refreshing}
+                snapshots={snapshots}
+                now={now}
+                focusRequest={focusRequest}
+              />
+            ))}
       </div>
     </main>
   );

@@ -1753,6 +1753,12 @@ input[type="checkbox"].switch:checked::after {
 }
 
 /* 「测试连接」按钮本身的瞬时反馈：成功绿描边 / 失败红描边 */
+.test-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .test-btn.ok {
   border-color: color-mix(in srgb, var(--ok) 65%, transparent);
   color: var(--ok);
@@ -1835,6 +1841,33 @@ input[type="checkbox"].switch:checked::after {
   text-align: center;
   border-top: 1px solid var(--border);
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+/* 快捷键轻提示（首次使用引导）：不影响原有文案与按钮查询 */
+.footer-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+/* 键盘按键样式（命令面板 / footer / 设置页提示共用） */
+kbd {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0.5px 5px;
+  color: var(--text-2);
+  white-space: nowrap;
 }
 
 code {
@@ -1870,6 +1903,240 @@ code {
   background: transparent;
 }
 
+/* ---------- 设置页表格：行键盘导航 ---------- */
+.accounts-table tbody tr[tabindex] {
+  cursor: default;
+}
+
+.accounts-table tbody tr:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--bg-3) 75%, transparent);
+}
+
+.table-kbd-hint {
+  margin: 8px 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 命令面板（Ctrl+K）：居中顶部下拉，遮罩比抽屉轻 ---------- */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  background: rgba(4, 8, 14, 0.38);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: drawer-fade 0.15s ease;
+}
+
+@media (prefers-color-scheme: light) {
+  .palette-backdrop {
+    background: rgba(15, 23, 42, 0.22);
+  }
+}
+
+.palette-panel {
+  width: 480px;
+  max-width: calc(100vw - 48px);
+  margin-top: 15vh;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  box-shadow: 0 24px 64px -20px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: palette-in 0.18s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-color-scheme: light) {
+  .palette-panel {
+    box-shadow: 0 24px 64px -22px rgba(15, 23, 42, 0.35);
+  }
+}
+
+@keyframes palette-in {
+  from {
+    transform: translateY(-8px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-3);
+}
+
+.palette-search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  padding: 0;
+}
+
+.palette-search input::placeholder {
+  color: var(--text-3);
+}
+
+.palette-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.palette-group {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.06em;
+  padding: 8px 10px 4px;
+}
+
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.palette-item.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.palette-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text-3);
+}
+
+.palette-item.active .palette-icon {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.palette-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.palette-foot {
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.palette-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------- 骨架卡片（首次刷新占位） ---------- */
+.skeleton-card {
+  pointer-events: none;
+}
+
+.skl {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-3) 25%,
+    color-mix(in srgb, var(--bg-3) 55%, var(--text-3)) 50%,
+    var(--bg-3) 75%
+  );
+  background-size: 200% 100%;
+  animation: skl-shimmer 1.4s ease infinite;
+}
+
+@keyframes skl-shimmer {
+  from {
+    background-position: 180% 0;
+  }
+  to {
+    background-position: -20% 0;
+  }
+}
+
+.skl-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.skl-badge {
+  width: 58px;
+  height: 20px;
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+
+.skl-line {
+  height: 12px;
+}
+
+.skl-bignum {
+  width: 148px;
+  height: 30px;
+}
+
+.skl-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 99px;
+}
+
+.skeleton-foot {
+  border-top: 1px solid var(--border);
+}
+
 /* ---------- 无障碍：减弱动效 ---------- */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1883,5 +2150,11 @@ code {
   .refresh-icon.spinning,
   .dot.pending {
     animation: none !important;
+  }
+
+  /* 骨架 shimmer 退化为静态灰块 */
+  .skl {
+    animation: none !important;
+    background: var(--bg-3);
   }
 }

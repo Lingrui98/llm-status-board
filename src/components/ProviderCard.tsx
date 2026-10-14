@@ -10,6 +10,13 @@ import TokenSplitChart from "./charts/TokenSplitChart";
 import { ChartSection } from "./charts/shared";
 import DetailDrawer from "./DetailDrawer";
 
+/** 外部「跳转到账号」请求（命令面板 / 数字键 1-9），由 App 经 Dashboard 透传 */
+export interface FocusRequest {
+  accountId: string;
+  /** 每次请求变化的时间戳，保证同一账号可重复触发 */
+  nonce: number;
+}
+
 interface Props {
   account: AccountConfig;
   outcome?: RefreshOutcome;
@@ -17,6 +24,8 @@ interface Props {
   snapshots: BalanceSnapshot[];
   /** 看板级"当前时间"（每 30s 跳动），用于相对时间显示；缺省按渲染时刻算 */
   now?: number;
+  /** 外部请求打开本卡详情抽屉（匹配 accountId 且 nonce 变化时生效） */
+  focusRequest?: FocusRequest | null;
 }
 
 function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): string {
@@ -66,7 +75,7 @@ async function copyText(text: string): Promise<boolean> {
 const EXTRAS_COLLAPSE_AT = 6;
 const EXTRAS_PREVIEW = 5;
 
-export default function ProviderCard({ account, outcome, refreshing, snapshots, now }: Props) {
+export default function ProviderCard({ account, outcome, refreshing, snapshots, now, focusRequest }: Props) {
   // 详情抽屉：图表与原始数据都放入右侧浮层，卡片高度不再随展开变化（grid 行稳定）
   const [detailOpen, setDetailOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
@@ -83,6 +92,14 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
     },
     [],
   );
+
+  // 外部跳转请求（命令面板 / 数字键）：匹配本账号时打开详情抽屉。
+  // 请求对象由 Dashboard 在投递后清除（nonce 判重），卡片重挂载不会复开。
+  useEffect(() => {
+    if (focusRequest && focusRequest.accountId === account.id) {
+      setDetailOpen(true);
+    }
+  }, [focusRequest, account.id]);
 
   // 用量进度条
   const used = info?.used?.amount;

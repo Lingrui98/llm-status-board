@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
+import CommandPalette from "./components/CommandPalette";
+import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
 import type { AppConfig, BalanceSnapshot, RefreshOutcome } from "./types";
 
 type View = "dashboard" | "settings";
+
+/** 事件目标是否在文本输入类控件内（数字键等全局快捷键此时应让位） */
+function isEditingTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
+}
 
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
@@ -14,8 +23,19 @@ export default function App() {
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [history, setHistory] = useState<BalanceSnapshot[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  // 「跳转到账号」请求：nonce 判重，Dashboard 投递给匹配卡片后经 onFocusRequestHandled 清除
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const refreshTimer = useRef<number | null>(null);
   const refreshingRef = useRef(false);
+
+  const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
+
+  // 命令面板「跳转到账号」：确保在看板视图后下发请求（卡片抽屉由 ProviderCard 自己打开）
+  const handleFocusAccount = useCallback((accountId: string) => {
+    setFocusRequest({ accountId, nonce: Date.now() });
+    setView("dashboard");
+  }, []);
 
   // 余额历史快照（趋势图数据源）：失败静默，不影响主流程
   const loadHistory = useCallback(async () => {
@@ -100,6 +120,32 @@ export default function App() {
       if (refreshTimer.current) window.clearInterval(refreshTimer.current);
     };
   }, [config?.settings.autoRefreshSec, refresh]);
+
+  // 全局快捷键：Ctrl/Cmd+K 与 Ctrl+P 切换命令面板；数字键 1-9 打开第 N 个启用账号详情
+  //（仅看板视图、面板未开、焦点不在输入控件时；Tauri WebView 下 Ctrl/Meta 都能收到）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K" || e.key === "p" || e.key === "P")) {
+        e.preventDefault(); // 挡住浏览器默认行为（打印 / 地址栏搜索）
+        setPaletteOpen((v) => !v);
+        return;
+      }
+      if (
+        view === "dashboard" &&
+        !paletteOpen &&
+        /^[1-9]$/.test(e.key) &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isEditingTarget(e.target)
+      ) {
+        const acc = config?.accounts.filter((a) => a.enabled)[Number(e.key) - 1];
+        if (acc) setFocusRequest({ accountId: acc.id, nonce: Date.now() });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, paletteOpen, config]);
 
   const handleSaveSettings = useCallback(
     async (newConfig: AppConfig) => {
@@ -194,6 +240,8 @@ export default function App() {
           lastRefreshAt={lastRefreshAt}
           autoRefreshSec={config.settings.autoRefreshSec}
           snapshots={history}
+          focusRequest={focusRequest}
+          onFocusRequestHandled={clearFocusRequest}
         />
       ) : (
         <SettingsView
@@ -203,9 +251,23 @@ export default function App() {
         />
       )}
 
+      {paletteOpen && (
+        <CommandPalette
+          view={view}
+          accounts={config.accounts.filter((a) => a.enabled)}
+          onClose={() => setPaletteOpen(false)}
+          onRefresh={refresh}
+          onNavigate={setView}
+          onFocusAccount={handleFocusAccount}
+        />
+      )}
+
       <footer className="footer">
         <span className="muted">
           数据直接来自各家提供商接口，仅保存在本机。上次刷新：{lastRefreshAt ? new Date(lastRefreshAt).toLocaleString("zh-CN", { hour12: false }) : "—"}
+        </span>
+        <span className="muted footer-hint">
+          <kbd>Ctrl</kbd>+<kbd>K</kbd> 快速操作
         </span>
       </footer>
     </div>

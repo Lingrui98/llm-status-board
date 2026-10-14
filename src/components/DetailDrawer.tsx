@@ -18,6 +18,7 @@ interface Props {
  */
 export default function DetailDrawer({ title, subtitle, onClose, children }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -46,14 +47,42 @@ export default function DetailDrawer({ title, subtitle, onClose, children }: Pro
     };
   }, []);
 
+  // Focus trap：Tab 到最后一个可聚焦元素后回到第一个，Shift+Tab 反向循环
+  const onPanelKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const focusables = Array.from(
+      panel.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute("disabled") && el.offsetParent !== null);
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || !panel.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !panel.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   return createPortal(
     <div className="drawer-backdrop" onClick={onClose}>
       <div
+        ref={panelRef}
         className="drawer-panel"
         role="dialog"
         aria-modal="true"
         aria-label={`${title} 详情`}
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={onPanelKeyDown}
       >
         <div className="drawer-head">
           <div className="drawer-title-group">

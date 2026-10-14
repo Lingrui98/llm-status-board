@@ -88,6 +88,20 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
     setAccounts((prev) => [...prev, { ...acc, id: newAccountId(), name: acc.name + " 副本" }]);
   };
 
+  // 表格行键盘导航：↑↓ 在行间移动焦点，Enter/Space 打开编辑（仅当焦点在行本身，不拦截行内按钮的原生行为）
+  const onRowKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>, acc: AccountConfig) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const rows = Array.from(e.currentTarget.parentElement?.querySelectorAll("tr") ?? []);
+      const i = rows.indexOf(e.currentTarget);
+      const next = rows[e.key === "ArrowDown" ? i + 1 : i - 1] as HTMLElement | undefined;
+      next?.focus();
+    } else if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+      e.preventDefault();
+      setEditing(acc);
+    }
+  };
+
   const handleExport = async () => {
     try {
       const path = await api.pickExportPath();
@@ -199,7 +213,13 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
                         ? "自定义"
                         : null;
                 return (
-                  <tr key={a.id} className={a.enabled ? "" : "disabled-row"}>
+                  <tr
+                    key={a.id}
+                    className={a.enabled ? "" : "disabled-row"}
+                    tabIndex={0}
+                    onKeyDown={(e) => onRowKeyDown(e, a)}
+                    aria-label={`账号 ${a.name || "未命名"}，回车编辑`}
+                  >
                     <td>
                       <input
                         type="checkbox"
@@ -239,6 +259,13 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+
+      {accounts.length > 0 && (
+        <p className="muted small table-kbd-hint">
+          提示：<kbd>Tab</kbd> 聚焦行后 <kbd>↑</kbd>
+          <kbd>↓</kbd> 移动，<kbd>Enter</kbd> 编辑；行内按钮仍可 Tab 直达。
+        </p>
       )}
 
       <div className="settings-section">
