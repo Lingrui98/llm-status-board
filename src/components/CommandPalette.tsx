@@ -269,7 +269,8 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
               return (
                 <div key={c.id}>
                   {showGroup && <div className="palette-group">{c.group}</div>}
-                  <div
+                  <button
+                    type="button"
                     id={`palette-item-${c.id}`}
                     role="option"
                     aria-selected={i === sel}
@@ -283,7 +284,7 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
                     </span>
                     <span className="palette-item-label">{c.label}</span>
                     {c.hint && <kbd>{c.hint}</kbd>}
-                  </div>
+                  </button>
                 </div>
               );
             })

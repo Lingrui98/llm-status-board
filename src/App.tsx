@@ -47,6 +47,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [statuses, setStatuses] = useState<Record<string, RefreshOutcome>>({});
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshAnnouncement, setRefreshAnnouncement] = useState("");
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
   // 本次刷新耗时（毫秒）：从 refreshing 起止时间戳推导，纯前端，不新增 IPC
   const [lastRefreshMs, setLastRefreshMs] = useState<number | null>(null);
@@ -59,6 +60,7 @@ export default function App() {
   // 新手引导：accounts 为空 && 未跳过时自动出现；guideOpen 支持从帮助面板手动重开
   const [guideDismissed, setGuideDismissed] = useState(readGuideDismissed);
   const [guideOpen, setGuideOpen] = useState(false);
+  const configRef = useRef<AppConfig | null>(null);
   // 「去设置并添加账号（预选类型）」请求：nonce 判重，SettingsView 消费后经 onAddRequestHandled 清除
   const [addRequest, setAddRequest] = useState<{ kind: ProviderKind; nonce: number } | null>(null);
   // 「跳转到账号」请求：nonce 判重，Dashboard 投递给匹配卡片后经 onFocusRequestHandled 清除
@@ -123,6 +125,7 @@ export default function App() {
   const loadConfig = useCallback(async () => {
     try {
       const c = await api.getConfig();
+      configRef.current = c;
       setConfig(c);
       setLoadError(null);
       return c;
@@ -142,6 +145,13 @@ export default function App() {
       const map: Record<string, RefreshOutcome> = {};
       for (const o of outcomes) map[o.accountId] = o;
       setStatuses(map);
+      const enabledIds = new Set((configRef.current?.accounts ?? []).filter((a) => a.enabled).map((a) => a.id));
+      const visibleOutcomes = outcomes.filter((o) => enabledIds.has(o.accountId));
+      const okCount = visibleOutcomes.filter((o) => o.ok).length;
+      const failCount = visibleOutcomes.length - okCount;
+      setRefreshAnnouncement(
+        failCount > 0 ? `刷新完成，${okCount} 个账号正常，${failCount} 个异常` : `刷新完成，${okCount} 个账号正常`,
+      );
       setLastRefreshAt(new Date().toISOString());
       // 刷新成功后重新拉取余额历史（后端已追加本次快照）
       await loadHistory();
@@ -256,6 +266,7 @@ export default function App() {
         // 磁盘读取失败就用用户输入的
       }
       await api.saveConfig(toSave);
+      configRef.current = toSave;
       setConfig(toSave);
     },
     [config],
@@ -381,6 +392,9 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <div className="sr-only" role="status" aria-live="polite">
+        {refreshAnnouncement}
+      </div>
       <header className="topbar">
         <div className="topbar-title">
           <span className="logo-dot" />
@@ -430,7 +444,7 @@ export default function App() {
               </span>
             )}
           </button>
-          <button className="btn ghost refresh-btn" onClick={refresh} disabled={refreshing}>
+          <button type="button" className="btn ghost refresh-btn" onClick={refresh} disabled={refreshing}>
             <svg
               className={`refresh-icon${refreshing ? " spinning" : ""}`}
               width="13"

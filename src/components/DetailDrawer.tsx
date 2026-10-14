@@ -25,7 +25,7 @@ export default function DetailDrawer({ title, subtitle, onClose, children }: Pro
   // ESC 关闭（监听挂 document，抽屉生命周期内有效）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCloseRef.current();
+      if (e.key === "Escape" && !document.querySelector(".palette-backdrop")) onCloseRef.current();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

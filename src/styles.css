@@ -2042,6 +2042,10 @@ code {
 
 .palette-item {
   display: flex;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
   align-items: center;
   gap: 10px;
   width: 100%;
