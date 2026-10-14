@@ -45,7 +45,13 @@ const AUTH_FIELDS: Record<ProviderKind, AuthField[]> = {  oneApi: [
     { field: "apiKey", label: "API Key", placeholder: "sk-...", type: "password" },
   ],
   moonshot: [
-    { field: "apiKey", label: "API Key", placeholder: "sk-...", type: "password" },
+    {
+      field: "apiKey",
+      label: "API Key",
+      placeholder: "sk-... 或 sk-kimi-...",
+      type: "password",
+      hint: "按 Key 前缀自动分流：sk-kimi-（Kimi for Coding 订阅，查订阅额度/5h/7d/月度窗口）→ 其他 sk-（开放平台按量计费，查余额）。订阅 Key 在 www.kimi.com/code/console 生成",
+    },
   ],
   zhipu: [
     { field: "apiKey", label: "API Key", placeholder: "....xxxxxxxx.xxxxxxxx", type: "password" },

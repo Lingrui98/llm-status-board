@@ -19,6 +19,7 @@ pub fn run() {
             commands::test_account,
             commands::refresh_all,
             commands::get_last_results,
+            commands::get_history,
             commands::export_config,
             commands::import_config,
         ])

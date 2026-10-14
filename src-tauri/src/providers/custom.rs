@@ -74,6 +74,7 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
         fetched_at: crate::types::now_iso(),
         new_token: None,
         new_refresh_token: None,
+        ..Default::default()
     })
 }
 

@@ -1,7 +1,10 @@
-use crate::types::{AppConfig, RefreshOutcome};
+use crate::types::{AppConfig, BalanceSnapshot, RefreshOutcome};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
+
+/// 历史快照保留上限（超出丢弃最旧）
+const MAX_HISTORY: usize = 2000;
 
 pub fn config_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -17,6 +20,14 @@ pub fn results_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_config_dir()
         .map_err(|e| format!("无法确定配置目录: {e}"))?;
     Ok(dir.join("results.json"))
+}
+
+pub fn history_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法确定配置目录: {e}"))?;
+    Ok(dir.join("history.json"))
 }
 
 /// 原子写入刷新结果（与配置同目录的 results.json）
@@ -39,6 +50,48 @@ pub fn load_results(path: &Path) -> Result<Vec<RefreshOutcome>, String> {
     }
     let text = fs::read_to_string(path).map_err(|e| format!("读取结果失败: {e}"))?;
     serde_json::from_str(&text).map_err(|e| format!("结果文件格式错误: {e}"))
+}
+
+/// 追加余额快照（滚动保留最近 MAX_HISTORY 条；同账号余额与最近一条相同时不追加，避免平线刷屏）
+pub fn append_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
+    let mut all = load_history(path)?;
+    for s in snapshots {
+        let dup = all
+            .last()
+            .map(|last| {
+                last.account_id == s.account_id && (last.balance - s.balance).abs() < f64::EPSILON
+            })
+            .unwrap_or(false);
+        if !dup {
+            all.push(s.clone());
+        }
+    }
+    if all.len() > MAX_HISTORY {
+        let drain = all.len() - MAX_HISTORY;
+        all.drain(..drain);
+    }
+    save_history(path, &all)
+}
+
+pub fn save_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("创建历史目录失败: {e}"))?;
+    }
+    let text =
+        serde_json::to_string_pretty(snapshots).map_err(|e| format!("序列化历史失败: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, &text).map_err(|e| format!("写入历史失败: {e}"))?;
+    fs::rename(&tmp, path).map_err(|e| format!("替换历史文件失败: {e}"))?;
+    Ok(())
+}
+
+/// 读取全部余额快照（趋势图数据源）
+pub fn load_history(path: &Path) -> Result<Vec<BalanceSnapshot>, String> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = fs::read_to_string(path).map_err(|e| format!("读取历史失败: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("历史文件格式错误: {e}"))
 }
 
 pub fn load(app: &tauri::AppHandle) -> Result<AppConfig, String> {

@@ -149,7 +149,7 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
             }
         }
 
-        // 订阅窗口（5h / 7d）
+        // 订阅窗口（5h / 7d）→ 结构化配额窗口（参照 Mac 版：优先订阅源，percentage ?? utilization）
         if let Ok(usage) = http::send_json(
             client,
             "GET",
@@ -159,21 +159,154 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
         )
         .await
         {
-            if let Some(windows) = usage.get("windows").and_then(|w| w.as_array()) {
-                for w in windows {
-                    let window = w.get("window").and_then(|x| x.as_str()).unwrap_or("?");
-                    let label = match window {
-                        "five_hour" => "5h 窗口",
-                        "seven_day" => "7d 窗口",
-                        other => other,
-                    };
-                    if let Some(pct) = w.get("used_percent").and_then(|x| x.as_f64()) {
+            let data = usage.get("data").cloned().unwrap_or(usage.clone());
+            let windows = data
+                .get("windows")
+                .and_then(|w| w.as_array())
+                .cloned()
+                .unwrap_or_else(|| {
+                    // 部分版本直接返回窗口数组
+                    data.as_array().cloned().unwrap_or_default()
+                });
+            for w in windows {
+                let window = w.get("window").and_then(|x| x.as_str()).unwrap_or("?");
+                let pct = w
+                    .get("used_percent")
+                    .and_then(|x| x.as_f64())
+                    .or_else(|| w.get("percentage").and_then(|x| x.as_f64()))
+                    .or_else(|| w.get("utilization").and_then(|x| x.as_f64()));
+                let label = match window {
+                    "five_hour" => "5h",
+                    "seven_day" => "7d",
+                    other => other,
+                };
+                if let Some(p) = pct {
+                    info.extras.push(KeyValue {
+                        key: format!("{label} 窗口"),
+                        value: format!("{p:.0}%"),
+                    });
+                    info.quota_windows.push(crate::types::QuotaWindow {
+                        window: Some(label.to_string()),
+                        used_percent: Some(p),
+                        resets_at: w
+                            .get("resets_at")
+                            .and_then(|r| r.as_str())
+                            .map(String::from),
+                    });
+                }
+            }
+        }
+
+        // 用量概览 + 成本明细（官方价 / 实付 / 节省，fen → 元）
+        if let Ok(overview) = http::send_json(
+            client,
+            "GET",
+            &format!("{base}/api/v1/projects/{pid}/usage"),
+            &[("Authorization", auth_value.clone())],
+            None,
+        )
+        .await
+        {
+            let d = overview.get("data").cloned().unwrap_or(overview.clone());
+            if info.requests.is_none() {
+                if let Some(rc) = crate::jsonpath::lookup_i64(&d, "request_count") {
+                    info.requests = Some(rc);
+                }
+            }
+            if let Some(cb) = d.get("cost_breakdown") {
+                let fen = |k: &str| lookup_number(cb, k).map(|f| f / 100.0);
+                let api_std = fen("api_standard_fen");
+                let paid = fen("actual_paid_fen");
+                let saved =
+                    fen("saved_fen").or_else(|| api_std.zip(paid).map(|(s, p)| (s - p).max(0.0)));
+                if let Some(s) = api_std {
+                    info.extras.push(KeyValue {
+                        key: "官方标准价".into(),
+                        value: format!("{s:.2} CNY"),
+                    });
+                }
+                if let Some(p) = paid {
+                    info.extras.push(KeyValue {
+                        key: "本期实付".into(),
+                        value: format!("{p:.2} CNY"),
+                    });
+                }
+                if let (Some(s), Some(v)) = (api_std, saved) {
+                    if s > 0.0 {
                         info.extras.push(KeyValue {
-                            key: label.to_string(),
-                            value: format!("{pct:.0}%"),
+                            key: "订阅节省".into(),
+                            value: format!("{v:.2} CNY（{:.0}%）", v / s * 100.0),
                         });
                     }
                 }
+                if let Some((start, end)) =
+                    lookup_string(cb, "period_start").zip(lookup_string(cb, "period_end"))
+                {
+                    let fmt_short = |iso: &str| iso.get(..10).unwrap_or(iso).to_string();
+                    info.extras.push(KeyValue {
+                        key: "统计周期".into(),
+                        value: format!("{} ~ {}", fmt_short(&start), fmt_short(&end)),
+                    });
+                }
+            }
+        }
+
+        // 按日用量（统计图；credits 计）
+        if let Ok(daily) = http::send_json(
+            client,
+            "GET",
+            &format!("{base}/api/v1/projects/{pid}/usage?breakdown=daily"),
+            &[("Authorization", auth_value.clone())],
+            None,
+        )
+        .await
+        {
+            let data = daily.get("data").cloned().unwrap_or(daily.clone());
+            if let Some(arr) = data.as_array() {
+                for d in arr {
+                    info.daily_usage.push(crate::types::UsagePoint {
+                        date: lookup_string(d, "date"),
+                        requests: crate::jsonpath::lookup_i64(d, "request_count"),
+                        input_tokens: lookup_number(d, "total_input_tokens"),
+                        output_tokens: lookup_number(d, "total_output_tokens"),
+                        tokens: lookup_number(d, "total_tokens"),
+                        // total_credits_k：千 credits → 原始 credits
+                        cost: lookup_number(d, "total_credits_k").map(|k| k * 1000.0),
+                        cost_unit: Some("credits".into()),
+                        latency_ms: lookup_number(d, "avg_latency_ms"),
+                        model: None,
+                    });
+                }
+            }
+        }
+
+        // 按模型用量（统计图；按 credits 降序）
+        if let Ok(models) = http::send_json(
+            client,
+            "GET",
+            &format!("{base}/api/v1/projects/{pid}/usage?breakdown=model"),
+            &[("Authorization", auth_value.clone())],
+            None,
+        )
+        .await
+        {
+            let data = models.get("data").cloned().unwrap_or(models.clone());
+            if let Some(arr) = data.as_array() {
+                for m in arr {
+                    info.model_usage.push(crate::types::UsagePoint {
+                        model: lookup_string(m, "model"),
+                        requests: crate::jsonpath::lookup_i64(m, "request_count"),
+                        input_tokens: lookup_number(m, "total_input_tokens"),
+                        output_tokens: lookup_number(m, "total_output_tokens"),
+                        tokens: lookup_number(m, "total_tokens"),
+                        cost: lookup_number(m, "total_credits_k").map(|k| k * 1000.0),
+                        cost_unit: Some("credits".into()),
+                        latency_ms: lookup_number(m, "avg_latency_ms"),
+                        date: None,
+                    });
+                }
+                info.model_usage
+                    .sort_by(|a, b| b.cost.unwrap_or(0.0).total_cmp(&a.cost.unwrap_or(0.0)));
             }
         }
     }

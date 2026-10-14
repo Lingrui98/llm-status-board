@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import type { AccountConfig, AccountInfo, AppConfig, RefreshOutcome } from "./types";
+import type {
+  AccountConfig,
+  AccountInfo,
+  AppConfig,
+  BalanceSnapshot,
+  RefreshOutcome,
+} from "./types";
 
 export async function getConfig(): Promise<AppConfig> {
   return invoke<AppConfig>("get_config");
@@ -21,6 +27,11 @@ export async function refreshAll(): Promise<RefreshOutcome[]> {
 /// 上次刷新结果（持久化在本地，重启后加载展示）
 export async function getLastResults(): Promise<RefreshOutcome[]> {
   return invoke<RefreshOutcome[]>("get_last_results");
+}
+
+/// 余额历史快照（趋势图数据源）
+export async function getHistory(): Promise<BalanceSnapshot[]> {
+  return invoke<BalanceSnapshot[]>("get_history");
 }
 
 export async function configPath(): Promise<string> {

@@ -50,6 +50,93 @@ fn encode_uri_component(s: &str) -> String {
 mod tests {
     use super::encode_uri_component;
 
+    /// Kimi 订阅形态 C（2026-09/10 起）：usages{limit_5h:{used_ratio,reset_time},...}
+    #[test]
+    fn test_kimi_parse_form_c() {
+        let v = serde_json::json!({
+            "usages": {
+                "limit_5h": { "used_ratio": 0.35, "reset_time": "2026-10-15T02:00:00Z" },
+                "limit_7d": { "used_ratio": 0.52 },
+                "limit_month_code": { "used_ratio": 0.61 },
+                "limit_month_total": { "used_ratio": 0.48 }
+            }
+        });
+        // 验证 ratio 百分比换算与 reset_time 提取
+        let pct = |path: &str| crate::jsonpath::lookup_number(&v, path).map(|r| r * 100.0);
+        assert_eq!(pct("usages.limit_5h.used_ratio"), Some(35.0));
+        assert_eq!(pct("usages.limit_month_code.used_ratio"), Some(61.0));
+        assert_eq!(
+            crate::jsonpath::lookup_string(&v, "usages.limit_5h.reset_time"),
+            Some("2026-10-15T02:00:00Z".into())
+        );
+    }
+
+    /// Kimi 订阅形态 A/B：usage(周配额) + limits[](5h) + parallel + boosterWallet
+    #[test]
+    fn test_kimi_parse_form_ab() {
+        let v = serde_json::json!({
+            "usage": { "limit": 300, "used": 90, "remaining": 210, "resetTime": "2026-10-16T00:00:00Z" },
+            "limits": [
+                { "window": { "duration": 5, "timeUnit": "HOUR" },
+                  "detail": { "used": 40, "limit": 200, "resetTime": "2026-10-14T16:00:00Z" } }
+            ],
+            "parallel": { "limit": 20 },
+            "boosterWallet": { "balance": { "type": "BOOSTER", "amount": 500, "amountLeft": 350 } },
+            "user": { "membership": { "level": "pro" } }
+        });
+        // 周配额
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "usage.remaining"),
+            Some(210.0)
+        );
+        let limit = crate::jsonpath::lookup_number(&v, "usage.limit").unwrap_or(0.0);
+        let used = crate::jsonpath::lookup_number(&v, "usage.used").unwrap_or(0.0);
+        assert_eq!((used / limit * 100.0) as i64, 30);
+        // 5h 窗口识别（duration=5 + HOUR）
+        let l = &v["limits"][0];
+        assert_eq!(
+            crate::jsonpath::lookup_number(l, "window.duration"),
+            Some(5.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_string(l, "window.timeUnit").as_deref(),
+            Some("HOUR")
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_number(l, "detail.used"),
+            Some(40.0)
+        );
+        // 并发 / 加油包 / 等级
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "parallel.limit"),
+            Some(20.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "boosterWallet.balance.amountLeft"),
+            Some(350.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_string(&v, "user.membership.level").as_deref(),
+            Some("pro")
+        );
+    }
+
+    /// Kimi key 前缀分流逻辑
+    #[test]
+    fn test_kimi_key_prefix_routing() {
+        // sk-kimi- → 订阅端点（api.kimi.com）；其他 → 开放平台 balance
+        assert!("sk-kimi-abc123".starts_with("sk-kimi-"));
+        assert!(!"sk-abc123".starts_with("sk-kimi-"));
+        // base 域名修正：开放平台域名会被替换为订阅域名
+        let b = "https://api.moonshot.cn";
+        let fixed = if b.contains("api.kimi.com") || b.contains("api.kimi.ai") {
+            b.to_string()
+        } else {
+            "https://api.kimi.com".to_string()
+        };
+        assert_eq!(fixed, "https://api.kimi.com");
+    }
+
     #[test]
     fn test_encode_uri_component() {
         assert_eq!(encode_uri_component("abc123-_."), "abc123-_.");
@@ -192,11 +279,198 @@ async fn siliconflow(client: &reqwest::Client, acc: &AccountConfig) -> Result<Ac
     Ok(info)
 }
 
-/// Moonshot/Kimi: GET {base}/v1/users/me/balance（code=0 成功）
+/// Moonshot/Kimi：按 key 前缀分流
+/// - `sk-kimi-` 前缀 → Kimi for Coding 订阅（GET api.kimi.com/coding/v1/usages）
+/// - 其他 `sk-` → 开放平台按量计费（GET {base}/v1/users/me/balance）
 async fn moonshot(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
     let key = need_key(acc)?;
+    if key.starts_with("sk-kimi-") {
+        return kimi_coding_usage(client, acc, &key).await;
+    }
+    moonshot_payg_balance(client, acc, &key).await
+}
+
+/// Kimi for Coding 订阅用量（未公开文档端点，为官方 CLI /usage 背后的接口）
+/// 响应历史上有三种形态，需宽容解析：
+/// - 形态A: usage(周配额) + limits[](5h 窗口) + parallel.limit + limited + user.membership.level
+/// - 形态B: 形态A + totalQuota + boosterWallet.balance
+/// - 形态C: usages{limit_5h:{used_ratio,reset_time}, limit_7d, limit_month_code, limit_month_total}
+async fn kimi_coding_usage(
+    client: &reqwest::Client,
+    acc: &AccountConfig,
+    key: &str,
+) -> Result<AccountInfo, String> {
+    let base = {
+        let b = acc.base();
+        // 用户可能填了 api.moonshot.cn 之类的开放平台域名；订阅接口固定在 api.kimi.com / api.kimi.ai
+        if b.contains("api.kimi.com") || b.contains("api.kimi.ai") {
+            b
+        } else {
+            "https://api.kimi.com".to_string()
+        }
+    };
+    let (hk, hv) = http::bearer(key);
+    let v = http::send_json(
+        client,
+        "GET",
+        &format!("{base}/coding/v1/usages"),
+        &[(hk.as_str(), hv)],
+        None,
+    )
+    .await
+    .map_err(|e| {
+        // 404 常见于端点变更或 key 无权限；401 是 key 与平台不匹配
+        format!(
+            "{e}。提示：Kimi 订阅（Kimi for Coding）需要 sk-kimi- 前缀的 key（www.kimi.com/code/console 生成）；普通开放平台 sk- key 走的是另一套计费体系，两者互不相通"
+        )
+    })?;
+
+    let mut info = AccountInfo {
+        note: Some("Kimi for Coding 订阅模式（订阅额度，非余额计费）".into()),
+        fetched_at: crate::types::now_iso(),
+        raw: Some(v.clone()),
+        ..Default::default()
+    };
+
+    // --- 形态C（2026-09/10 起）: usages{limit_5h:{used_ratio, reset_time}, limit_7d, limit_month_code, limit_month_total} ---
+    let usages = v.get("usages");
+    if usages.is_some() {
+        let ratio_pct = |path: &str| lookup_number(&v, path).map(|r| r * 100.0);
+        let reset_of = |path: &str| {
+            lookup_string(&v, path)
+                .or_else(|| lookup_string(&v, &path.replace("reset_time", "resetTime")))
+        };
+        for (label, used_path, reset_path) in [
+            (
+                "5h",
+                "usages.limit_5h.used_ratio",
+                "usages.limit_5h.reset_time",
+            ),
+            (
+                "7d",
+                "usages.limit_7d.used_ratio",
+                "usages.limit_7d.reset_time",
+            ),
+            (
+                "月度(代码)",
+                "usages.limit_month_code.used_ratio",
+                "usages.limit_month_code.reset_time",
+            ),
+            (
+                "月度(全部)",
+                "usages.limit_month_total.used_ratio",
+                "usages.limit_month_total.reset_time",
+            ),
+        ] {
+            if let Some(pct) = ratio_pct(used_path) {
+                info.quota_windows.push(crate::types::QuotaWindow {
+                    window: Some(label.to_string()),
+                    used_percent: Some(pct),
+                    resets_at: reset_of(reset_path),
+                });
+                info.extras.push(KeyValue {
+                    key: format!("{label} 用量"),
+                    value: format!("{pct:.0}%"),
+                });
+            }
+        }
+        return Ok(info);
+    }
+
+    // --- 形态A/B: usage(周配额) + limits[](5h) + parallel + boosterWallet + totalQuota ---
+    // 周配额（usage: limit/used/remaining/resetTime）
+    if let Some(remaining) =
+        lookup_number(&v, "usage.remaining").or_else(|| lookup_number(&v, "usage.remain"))
+    {
+        let limit = lookup_number(&v, "usage.limit").unwrap_or(0.0);
+        let used = lookup_number(&v, "usage.used").unwrap_or(limit - remaining);
+        info.used = Some(Money {
+            amount: used,
+            currency: "credits".into(),
+        });
+        if limit > 0.0 {
+            info.total = Some(Money {
+                amount: limit,
+                currency: "credits".into(),
+            });
+            info.balance = Some(Money {
+                amount: remaining,
+                currency: "credits".into(),
+            });
+            info.quota_windows.push(crate::types::QuotaWindow {
+                window: Some("周配额".into()),
+                used_percent: Some((used / limit * 100.0).min(100.0)),
+                resets_at: lookup_string(&v, "usage.resetTime")
+                    .or_else(|| lookup_string(&v, "usage.reset_at")),
+            });
+        }
+    }
+
+    // 5h 窗口（limits[]: window{duration,timeUnit} + detail{used,limit,resetTime}）
+    if let Some(limits) = v.get("limits").and_then(|l| l.as_array()) {
+        for l in limits {
+            // 找 5 小时窗口（duration=5 或 300 分钟）
+            let duration = lookup_number(l, "window.duration").unwrap_or(0.0);
+            let unit = lookup_string(l, "window.timeUnit").unwrap_or_default();
+            let is_5h =
+                (unit == "HOUR" && duration == 5.0) || (unit == "MINUTE" && duration == 300.0);
+            let used = lookup_number(l, "detail.used").unwrap_or(0.0);
+            let limit = lookup_number(l, "detail.limit").unwrap_or(0.0);
+            let label = if is_5h { "5h" } else { "窗口" };
+            if limit > 0.0 {
+                info.quota_windows.push(crate::types::QuotaWindow {
+                    window: Some(label.to_string()),
+                    used_percent: Some((used / limit * 100.0).min(100.0)),
+                    resets_at: lookup_string(l, "detail.resetTime")
+                        .or_else(|| lookup_string(l, "detail.reset_at")),
+                });
+                info.extras.push(KeyValue {
+                    key: format!("{label} 用量"),
+                    value: format!("{used:.0} / {limit:.0} credits"),
+                });
+            }
+        }
+    }
+
+    // 并发上限
+    if let Some(p) = lookup_number(&v, "parallel.limit") {
+        info.extras.push(KeyValue {
+            key: "并发上限".into(),
+            value: format!("{p:.0}"),
+        });
+    }
+    // 会员等级
+    if let Some(level) = lookup_string(&v, "user.membership.level") {
+        info.extras.push(KeyValue {
+            key: "会员等级".into(),
+            value: level,
+        });
+    }
+    // 月度总量（形态B totalQuota）
+    if let Some(tq) = lookup_number(&v, "totalQuota") {
+        info.extras.push(KeyValue {
+            key: "月度总量".into(),
+            value: format!("{tq:.0} credits"),
+        });
+    }
+    // 加油包（形态B boosterWallet.balance: {type:"BOOSTER", amount, amountLeft}）
+    if let Some(left) = lookup_number(&v, "boosterWallet.balance.amountLeft") {
+        info.extras.push(KeyValue {
+            key: "加油包剩余".into(),
+            value: format!("{left:.0} credits"),
+        });
+    }
+    Ok(info)
+}
+
+/// Moonshot 开放平台（按量计费）: GET {base}/v1/users/me/balance（code=0 成功）
+async fn moonshot_payg_balance(
+    client: &reqwest::Client,
+    acc: &AccountConfig,
+    key: &str,
+) -> Result<AccountInfo, String> {
     let base = acc.base();
-    let (hk, hv) = http::bearer(&key);
+    let (hk, hv) = http::bearer(key);
     let v = http::send_json(
         client,
         "GET",
@@ -417,5 +691,6 @@ async fn openai(client: &reqwest::Client, acc: &AccountConfig) -> Result<Account
         fetched_at: crate::types::now_iso(),
         new_token: None,
         new_refresh_token: None,
+        ..Default::default()
     })
 }

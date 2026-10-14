@@ -79,6 +79,34 @@ export interface Money {
   currency: string;
 }
 
+/** 用量数据点（按日或按模型聚合） */
+export interface UsagePoint {
+  date?: string | null;
+  model?: string | null;
+  requests?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  tokens?: number | null;
+  cost?: number | null;
+  costUnit?: string | null;
+  latencyMs?: number | null;
+}
+
+/** 配额窗口（5h / 7d / 月度等） */
+export interface QuotaWindow {
+  window?: string | null;
+  usedPercent?: number | null;
+  resetsAt?: string | null;
+}
+
+/** 余额历史快照（趋势图数据源） */
+export interface BalanceSnapshot {
+  ts: string;
+  accountId: string;
+  balance: number;
+  currency: string;
+}
+
 export interface AccountInfo {
   balance?: Money | null;
   used?: Money | null;
@@ -91,6 +119,12 @@ export interface AccountInfo {
   /** provider 轮换出的新 token（sub2api/ModelServer 的一次性 refresh token） */
   newToken?: string | null;
   newRefreshToken?: string | null;
+  /** 按日用量（统计图） */
+  dailyUsage?: UsagePoint[] | null;
+  /** 按模型用量（统计图） */
+  modelUsage?: UsagePoint[] | null;
+  /** 配额窗口（进度条） */
+  quotaWindows?: QuotaWindow[] | null;
 }
 
 export interface RefreshOutcome {

@@ -164,6 +164,29 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save_results(&path, &outcomes);
     }
 
+    // 余额历史追加（趋势图数据源）
+    let now = crate::types::now_iso();
+    let snapshots: Vec<crate::types::BalanceSnapshot> = outcomes
+        .iter()
+        .filter_map(|o| {
+            o.info
+                .as_ref()?
+                .balance
+                .as_ref()
+                .map(|b| crate::types::BalanceSnapshot {
+                    ts: now.clone(),
+                    account_id: o.account_id.clone(),
+                    balance: b.amount,
+                    currency: b.currency.clone(),
+                })
+        })
+        .collect();
+    if !snapshots.is_empty() {
+        if let Ok(path) = config::history_file_path(&app) {
+            let _ = config::append_history(&path, &snapshots);
+        }
+    }
+
     Ok(outcomes)
 }
 
@@ -171,4 +194,10 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
 #[tauri::command]
 pub async fn get_last_results(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> {
     config::load_results(&config::results_file_path(&app)?)
+}
+
+/// 余额历史快照（趋势图数据源；无记录返回空数组）
+#[tauri::command]
+pub async fn get_history(app: AppHandle) -> Result<Vec<crate::types::BalanceSnapshot>, String> {
+    config::load_history(&config::history_file_path(&app)?)
 }

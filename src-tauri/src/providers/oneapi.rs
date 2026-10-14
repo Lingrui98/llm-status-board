@@ -107,6 +107,9 @@ async fn fetch_with_token(
         fetched_at: crate::types::now_iso(),
         new_token: None,
         new_refresh_token: None,
+        daily_usage: Vec::new(),
+        model_usage: Vec::new(),
+        quota_windows: Vec::new(),
     };
 
     // 今日消费（快路径 /api/log/self/stat，失败则静默跳过）
@@ -213,5 +216,6 @@ async fn fetch_with_api_key(
         fetched_at: crate::types::now_iso(),
         new_token: None,
         new_refresh_token: None,
+        ..Default::default()
     })
 }

@@ -75,7 +75,7 @@ async fn fetch_with_api_key(
         }
     }
 
-    // 窗口速率限制（quota_limited）
+    // 窗口速率限制（quota_limited）→ 结构化配额窗口
     if let Some(limits) = v.get("rate_limits").and_then(|r| r.as_array()) {
         for l in limits.iter().take(3) {
             let window = l.get("window").and_then(|w| w.as_str()).unwrap_or("?");
@@ -86,7 +86,46 @@ async fn fetch_with_api_key(
                     key: format!("{window} 窗口"),
                     value: format!("{used:.2} / {limit:.2} USD"),
                 });
+                info.quota_windows.push(crate::types::QuotaWindow {
+                    window: Some(normalize_window_name(window)),
+                    used_percent: Some((used / limit * 100.0).min(100.0)),
+                    resets_at: l.get("reset_at").and_then(|r| r.as_str()).map(String::from),
+                });
             }
+        }
+    }
+
+    // 按日用量（统计图）
+    if let Some(days) = v.get("daily_usage").and_then(|d| d.as_array()) {
+        for d in days {
+            info.daily_usage.push(crate::types::UsagePoint {
+                date: lookup_string(d, "date"),
+                requests: crate::jsonpath::lookup_i64(d, "requests"),
+                input_tokens: lookup_number(d, "input_tokens"),
+                output_tokens: lookup_number(d, "output_tokens"),
+                tokens: lookup_number(d, "total_tokens"),
+                cost: lookup_number(d, "actual_cost").or_else(|| lookup_number(d, "cost")),
+                cost_unit: Some("USD".into()),
+                latency_ms: None,
+                model: None,
+            });
+        }
+    }
+
+    // 按模型用量（统计图）
+    if let Some(models) = v.get("model_stats").and_then(|d| d.as_array()) {
+        for m in models {
+            info.model_usage.push(crate::types::UsagePoint {
+                model: lookup_string(m, "model"),
+                requests: crate::jsonpath::lookup_i64(m, "requests"),
+                input_tokens: lookup_number(m, "input_tokens"),
+                output_tokens: lookup_number(m, "output_tokens"),
+                tokens: lookup_number(m, "total_tokens"),
+                cost: lookup_number(m, "actual_cost").or_else(|| lookup_number(m, "cost")),
+                cost_unit: Some("USD".into()),
+                latency_ms: None,
+                date: None,
+            });
         }
     }
 
@@ -108,6 +147,16 @@ async fn fetch_with_api_key(
     }
 
     Ok(info)
+}
+
+/// 窗口名归一化（5h / 1d / 7d → 统一展示用标签）
+fn normalize_window_name(w: &str) -> String {
+    match w {
+        "5h" | "five_hour" => "5h".into(),
+        "1d" | "one_day" => "1d".into(),
+        "7d" | "seven_day" => "7d".into(),
+        other => other.to_string(),
+    }
 }
 
 /// quota_limited 模式解析：key 配了额度/速率限制

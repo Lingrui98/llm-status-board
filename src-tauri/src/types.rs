@@ -172,6 +172,37 @@ impl Default for AppConfig {
 
 // ---------- 查询结果 ----------
 
+/// 单个用量数据点（按日或按模型聚合）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsagePoint {
+    /// 按日聚合时的日期（YYYY-MM-DD）
+    pub date: Option<String>,
+    /// 按模型聚合时的模型名
+    pub model: Option<String>,
+    pub requests: Option<i64>,
+    pub input_tokens: Option<f64>,
+    pub output_tokens: Option<f64>,
+    pub tokens: Option<f64>,
+    /// 花费（配 cost_unit）
+    pub cost: Option<f64>,
+    /// 花费单位（"USD" / "CNY" / "credits"）
+    pub cost_unit: Option<String>,
+    pub latency_ms: Option<f64>,
+}
+
+/// 配额窗口（5h / 1d / 7d 等）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QuotaWindow {
+    /// 窗口标识（five_hour / seven_day / 5h / 1d / 7d…）
+    pub window: Option<String>,
+    /// 已用百分比（0-100）
+    pub used_percent: Option<f64>,
+    /// 重置时间（ISO8601）
+    pub resets_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -187,6 +218,15 @@ pub struct AccountInfo {
     /// provider 轮换出的新 token（回写配置 / 表单用）
     pub new_token: Option<String>,
     pub new_refresh_token: Option<String>,
+    /// 按日用量（统计图用）
+    #[serde(default)]
+    pub daily_usage: Vec<UsagePoint>,
+    /// 按模型用量（统计图用）
+    #[serde(default)]
+    pub model_usage: Vec<UsagePoint>,
+    /// 配额窗口（进度条用）
+    #[serde(default)]
+    pub quota_windows: Vec<QuotaWindow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +236,17 @@ pub struct RefreshOutcome {
     pub ok: bool,
     pub info: Option<AccountInfo>,
     pub error: Option<String>,
+}
+
+/// 余额历史快照（跨刷新记录，用于余额趋势图）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceSnapshot {
+    /// 刷新时间（ISO8601）
+    pub ts: String,
+    pub account_id: String,
+    pub balance: f64,
+    pub currency: String,
 }
 
 pub fn now_iso() -> String {
