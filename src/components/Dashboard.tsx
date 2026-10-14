@@ -164,6 +164,7 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
             outcome={statuses[acc.id]}
             refreshing={refreshing}
             snapshots={snapshots}
+            now={now}
           />
         ))}
       </div>

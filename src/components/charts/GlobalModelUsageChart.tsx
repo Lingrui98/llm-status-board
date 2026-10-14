@@ -41,7 +41,7 @@ function GlobalModelTip({ active, payload }: TipProps) {
       </div>
       <div className="tt-row">
         <span>Tokens</span>
-        <b>{formatNumber(r.tokens)}</b>
+        <b>{formatCompact(r.tokens)}</b>
       </div>
       <div className="tt-row">
         <span>覆盖账号</span>

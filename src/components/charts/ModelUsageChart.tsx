@@ -55,11 +55,11 @@ function ModelTip({ active, payload, mode, unit }: TipProps) {
       </div>
       <div className="tt-row">
         <span>输入 Tokens</span>
-        <b>{formatNumber(r.inputTokens)}</b>
+        <b>{formatCompact(r.inputTokens)}</b>
       </div>
       <div className="tt-row">
         <span>输出 Tokens</span>
-        <b>{formatNumber(r.outputTokens)}</b>
+        <b>{formatCompact(r.outputTokens)}</b>
       </div>
     </div>
   );

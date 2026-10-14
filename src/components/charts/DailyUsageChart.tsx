@@ -46,7 +46,7 @@ function DailyTip({ active, payload, label, unit }: TipProps) {
       </div>
       <div className="tt-row">
         <span>Tokens</span>
-        <b>{formatNumber(r.tokens)}</b>
+        <b>{formatCompact(r.tokens)}</b>
       </div>
       <div className="tt-row">
         <span>花费</span>

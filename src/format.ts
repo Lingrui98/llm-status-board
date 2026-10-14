@@ -1,7 +1,8 @@
 import type { Money } from "./types";
 
-export function formatMoney(m?: Money | null): string {
-  if (!m) return "—";
+/** 金额拆分为「数字 + 货币代码」两部分（卡片大数字排版用；与 formatMoney 同一份精度规则） */
+export function formatMoneyParts(m?: Money | null): { num: string; currency: string } | null {
+  if (!m) return null;
   const abs = Math.abs(m.amount);
   let digits = 2;
   if (abs > 0 && abs < 0.01) digits = 6;
@@ -10,7 +11,13 @@ export function formatMoney(m?: Money | null): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
-  return `${num} ${m.currency}`;
+  return { num, currency: m.currency };
+}
+
+export function formatMoney(m?: Money | null): string {
+  const p = formatMoneyParts(m);
+  if (!p) return "—";
+  return `${p.num} ${p.currency}`;
 }
 
 export function formatNumber(n?: number | null): string {

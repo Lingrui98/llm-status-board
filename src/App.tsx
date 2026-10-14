@@ -205,7 +205,7 @@ export default function App() {
 
       <footer className="footer">
         <span className="muted">
-          数据直接来自各家提供商接口，仅保存在本机。Last refresh: {lastRefreshAt ? new Date(lastRefreshAt).toLocaleString("zh-CN", { hour12: false }) : "—"}
+          数据直接来自各家提供商接口，仅保存在本机。上次刷新：{lastRefreshAt ? new Date(lastRefreshAt).toLocaleString("zh-CN", { hour12: false }) : "—"}
         </span>
       </footer>
     </div>

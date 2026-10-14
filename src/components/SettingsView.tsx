@@ -39,7 +39,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
       });
       showTip("已保存");
     } catch (e) {
-      showTip(`保存失败: ${String(e)}`);
+      showTip(`保存失败：${String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -95,7 +95,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
       await api.exportConfig(path);
       showTip(`已导出到 ${path}`);
     } catch (e) {
-      showTip(`导出失败: ${String(e)}`);
+      showTip(`导出失败：${String(e)}`);
     }
   };
 
@@ -115,7 +115,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
       setProxy(merged.settings.proxy ?? "");
       showTip(`已导入 ${merged.accounts.length} 个账号`);
     } catch (e) {
-      showTip(`导入失败: ${String(e)}`);
+      showTip(`导入失败：${String(e)}`);
     }
   };
 
@@ -123,10 +123,15 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
     return (
       <main className="main">
         <div className="settings-header">
-          <h2>{accounts.some((a) => a.id === editing.id) ? "编辑账号" : "添加账号"}</h2>
-          <button className="btn ghost" onClick={() => setEditing(null)}>
-            取消
-          </button>
+          <div className="settings-title-group">
+            <button className="link-btn back-btn" onClick={() => setEditing(null)}>
+              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+                <path d="M6.5 1.8 3.3 5l3.2 3.2" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              返回账号列表
+            </button>
+            <h2>{accounts.some((a) => a.id === editing.id) ? "编辑账号" : "添加账号"}</h2>
+          </div>
         </div>
         <AccountForm initial={editing} onSubmit={upsertAccount} onCancel={() => setEditing(null)} />
       </main>
@@ -169,58 +174,71 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
           <p className="muted">还没有账号，点击「添加账号」开始。</p>
         </div>
       ) : (
-        <table className="accounts-table">
-          <thead>
-            <tr>
-              <th>启用</th>
-              <th>名称</th>
-              <th>类型</th>
-              <th>Base URL</th>
-              <th>认证</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.map((a) => (
-              <tr key={a.id} className={a.enabled ? "" : "disabled-row"}>
-                <td>
-                  <input
-                    type="checkbox"
-                    checked={a.enabled}
-                    onChange={() => toggleEnabled(a.id)}
-                  />
-                </td>
-                <td className="cell-name">{a.name || <span className="muted">（未命名）</span>}</td>
-                <td>{PROVIDER_KINDS.find((k) => k.value === a.kind)?.label ?? a.kind}</td>
-                <td className="cell-url" title={a.baseUrl}>
-                  {a.baseUrl}
-                </td>
-                <td>
-                  {a.token
-                    ? "Token"
-                    : a.apiKey
-                      ? "API Key"
-                      : a.username
-                        ? "账号密码"
-                        : a.custom
-                          ? "自定义"
-                          : "—"}
-                </td>
-                <td className="cell-actions">
-                  <button className="link-btn" onClick={() => setEditing(a)}>
-                    编辑
-                  </button>
-                  <button className="link-btn" onClick={() => duplicateAccount(a)}>
-                    复制
-                  </button>
-                  <button className="link-btn danger" onClick={() => removeAccount(a.id)}>
-                    删除
-                  </button>
-                </td>
+        <div className="accounts-table-wrap">
+          <table className="accounts-table">
+            <thead>
+              <tr>
+                <th>启用</th>
+                <th>名称</th>
+                <th>类型</th>
+                <th>Base URL</th>
+                <th>认证</th>
+                <th>操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {accounts.map((a) => {
+                const kindMeta = PROVIDER_KINDS.find((k) => k.value === a.kind);
+                const authLabel = a.token
+                  ? "Token"
+                  : a.apiKey
+                    ? "API Key"
+                    : a.username
+                      ? "账号密码"
+                      : a.custom
+                        ? "自定义"
+                        : null;
+                return (
+                  <tr key={a.id} className={a.enabled ? "" : "disabled-row"}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        className="switch"
+                        checked={a.enabled}
+                        onChange={() => toggleEnabled(a.id)}
+                        aria-label={`启用 ${a.name || "未命名账号"}`}
+                        title={a.enabled ? "点击停用" : "点击启用"}
+                      />
+                    </td>
+                    <td className="cell-name">{a.name || <span className="muted">（未命名）</span>}</td>
+                    <td>
+                      <span className={`badge ${kindMeta?.group === "官方" ? "badge-official" : "badge-relay"}`}>
+                        {kindMeta?.label ?? a.kind}
+                      </span>
+                    </td>
+                    <td className="cell-url" title={a.baseUrl}>
+                      {a.baseUrl}
+                    </td>
+                    <td>
+                      {authLabel ? <span className="badge badge-auth">{authLabel}</span> : <span className="muted">—</span>}
+                    </td>
+                    <td className="cell-actions">
+                      <button className="link-btn" onClick={() => setEditing(a)}>
+                        编辑
+                      </button>
+                      <button className="link-btn" onClick={() => duplicateAccount(a)}>
+                        复制
+                      </button>
+                      <button className="link-btn danger" onClick={() => removeAccount(a.id)}>
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       )}
 
       <div className="settings-section">
@@ -231,26 +249,26 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
             type="number"
             min={0}
             max={86400}
+            className="input-compact"
             value={autoRefreshSec}
             onChange={(e) => setAutoRefreshSec(Number(e.target.value))}
-            style={{ width: 100 }}
           />
         </label>
         <label className="setting-row">
           <span>启动时自动刷新一次</span>
           <input
             type="checkbox"
+            className="switch"
             checked={refreshOnStart}
             onChange={(e) => setRefreshOnStart(e.target.checked)}
           />
         </label>
-        <label className="setting-row" style={{ alignItems: "flex-start", flexDirection: "column", gap: 5 }}>
+        <label className="setting-row column">
           <span>网络代理（可选，全部查询共用）</span>
           <input
             value={proxy}
             onChange={(e) => setProxy(e.target.value)}
             placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空则不走代理"
-            style={{ width: "100%" }}
           />
         </label>
         <p className="muted small">

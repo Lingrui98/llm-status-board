@@ -100,6 +100,19 @@ body::before {
   outline-offset: 1px;
 }
 
+/* 视觉隐藏但保留给读屏/文本查询（如余额完整字符串） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- 启动 / 错误 ---------- */
 .boot-screen {
   height: 100%;
@@ -290,7 +303,7 @@ body::before {
   border-radius: var(--radius-l);
   box-shadow: var(--shadow-card);
   overflow: hidden;
-  margin-bottom: 20px;
+  margin-bottom: 16px; /* 与卡片网格 gap 同节奏 */
 }
 
 .summary-item {
@@ -425,6 +438,21 @@ body::before {
   white-space: nowrap;
 }
 
+/* 卡片头部右侧元信息：相对时间（轻量、muted）+ 类型徽章 */
+.card-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.card-ago {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 状态点：正常绿 / 异常红 / 等待中琥珀呼吸 / 未知灰 */
 .dot {
   width: 8px;
@@ -482,6 +510,16 @@ body::before {
 
 .balance-value.low {
   color: var(--warn);
+}
+
+/* 货币单位：小一号、上标感、muted，与大数字形成层级 */
+.balance-currency {
+  font-size: 0.46em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  margin-left: 5px;
+  vertical-align: 0.55em;
 }
 
 /* ---------- 用量 / 配额进度条 ---------- */
@@ -623,10 +661,41 @@ body::before {
   white-space: nowrap;
 }
 
+/* 附加信息折叠开关（与「详情」图表展开相互独立） */
+.extras-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  margin-left: -6px; /* 视觉对齐行标签左缘（抵消 link-btn 内边距） */
+}
+
+.extras-toggle .chevron {
+  transition: transform 0.18s ease;
+}
+
+.extras-toggle[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
+}
+
 .note {
   margin: 0;
   font-size: 12px;
   color: var(--text-2);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.note-icon {
+  flex-shrink: 0;
+  margin-top: 1.5px;
+  color: var(--text-3);
+}
+
+.note > span {
+  min-width: 0;
 }
 
 .error-text {
@@ -638,6 +707,50 @@ body::before {
   border-radius: var(--radius-s);
   padding: 7px 10px;
   word-break: break-all;
+}
+
+/* 错误条可点击复制：整条是按钮，hover 露出「点击复制」，成功短暂变「已复制」 */
+button.error-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  font-family: inherit;
+  text-align: left;
+  cursor: copy;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+button.error-copy:hover {
+  border-color: color-mix(in srgb, var(--err) 50%, transparent);
+}
+
+.error-msg {
+  flex: 1;
+  min-width: 0;
+}
+
+.copy-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--err) 72%, var(--text-2));
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+button.error-copy:hover .copy-hint,
+button.error-copy:focus-visible .copy-hint,
+button.error-copy.copied .copy-hint {
+  opacity: 1;
+}
+
+button.error-copy.copied {
+  border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+}
+
+button.error-copy.copied .copy-hint {
+  color: var(--ok);
+  font-weight: 600;
 }
 
 /* ---------- 卡片底部 / 展开 ---------- */
@@ -751,9 +864,9 @@ body::before {
   font-family: inherit;
 }
 
-/* 自定义 tooltip */
+/* 自定义 tooltip（浅色模式下加强边框与阴影保证对比度） */
 .chart-tooltip {
-  background: color-mix(in srgb, var(--bg-2) 94%, transparent);
+  background: color-mix(in srgb, var(--bg-2) 96%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--border-strong);
@@ -764,9 +877,17 @@ body::before {
   font-size: 12px;
 }
 
+@media (prefers-color-scheme: light) {
+  .chart-tooltip {
+    background: rgba(255, 255, 255, 0.97);
+    border-color: rgba(15, 23, 42, 0.24);
+    box-shadow: 0 6px 22px -8px rgba(15, 23, 42, 0.3);
+  }
+}
+
 .tt-title {
   font-size: 11px;
-  color: var(--text-3);
+  color: var(--text-2);
   margin-bottom: 5px;
   font-variant-numeric: tabular-nums;
   word-break: break-all;
@@ -809,7 +930,7 @@ body::before {
   border: 1px solid var(--border);
   border-radius: var(--radius-l);
   box-shadow: var(--shadow-card);
-  margin-bottom: 20px;
+  margin-bottom: 16px; /* 与卡片网格 gap 同节奏 */
   overflow: hidden;
 }
 
@@ -853,9 +974,8 @@ body::before {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 18px;
-  padding: 4px 18px 18px;
+  padding: 16px 18px 18px;
   border-top: 1px solid var(--border);
-  padding-top: 16px;
   animation: charts-in 0.22s ease;
 }
 
@@ -884,6 +1004,27 @@ body::before {
   letter-spacing: 0.01em;
 }
 
+/* 表单视图头部：面包屑式返回链接 + 标题 */
+.settings-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.back-btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: -6px; /* 视觉对齐标题左缘（抵消 link-btn 内边距） */
+  color: var(--text-3);
+}
+
+.back-btn:hover {
+  color: var(--accent);
+}
+
 .settings-actions {
   display: flex;
   gap: 8px;
@@ -905,15 +1046,20 @@ body::before {
   word-break: break-all;
 }
 
-.accounts-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
+/* 表格容器：承载边框/圆角/阴影，横向溢出可滚动（窄窗口不挤压列） */
+.accounts-table-wrap {
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
   box-shadow: var(--shadow-card);
+  overflow-x: auto;
+}
+
+.accounts-table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .accounts-table th,
@@ -938,18 +1084,98 @@ body::before {
 }
 
 .accounts-table tbody tr:hover {
-  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-3) 75%, transparent);
 }
 
 .accounts-table tr:last-child td {
   border-bottom: none;
 }
 
-.accounts-table input[type="checkbox"] {
+/* 类型 / 认证方式小徽章 */
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 2px 9px;
+  border-radius: 99px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge-relay {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.badge-official {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
+}
+
+.badge-auth {
+  color: var(--text-2);
+  background: var(--bg-3);
+  border-color: var(--border);
+  font-weight: 500;
+}
+
+.accounts-table input[type="checkbox"]:not(.switch) {
   accent-color: var(--accent);
   width: 14px;
   height: 14px;
   cursor: pointer;
+}
+
+/* iOS 风格滑动开关（纯 CSS，跟随暗/亮主题变量） */
+input[type="checkbox"].switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  position: relative;
+  cursor: pointer;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  vertical-align: middle;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+input[type="checkbox"].switch::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: left 0.18s ease, background 0.18s ease;
+}
+
+input[type="checkbox"].switch:hover {
+  border-color: var(--accent);
+}
+
+input[type="checkbox"].switch:focus-visible {
+  outline-offset: 2px;
+}
+
+input[type="checkbox"].switch:checked {
+  background: var(--accent);
+  border-color: transparent;
+}
+
+input[type="checkbox"].switch:checked::after {
+  left: 16px;
+  background: #fff;
 }
 
 .disabled-row {
@@ -1028,11 +1254,26 @@ body::before {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.setting-row input[type="checkbox"] {
+.setting-row input[type="checkbox"]:not(.switch) {
   accent-color: var(--accent);
   width: 15px;
   height: 15px;
   cursor: pointer;
+}
+
+/* 纵向布局的设置行（如代理输入框占满整行） */
+.setting-row.column {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+}
+
+.setting-row.column input:not([type="checkbox"]) {
+  width: 100%;
+}
+
+.input-compact {
+  width: 110px;
 }
 
 /* ---------- 表单 ---------- */
@@ -1157,6 +1398,17 @@ body::before {
   color: var(--err);
 }
 
+/* 「测试连接」按钮本身的瞬时反馈：成功绿描边 / 失败红描边 */
+.test-btn.ok {
+  border-color: color-mix(in srgb, var(--ok) 65%, transparent);
+  color: var(--ok);
+}
+
+.test-btn.fail {
+  border-color: color-mix(in srgb, var(--err) 65%, transparent);
+  color: var(--err);
+}
+
 /* ---------- 其他 ---------- */
 .empty-state {
   text-align: center;
@@ -1257,6 +1509,10 @@ code {
 }
 
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountConfig, CustomQuery, ProviderKind } from "../types";
 import { PROVIDER_KINDS, DEFAULT_BASE_URLS } from "../types";
 import * as api from "../api";
@@ -68,8 +68,20 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
   const [acc, setAcc] = useState<AccountConfig>({ ...initial });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
+  // 「测试连接」按钮本身的瞬时反馈（成功绿/失败红描边，2.4s 后消退）
+  const [testFlash, setTestFlash] = useState<"ok" | "fail" | null>(null);
+  const flashTimer = useRef<number | null>(null);
 
   const authFields = useMemo(() => AUTH_FIELDS[acc.kind] ?? [], [acc.kind]);
+  // 类型下拉分组：从 PROVIDER_KINDS 派生，保证组名/顺序与表格徽章等口径一致
+  const kindGroups = useMemo(() => [...new Set(PROVIDER_KINDS.map((k) => k.group))], []);
+
+  useEffect(
+    () => () => {
+      if (flashTimer.current) window.clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   const set = (patch: Partial<AccountConfig>) => setAcc((a) => ({ ...a, ...patch }));
 
@@ -90,6 +102,8 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
   const handleTest = async () => {
     setTesting(true);
     setTestResult(null);
+    setTestFlash(null);
+    let ok = false;
     try {
       const info = await api.testAccount(acc);
       // 一次性 refresh token 轮换：测试成功后把返回的新 token 合并进表单，
@@ -104,11 +118,15 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
       if (info.balance) parts.push(`余额 ${formatMoney(info.balance)}`);
       if (info.used) parts.push(`已用 ${formatMoney(info.used)}`);
       if (info.requests !== null && info.requests !== undefined) parts.push(`请求 ${formatNumber(info.requests)}`);
+      ok = true;
       setTestResult({ ok: true, msg: parts.join(" · ") || info.note || "连接成功" });
     } catch (e) {
       setTestResult({ ok: false, msg: String(e) });
     } finally {
       setTesting(false);
+      setTestFlash(ok ? "ok" : "fail");
+      if (flashTimer.current) window.clearTimeout(flashTimer.current);
+      flashTimer.current = window.setTimeout(() => setTestFlash(null), 2400);
     }
   };
 
@@ -129,7 +147,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
         <label className="form-field">
           <span>类型</span>
           <select value={acc.kind} onChange={(e) => changeKind(e.target.value as ProviderKind)}>
-            {["中转站", "官方"].map((group) => (
+            {kindGroups.map((group) => (
               <optgroup key={group} label={group}>
                 {PROVIDER_KINDS.filter((k) => k.group === group).map((k) => (
                   <option key={k.value} value={k.value}>
@@ -162,6 +180,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
               onChange={(e) => set({ apiKey: e.target.value })}
               placeholder="sk-...（走 /v1/dashboard/billing 接口）"
             />
+            <em className="field-hint">与访问令牌二选一；填了 Key 就改走 /v1/dashboard/billing 计费接口查询</em>
           </label>
         )}
 
@@ -189,6 +208,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
               onChange={(e) => set({ quotaPerUnit: Number(e.target.value) || null })}
               placeholder="默认 500000（1 美元对应的点数）"
             />
+            <em className="field-hint">站点点数 → 美元的换算比例，留空按 500000 点 = 1 美元计</em>
           </label>
         )}
 
@@ -207,7 +227,11 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
       )}
 
       <div className="form-actions">
-        <button className="btn ghost" onClick={handleTest} disabled={testing || !valid}>
+        <button
+          className={`btn ghost test-btn${testFlash ? ` ${testFlash}` : ""}`}
+          onClick={handleTest}
+          disabled={testing || !valid}
+        >
           {testing ? "测试中…" : "测试连接"}
         </button>
         <div className="spacer" />
