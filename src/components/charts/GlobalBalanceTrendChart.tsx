@@ -178,21 +178,5 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
   );
 }
 
-/** 供标题注明币种：与组件内部一致的选币逻辑（账号数最多的币种） */
-export function pickTrendCurrency(snapshots: BalanceSnapshot[]): string | null {
-  const byCurrency = new Map<string, Set<string>>();
-  for (const s of snapshots) {
-    const set = byCurrency.get(s.currency) ?? new Set<string>();
-    set.add(s.accountId);
-    byCurrency.set(s.currency, set);
-  }
-  let best: string | null = null;
-  let bestCount = 0;
-  for (const [cur, set] of byCurrency) {
-    if (set.size > bestCount) {
-      best = cur;
-      bestCount = set.size;
-    }
-  }
-  return best;
-}
+/** 供标题注明币种的选币逻辑已移至 shared.tsx（避免懒加载边界外泄 recharts） */
+export { pickTrendCurrency } from "./shared";

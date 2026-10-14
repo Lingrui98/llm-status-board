@@ -1002,6 +1002,27 @@ button.error-copy.copied .copy-hint {
   padding: 0 14px;
 }
 
+/* 懒加载图表的瞬时占位（本地磁盘 chunk，正常几乎不可见） */
+.chart-fallback {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 24px;
+}
+
+.chart-fallback-bar {
+  height: 10px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text-3) 18%, transparent);
+  width: 100%;
+}
+
+.chart-fallback-bar.short {
+  width: 62%;
+}
+
 /* 空态说明文字（可能是整句原因说明，居中换行） */
 .chart-empty-note {
   max-width: 100%;

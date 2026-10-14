@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import type { BalanceSnapshot } from "../../types";
 
 /** 是否开启「减弱动态效果」：recharts 的 JS 动画不受全局 CSS 媒体查询约束，需要组件层显式关闭 */
 export function usePrefersReducedMotion(): boolean {
@@ -40,6 +41,25 @@ export function ChartSection({ title, children }: { title: string; children: Rea
 
 export function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+/** 余额趋势图选币逻辑（账号数最多的币种）。放 shared 以便不唤起图表 chunk。 */
+export function pickTrendCurrency(snapshots: BalanceSnapshot[]): string | null {
+  const byCurrency = new Map<string, Set<string>>();
+  for (const s of snapshots) {
+    const set = byCurrency.get(s.currency) ?? new Set<string>();
+    set.add(s.accountId);
+    byCurrency.set(s.currency, set);
+  }
+  let best: string | null = null;
+  let bestCount = 0;
+  for (const [cur, set] of byCurrency) {
+    if (set.size > bestCount) {
+      best = cur;
+      bestCount = set.size;
+    }
+  }
+  return best;
 }
 
 /** 日期标签 MM-DD（容忍 "2026-10-10" / ISO / 其他字符串） */

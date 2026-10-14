@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountConfig, BalanceSnapshot, KeyValue, RefreshOutcome } from "../types";
 import { formatMoney, formatMoneyParts, formatNumber, formatTime, formatTimeAgo, kindLabel } from "../format";
-import DailyUsageChart from "./charts/DailyUsageChart";
-import ModelUsageChart from "./charts/ModelUsageChart";
+// recharts 图表统一走懒加载（拆出首屏主包）；QuotaWindowBars 纯 CSS 保持同步
+import {
+  LazyDailyUsageChart as DailyUsageChart,
+  LazyModelUsageChart as ModelUsageChart,
+  LazyBalanceTrendChart as BalanceTrendChart,
+  LazyBalanceBreakdownChart as BalanceBreakdownChart,
+  LazyTokenSplitChart as TokenSplitChart,
+} from "./charts/lazy";
 import QuotaWindowBars from "./charts/QuotaWindowBars";
-import BalanceTrendChart from "./charts/BalanceTrendChart";
-import BalanceBreakdownChart from "./charts/BalanceBreakdownChart";
-import TokenSplitChart from "./charts/TokenSplitChart";
 import { ChartSection } from "./charts/shared";
 import DetailDrawer from "./DetailDrawer";
 

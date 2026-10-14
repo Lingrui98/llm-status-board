@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import ProviderCard, { type FocusRequest } from "./ProviderCard";
 import SkeletonCard from "./SkeletonCard";
-import GlobalDailyUsageChart from "./charts/GlobalDailyUsageChart";
-import GlobalModelUsageChart from "./charts/GlobalModelUsageChart";
-import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalanceTrendChart";
-import CostBreakdownChart from "./charts/CostBreakdownChart";
+// recharts 图表统一懒加载（拆出首屏主包）
+import {
+  LazyGlobalDailyUsageChart as GlobalDailyUsageChart,
+  LazyGlobalModelUsageChart as GlobalModelUsageChart,
+  LazyGlobalBalanceTrendChart as GlobalBalanceTrendChart,
+  LazyCostBreakdownChart as CostBreakdownChart,
+  pickTrendCurrency,
+} from "./charts/lazy";
 import { ChartSection } from "./charts/shared";
 import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome } from "../types";
 import { formatDurationMs, formatTimeAgo } from "../format";
