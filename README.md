@@ -55,8 +55,10 @@ cd src-tauri && cargo test -- --ignored        # 真实网络集成测试（需�
 npm run tauri build
 ```
 
-Windows 出 NSIS 安装包（`src-tauri/target/release/bundle/nsis/*.exe`）；
+Windows 出 NSIS 安装包（`src-tauri/target/release/bundle/nsis/*-setup.exe`）；
 macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
+
+> **Windows 安装提示**：`setup.exe` 是当前用户（currentUser）安装模式——**保持默认安装路径**（`%LOCALAPPDATA%\LLM Status Board`）无需管理员权限。若手动把路径改到 `C:\Program Files`，需要右键「以管理员身份运行」安装器，否则会报「无法打开要写入的文件」。
 
 ### macOS 构建（GitHub Actions）
 
