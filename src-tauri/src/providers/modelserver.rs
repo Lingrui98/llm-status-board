@@ -10,14 +10,39 @@ use crate::jsonpath::{lookup_number, lookup_string};
 use crate::types::{AccountConfig, AccountInfo, KeyValue, Money};
 use serde_json::{json, Value};
 
+/// 站点地址归一化：
+/// - 补默认 scheme
+/// - 剥掉用户粘贴面板网址时带的路径（如 /projects/xxx）
+/// - 前端面板域（code. 开头）改写为 API 后端域（codeapi. 开头）——
+///   面板网页是纯静态 SPA，API 全部在 codeapi 子域上
+pub(crate) fn normalize_base(raw: &str) -> String {
+    let t = raw.trim().trim_end_matches('/');
+    let (scheme, rest) = match t.split_once("://") {
+        Some((s, r)) => (s, r),
+        None => ("https", t),
+    };
+    let host = rest.split('/').next().unwrap_or(rest);
+    let host = if let Some(stripped) = host.strip_prefix("code.") {
+        // 已是 codeapi. 的不动；其余 code. 域名改写为 codeapi.
+        format!("codeapi.{stripped}")
+    } else {
+        host.to_string()
+    };
+    format!("{scheme}://{host}")
+}
+
 pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
-    let base = acc.base();
+    let base = normalize_base(&acc.base_url);
     let mut access = acc.token.clone();
     let mut new_access: Option<String> = None;
     let mut new_refresh: Option<String> = None;
 
     if access.is_empty() && acc.refresh_token.is_empty() {
-        return Err("需要填写 refresh_token（或 access_token）".into());
+        return Err(
+            "请先在网页面板（code.cs.ac.cn）登录，然后 F12 → Application → Local Storage \
+             → 复制 refresh_token 的值填到下方「refresh_token」框"
+                .into(),
+        );
     }
 
     // 优先用 refresh_token 换新 access token（避免短期 access token 过期问题）
@@ -388,8 +413,41 @@ fn credit_price(data: &Value) -> Option<(f64, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::credit_price;
+    use super::{credit_price, normalize_base};
     use serde_json::json;
+
+    #[test]
+    fn test_normalize_base() {
+        // 前端面板域 → API 后端域
+        assert_eq!(
+            normalize_base("https://code.cs.ac.cn"),
+            "https://codeapi.cs.ac.cn"
+        );
+        // 粘贴的带路径面板网址 → 剥路径 + 换 API 域
+        assert_eq!(
+            normalize_base("https://code.cs.ac.cn/projects/7f8a635a-58c4-4140-ad37-2e9b3c0a56e4"),
+            "https://codeapi.cs.ac.cn"
+        );
+        // 已是 API 域的不动
+        assert_eq!(
+            normalize_base("https://codeapi.cs.ac.cn"),
+            "https://codeapi.cs.ac.cn"
+        );
+        assert_eq!(
+            normalize_base("https://codeapi.cs.ac.cn/"),
+            "https://codeapi.cs.ac.cn"
+        );
+        // 无 scheme 补 https；其他域只剥路径
+        assert_eq!(normalize_base("code.cs.ac.cn"), "https://codeapi.cs.ac.cn");
+        assert_eq!(
+            normalize_base("https://other.example.com/v1"),
+            "https://other.example.com"
+        );
+        assert_eq!(
+            normalize_base("other.example.com"),
+            "https://other.example.com"
+        );
+    }
 
     #[test]
     fn test_credit_price_cny_preferred() {

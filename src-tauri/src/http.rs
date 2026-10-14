@@ -56,9 +56,17 @@ pub async fn send_json(
         serde_json::Value::Null
     } else {
         serde_json::from_str(trimmed).map_err(|_| {
+            // 拿到 HTML 网页通常意味着填的是「前端面板网址」而不是 API 后端地址
+            let is_html =
+                trimmed.starts_with("<!doctype html") || trimmed.starts_with("<html");
+            let hint = if is_html {
+                "——响应是 HTML 网页而非 JSON，通常是把网页面板地址填进了站点地址，需要改成 API 后端地址"
+            } else {
+                ""
+            };
             format!(
-                "HTTP {status}: 响应不是 JSON: {}",
-                &trimmed[..trimmed.len().min(300)]
+                "HTTP {status}: 响应不是 JSON{hint}: {}",
+                &trimmed[..trimmed.len().min(200)]
             )
         })?
     };

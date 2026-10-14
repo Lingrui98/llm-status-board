@@ -144,6 +144,13 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
         <label className="form-field wide">
           <span>站点地址 (Base URL)</span>
           <input value={acc.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} />
+          {acc.kind === "modelServer" && (
+            <em className="field-hint">
+              填 API 后端地址 <code>https://codeapi.cs.ac.cn</code>（不是网页面板的
+              code.cs.ac.cn；填错了会自动纠正）。凭证取法：网页面板登录后 F12 →
+              Application → Local Storage → 复制 <code>refresh_token</code> 的值填到下方
+            </em>
+          )}
         </label>
 
         {(acc.kind === "oneApi" || acc.kind === "newApi") && (

@@ -307,18 +307,21 @@ async fn kimi_coding_usage(
         }
     };
     let (hk, hv) = http::bearer(key);
+    // 该端点仅对官方 CLI 的 User-Agent 开放（无此 UA 返回 404，社区多方实测）。
+    // 注意：Kimi 官方文档提示篡改客户端标识存在违规风险；此处仅用你自己的 key 做只读用量查询。
+    let headers = [(hk.as_str(), hv), ("User-Agent", "KimiCLI/1.6".to_string())];
     let v = http::send_json(
         client,
         "GET",
         &format!("{base}/coding/v1/usages"),
-        &[(hk.as_str(), hv)],
+        &headers,
         None,
     )
     .await
     .map_err(|e| {
-        // 404 常见于端点变更或 key 无权限；401 是 key 与平台不匹配
+        // 到这里说明 key 一定是 sk-kimi- 前缀（分流已保证），404 更多是端点/UA 问题而非 key 前缀问题
         format!(
-            "{e}。提示：Kimi 订阅（Kimi for Coding）需要 sk-kimi- 前缀的 key（www.kimi.com/code/console 生成）；普通开放平台 sk- key 走的是另一套计费体系，两者互不相通"
+            "{e}。提示：Kimi 订阅用量接口为未公开接口，仅对官方 CLI 客户端开放；若持续失败可能是接口已变更，可在卡片里展开「原始数据」查看响应内容"
         )
     })?;
 
