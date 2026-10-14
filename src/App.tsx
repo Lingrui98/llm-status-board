@@ -2,9 +2,22 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
 import CommandPalette from "./components/CommandPalette";
+import WelcomeGuide from "./components/WelcomeGuide";
+import HelpPanel from "./components/HelpPanel";
 import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
-import type { AppConfig, BalanceSnapshot, RefreshOutcome } from "./types";
+import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from "./types";
+
+/** localStorage 键：新手引导已关闭标记（桌面 WebView 的 localStorage 持久） */
+const GUIDE_DISMISSED_KEY = "lsb-guide-dismissed";
+
+function readGuideDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(GUIDE_DISMISSED_KEY) === "1";
+  } catch {
+    return false; // 存储不可用时每次都展示引导，不阻塞使用
+  }
+}
 
 type View = "dashboard" | "settings";
 
@@ -24,12 +37,46 @@ export default function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [history, setHistory] = useState<BalanceSnapshot[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  // 新手引导：accounts 为空 && 未跳过时自动出现；guideOpen 支持从帮助面板手动重开
+  const [guideDismissed, setGuideDismissed] = useState(readGuideDismissed);
+  const [guideOpen, setGuideOpen] = useState(false);
+  // 「去设置并添加账号（预选类型）」请求：nonce 判重，SettingsView 消费后经 onAddRequestHandled 清除
+  const [addRequest, setAddRequest] = useState<{ kind: ProviderKind; nonce: number } | null>(null);
   // 「跳转到账号」请求：nonce 判重，Dashboard 投递给匹配卡片后经 onFocusRequestHandled 清除
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const refreshTimer = useRef<number | null>(null);
   const refreshingRef = useRef(false);
 
   const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
+  const clearAddRequest = useCallback(() => setAddRequest(null), []);
+
+  // 关闭引导并持久化标记（跳过 / 完成 / ESC 共用）
+  const dismissGuide = useCallback(() => {
+    try {
+      window.localStorage.setItem(GUIDE_DISMISSED_KEY, "1");
+    } catch {
+      // 存储不可用时仅本次会话记住
+    }
+    setGuideDismissed(true);
+    setGuideOpen(false);
+  }, []);
+
+  // 引导/空状态「添加账号」：关引导 → 切设置 → 下发预选类型
+  const handleAddAccount = useCallback(
+    (kind: ProviderKind) => {
+      dismissGuide();
+      setAddRequest({ kind, nonce: Date.now() });
+      setView("settings");
+    },
+    [dismissGuide],
+  );
+
+  // 帮助面板「重新打开新手引导」
+  const handleReopenGuide = useCallback(() => {
+    setHelpOpen(false);
+    setGuideOpen(true);
+  }, []);
 
   // 命令面板「跳转到账号」：确保在看板视图后下发请求（卡片抽屉由 ProviderCard 自己打开）
   const handleFocusAccount = useCallback((accountId: string) => {
@@ -223,6 +270,9 @@ export default function App() {
             </svg>
             {refreshing ? "刷新中…" : "立即刷新"}
           </button>
+          <button className="btn ghost" onClick={() => setHelpOpen(true)}>
+            帮助
+          </button>
           <button
             className={"btn" + (view === "settings" ? " primary" : " ghost")}
             onClick={() => setView(view === "settings" ? "dashboard" : "settings")}
@@ -242,12 +292,17 @@ export default function App() {
           snapshots={history}
           focusRequest={focusRequest}
           onFocusRequestHandled={clearFocusRequest}
+          onGoSettings={() => setView("settings")}
+          onAddAccount={handleAddAccount}
+          onOpenHelp={() => setHelpOpen(true)}
         />
       ) : (
         <SettingsView
           config={config}
           onSave={handleSaveSettings}
           onRefresh={refresh}
+          addRequest={addRequest}
+          onAddRequestHandled={clearAddRequest}
         />
       )}
 
@@ -259,7 +314,15 @@ export default function App() {
           onRefresh={refresh}
           onNavigate={setView}
           onFocusAccount={handleFocusAccount}
+          onOpenHelp={() => setHelpOpen(true)}
         />
+      )}
+
+      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} onOpenGuide={handleReopenGuide} />}
+
+      {/* 首次启动引导：账号为空且未跳过，或被帮助面板手动重开；空状态文案保留在其下方（测试语义不变） */}
+      {(guideOpen || (config.accounts.length === 0 && !guideDismissed)) && (
+        <WelcomeGuide onDismiss={dismissGuide} onAddAccount={handleAddAccount} />
       )}
 
       <footer className="footer">

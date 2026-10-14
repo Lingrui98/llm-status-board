@@ -3,6 +3,7 @@ import type { AccountConfig, CustomQuery, ProviderKind } from "../types";
 import { PROVIDER_KINDS, DEFAULT_BASE_URLS } from "../types";
 import * as api from "../api";
 import { formatMoney, formatNumber } from "../format";
+import CredentialHelp from "./CredentialHelp";
 
 interface Props {
   initial: AccountConfig;
@@ -71,6 +72,8 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
   // 「测试连接」按钮本身的瞬时反馈（成功绿/失败红描边，2.4s 后消退）
   const [testFlash, setTestFlash] = useState<"ok" | "fail" | null>(null);
   const flashTimer = useRef<number | null>(null);
+  // 「怎么获取凭证？」折叠面板（内容随类型切换）
+  const [credHelpOpen, setCredHelpOpen] = useState(false);
 
   const authFields = useMemo(() => AUTH_FIELDS[acc.kind] ?? [], [acc.kind]);
   // 类型下拉分组：从 PROVIDER_KINDS 派生，保证组名/顺序与表格徽章等口径一致
@@ -134,6 +137,25 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
 
   return (
     <div className="account-form">
+      <div className="form-help-bar">
+        <button
+          type="button"
+          className="link-btn cred-help-toggle"
+          onClick={() => setCredHelpOpen((v) => !v)}
+          aria-expanded={credHelpOpen}
+        >
+          <svg className="chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          {credHelpOpen ? "收起凭证教程" : "怎么获取凭证？"}
+        </button>
+        <span className="muted small">不知道令牌 / Key 从哪来，点这里看当前类型的获取步骤</span>
+      </div>
+      {credHelpOpen && (
+        <div className="form-cred-help">
+          <CredentialHelp kind={acc.kind} />
+        </div>
+      )}
       <div className="form-grid">
         <label className="form-field">
           <span>名称 *</span>

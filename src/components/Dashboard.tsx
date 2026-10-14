@@ -6,7 +6,7 @@ import GlobalModelUsageChart from "./charts/GlobalModelUsageChart";
 import GlobalBalanceTrendChart, { pickTrendCurrency } from "./charts/GlobalBalanceTrendChart";
 import CostBreakdownChart from "./charts/CostBreakdownChart";
 import { ChartSection } from "./charts/shared";
-import type { AppConfig, BalanceSnapshot, Money, RefreshOutcome } from "../types";
+import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome } from "../types";
 import { formatTimeAgo } from "../format";
 
 interface Props {
@@ -20,6 +20,12 @@ interface Props {
   focusRequest?: FocusRequest | null;
   /** 请求已投递给匹配卡片后调用，App 据此清除请求（防重挂载复开） */
   onFocusRequestHandled?: () => void;
+  /** 空状态步骤 ①：跳转设置页 */
+  onGoSettings?: () => void;
+  /** 空状态步骤 ②：去设置添加账号（预选类型） */
+  onAddAccount?: (kind: ProviderKind) => void;
+  /** 空状态步骤 ③：打开帮助面板（凭证教程） */
+  onOpenHelp?: () => void;
 }
 
 function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
@@ -34,7 +40,7 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
@@ -88,14 +94,29 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
             <li>
               <span className="step-num">1</span>
               点击右上角「设置」
+              {onGoSettings && (
+                <button type="button" className="link-btn empty-step-action" onClick={onGoSettings}>
+                  去设置 →
+                </button>
+              )}
             </li>
             <li>
               <span className="step-num">2</span>
               「+ 添加账号」，选择提供商类型
+              {onAddAccount && (
+                <button type="button" className="link-btn empty-step-action" onClick={() => onAddAccount("newApi")}>
+                  直接添加 →
+                </button>
+              )}
             </li>
             <li>
               <span className="step-num">3</span>
               填入 Base URL 与密钥，保存后返回看板
+              {onOpenHelp && (
+                <button type="button" className="link-btn empty-step-action" onClick={onOpenHelp}>
+                  凭证教程 →
+                </button>
+              )}
             </li>
           </ol>
         </div>

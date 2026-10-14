@@ -2186,3 +2186,289 @@ code {
     background: var(--bg-3);
   }
 }
+
+/* ---------- 新手引导（WelcomeGuide）：居中卡片浮层，z 高于抽屉/命令面板 ---------- */
+.guide-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: drawer-fade 0.18s ease;
+}
+
+.guide-panel {
+  width: 580px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 72px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  animation: palette-in 0.18s var(--ease-out);
+}
+
+.guide-panel:focus {
+  outline: none; /* tabIndex=-1 的初始聚焦，仅作焦点落点，不画轮廓 */
+}
+
+.guide-head {
+  padding: 20px 24px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.guide-head h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.guide-body {
+  padding: 14px 24px 6px;
+  overflow-y: auto;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+.guide-body p {
+  margin: 0 0 10px;
+  line-height: 1.7;
+}
+
+.guide-kind-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px 18px;
+  border-top: 1px solid var(--border);
+  margin-top: 10px;
+  flex-shrink: 0;
+}
+
+.guide-dots {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.guide-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 99px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  transition: width 0.18s var(--ease-out), background 0.18s var(--ease-out);
+}
+
+.guide-dot.active {
+  width: 18px;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+/* ---------- 凭证获取帮助（CredentialHelp） ---------- */
+.cred-help {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg-1) 65%, transparent);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cred-help-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cred-need {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.cred-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.65;
+}
+
+.cred-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.6;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+
+.copy-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copy-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.copy-label {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.copy-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.copy-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.copy-btn.copied {
+  color: var(--ok);
+}
+
+.copy-btn.copied:hover {
+  background: var(--ok-soft);
+}
+
+/* ---------- 表单内「怎么获取凭证？」入口 ---------- */
+.form-help-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.cred-help-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -6px; /* 视觉对齐表单左缘（抵消 link-btn 内边距） */
+}
+
+.cred-help-toggle .chevron {
+  transition: transform 0.18s var(--ease-out);
+}
+
+.cred-help-toggle[aria-expanded="false"] .chevron {
+  transform: rotate(-90deg);
+}
+
+.form-cred-help {
+  margin-bottom: 14px;
+  animation: charts-in 0.2s var(--ease-out);
+}
+
+/* ---------- 帮助面板（HelpPanel，复用 drawer 骨架） ---------- */
+.help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.help-section h4 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.help-section-note {
+  margin: 0;
+}
+
+.help-kbd-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.help-kbd-table td {
+  padding: 7px 8px 7px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: middle;
+}
+
+.help-kbd-table tr:last-child td {
+  border-bottom: none;
+}
+
+.help-kbd-cell {
+  white-space: nowrap;
+  width: 1%;
+  padding-right: 14px;
+}
+
+.help-select {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  max-width: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.help-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.help-cred {
+  align-self: stretch;
+}
+
+.help-about p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+
+/* ---------- 空状态步骤的可执行动作（右端链接按钮） ---------- */
+.empty-step-action {
+  margin-left: auto;
+  flex-shrink: 0;
+}

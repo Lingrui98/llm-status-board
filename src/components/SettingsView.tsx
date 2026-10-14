@@ -8,9 +8,13 @@ interface Props {
   config: AppConfig;
   onSave: (config: AppConfig) => Promise<void>;
   onRefresh: () => Promise<void>;
+  /** 外部「添加账号（预选类型）」请求（新手引导 / 空状态步骤），nonce 判重 */
+  addRequest?: { kind: ProviderKind; nonce: number } | null;
+  /** 请求被消费后调用，App 据此清除（防重挂载复开表单） */
+  onAddRequestHandled?: () => void;
 }
 
-export default function SettingsView({ config, onSave, onRefresh }: Props) {
+export default function SettingsView({ config, onSave, onRefresh, addRequest, onAddRequestHandled }: Props) {
   const [accounts, setAccounts] = useState<AccountConfig[]>(config.accounts);
   const [autoRefreshSec, setAutoRefreshSec] = useState(config.settings.autoRefreshSec);
   const [refreshOnStart, setRefreshOnStart] = useState(config.settings.refreshOnStart);
@@ -45,8 +49,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
     }
   };
 
-  const addAccount = () => {
-    const kind: ProviderKind = "newApi";
+  const addAccount = (kind: ProviderKind = "newApi") => {
     setEditing({
       id: newAccountId(),
       name: "",
@@ -62,6 +65,15 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
       custom: null,
     });
   };
+
+  // 消费外部「添加账号（预选类型）」请求：打开表单后通知 App 清除，避免切视图重挂载时复开
+  useEffect(() => {
+    if (addRequest) {
+      addAccount(addRequest.kind);
+      onAddRequestHandled?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addRequest, onAddRequestHandled]);
 
   const upsertAccount = (acc: AccountConfig) => {
     setAccounts((prev) => {
@@ -157,7 +169,7 @@ export default function SettingsView({ config, onSave, onRefresh }: Props) {
       <div className="settings-header">
         <h2>账号管理</h2>
         <div className="settings-actions">
-          <button className="btn ghost" onClick={addAccount}>
+          <button className="btn ghost" onClick={() => addAccount()}>
             + 添加账号
           </button>
           <button className="btn ghost" onClick={() => onRefresh()} title="先用当前已保存的配置刷新一次">

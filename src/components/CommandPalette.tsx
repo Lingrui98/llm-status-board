@@ -12,9 +12,10 @@ interface Props {
   onRefresh: () => void;
   onNavigate: (view: View) => void;
   onFocusAccount: (accountId: string) => void;
+  onOpenHelp: () => void;
 }
 
-type IconKind = "refresh" | "settings" | "board" | "account";
+type IconKind = "refresh" | "settings" | "board" | "account" | "help";
 
 interface Cmd {
   id: string;
@@ -63,6 +64,14 @@ function CmdIcon({ kind }: { kind: IconKind }) {
           <path d="M3 13.4c.8-2.4 2.8-3.6 5-3.6s4.2 1.2 5 3.6" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
         </svg>
       );
+    case "help":
+      return (
+        <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="6.2" stroke="currentColor" strokeWidth="1.5" fill="none" />
+          <path d="M6.2 6.2c0-1 0.8-1.8 1.8-1.8s1.8 0.8 1.8 1.8c0 1.3-1.8 1.5-1.8 2.8" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+          <circle cx="8" cy="11.4" r="0.9" fill="currentColor" />
+        </svg>
+      );
   }
 }
 
@@ -72,7 +81,7 @@ function CmdIcon({ kind }: { kind: IconKind }) {
  * 焦点始终留在搜索框，↑↓ 仅移动"活动项"，因此 Tab 天然无需循环陷阱（拦截即可）。
  * 与 DetailDrawer 同样做：ESC 关闭、遮罩点击关闭、焦点还原、背景滚动锁定。
  */
-export default function CommandPalette({ view, accounts, onClose, onRefresh, onNavigate, onFocusAccount }: Props) {
+export default function CommandPalette({ view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp }: Props) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -114,6 +123,16 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
               onNavigate("dashboard");
             },
           },
+      {
+        id: "open-help",
+        group: "操作",
+        label: "打开帮助（快捷键 / 凭证教程）",
+        icon: "help",
+        run: () => {
+          onClose();
+          onOpenHelp();
+        },
+      },
     ];
     accounts.forEach((a, i) => {
       // 前 9 个账号与全局数字键 1-9 一一对应（App 层绑定）
@@ -130,7 +149,7 @@ export default function CommandPalette({ view, accounts, onClose, onRefresh, onN
       });
     });
     return list;
-  }, [view, accounts, onClose, onRefresh, onNavigate, onFocusAccount]);
+  }, [view, accounts, onClose, onRefresh, onNavigate, onFocusAccount, onOpenHelp]);
 
   // 即时过滤：简单 includes（大小写不敏感）
   const q = query.trim().toLowerCase();
