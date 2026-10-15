@@ -1457,6 +1457,51 @@ button.error-copy.copied .copy-hint {
   font-size: 13px;
 }
 
+/* 自动保存状态指示（占据原「保存全部」按钮位置：所有变更即时落盘，无需手动保存） */
+.save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+  min-height: 28px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+.save-status-saving {
+  color: var(--text-2);
+}
+
+.save-status-saved {
+  color: var(--ok);
+}
+
+.save-status-error {
+  color: var(--err);
+}
+
+.save-status-err {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-status .link-btn {
+  padding: 2px 6px;
+}
+
+/* aria-disabled 的链接按钮（排序到边界：视觉置灰但保持可聚焦，连续点击焦点不丢失） */
+.link-btn[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.link-btn[aria-disabled="true"]:hover {
+  background: none;
+}
+
 .config-path code {
   font-size: 11px;
   word-break: break-all;

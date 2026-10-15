@@ -1,26 +1,40 @@
 import { useEffect, useState } from "react";
-import type { AccountConfig, AppConfig, CustomQuery, KeyValue, ProviderKind } from "../types";
+import type { AccountConfig, AppConfig, ProviderKind, Settings } from "../types";
 import { PROVIDER_KINDS, DEFAULT_BASE_URLS, newAccountId } from "../types";
+import { moveAccount } from "../configMerge";
 import AccountForm from "./AccountForm";
 import * as api from "../api";
 
 interface Props {
   config: AppConfig;
-  onSave: (config: AppConfig) => Promise<void>;
+  /** 任何配置变更立即调用（App 层乐观生效 + 防抖自动落盘），无手动保存按钮 */
+  onSave: (config: AppConfig) => void;
+  /** 「刷新数据」：App 会先把待保存变更落盘再刷新 */
   onRefresh: () => Promise<void>;
   /** 外部「添加账号（预选类型）」请求（新手引导 / 空状态步骤），nonce 判重 */
   addRequest?: { kind: ProviderKind; nonce: number } | null;
   /** 请求被消费后调用，App 据此清除（防重挂载复开表单） */
   onAddRequestHandled?: () => void;
+  /** 自动保存状态（App 层驱动）：saving / saved（短暂浮现）/ error（可重试） */
+  saveState: "idle" | "saving" | "saved" | "error";
+  saveError?: string;
+  onRetrySave?: () => void;
 }
 
-export default function SettingsView({ config, onSave, onRefresh, addRequest, onAddRequestHandled }: Props) {
-  const [accounts, setAccounts] = useState<AccountConfig[]>(config.accounts);
-  const [autoRefreshSec, setAutoRefreshSec] = useState(config.settings.autoRefreshSec);
-  const [refreshOnStart, setRefreshOnStart] = useState(config.settings.refreshOnStart);
-  const [proxy, setProxy] = useState(config.settings.proxy ?? "");
+export default function SettingsView({
+  config,
+  onSave,
+  onRefresh,
+  addRequest,
+  onAddRequestHandled,
+  saveState,
+  saveError,
+  onRetrySave,
+}: Props) {
+  // 不再持有本地草稿：列表/通用设置全部直接读写 config（App 层 state），
+  // 每次变更经 onSave 走自动保存通道 —— 不存在「忘了点保存」的状态
+  const accounts = config.accounts;
   const [editing, setEditing] = useState<AccountConfig | null>(null); // null=列表, {}=新增
-  const [saving, setSaving] = useState(false);
   const [savedTip, setSavedTip] = useState("");
   const [cfgPath, setCfgPath] = useState<string>("");
 
@@ -33,21 +47,9 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
     window.setTimeout(() => setSavedTip(""), 2500);
   };
 
-  const handleSaveAll = async () => {
-    setSaving(true);
-    try {
-      await onSave({
-        ...config,
-        accounts,
-        settings: { autoRefreshSec, refreshOnStart, proxy: proxy.trim() || null },
-      });
-      showTip("已保存");
-    } catch (e) {
-      showTip(`保存失败：${String(e)}`);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const updateAccounts = (next: AccountConfig[]) => onSave({ ...config, accounts: next });
+  const updateSettings = (patch: Partial<Settings>) =>
+    onSave({ ...config, settings: { ...config.settings, ...patch } });
 
   const addAccount = (kind: ProviderKind = "newApi") => {
     setEditing({
@@ -76,28 +78,32 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
   }, [addRequest, onAddRequestHandled]);
 
   const upsertAccount = (acc: AccountConfig) => {
-    setAccounts((prev) => {
-      const i = prev.findIndex((a) => a.id === acc.id);
-      if (i >= 0) {
-        const copy = [...prev];
-        copy[i] = acc;
-        return copy;
-      }
-      return [...prev, acc];
-    });
+    const i = accounts.findIndex((a) => a.id === acc.id);
+    if (i >= 0) {
+      const copy = [...accounts];
+      copy[i] = acc;
+      updateAccounts(copy);
+    } else {
+      updateAccounts([...accounts, acc]);
+    }
     setEditing(null);
   };
 
   const removeAccount = (id: string) => {
-    setAccounts((prev) => prev.filter((a) => a.id !== id));
+    updateAccounts(accounts.filter((a) => a.id !== id));
   };
 
   const toggleEnabled = (id: string) => {
-    setAccounts((prev) => prev.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)));
+    updateAccounts(accounts.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)));
   };
 
   const duplicateAccount = (acc: AccountConfig) => {
-    setAccounts((prev) => [...prev, { ...acc, id: newAccountId(), name: acc.name + " 副本" }]);
+    updateAccounts([...accounts, { ...acc, id: newAccountId(), name: acc.name + " 副本" }]);
+  };
+
+  const move = (id: string, dir: -1 | 1) => {
+    const next = moveAccount(accounts, id, dir);
+    if (next !== accounts) updateAccounts(next);
   };
 
   // 表格行键盘导航：↑↓ 在行间移动焦点，Enter/Space 打开编辑（仅当焦点在行本身，不拦截行内按钮的原生行为）
@@ -128,17 +134,14 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
   const handleImport = async () => {
     // 注意：不能用 window.confirm —— macOS WKWebView 下它不弹窗且返回 undefined
     const confirmed = await api.confirmDialog(
-      "导入会替换通用设置，账号按 ID 合并（同 ID 覆盖、新 ID 追加），当前未保存的编辑会丢失。继续？",
+      "导入会替换通用设置，账号按 ID 合并（同 ID 覆盖、新 ID 追加），导入后立即自动保存。继续？",
     );
     if (!confirmed) return;
     try {
       const path = await api.pickImportPath();
       if (!path) return;
       const merged = await api.importConfig(path);
-      setAccounts(merged.accounts);
-      setAutoRefreshSec(merged.settings.autoRefreshSec);
-      setRefreshOnStart(merged.settings.refreshOnStart);
-      setProxy(merged.settings.proxy ?? "");
+      onSave(merged); // 走自动保存通道（乐观生效 + 防抖落盘）
       showTip(`已导入 ${merged.accounts.length} 个账号`);
     } catch (e) {
       showTip(`导入失败：${String(e)}`);
@@ -172,7 +175,7 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
           <button className="btn ghost" onClick={() => addAccount()}>
             + 添加账号
           </button>
-          <button className="btn ghost" onClick={() => onRefresh()} title="先用当前已保存的配置刷新一次">
+          <button className="btn ghost" onClick={() => onRefresh()} title="先把当前配置落盘，再刷新一次数据">
             刷新数据
           </button>
           <button className="btn ghost" onClick={handleImport} title="从导出的配置文件合并账号（跨设备迁移）">
@@ -181,9 +184,22 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
           <button className="btn ghost" onClick={handleExport} title="导出全部账号与设置（含 API Key）">
             导出配置
           </button>
-          <button className="btn primary" onClick={handleSaveAll} disabled={saving}>
-            {saving ? "保存中…" : "保存全部"}
-          </button>
+          {/* 原「保存全部」按钮 → 自动保存状态指示器（所有变更即时落盘，无需手动保存） */}
+          <span className={`save-status save-status-${saveState}`} role="status" aria-live="polite">
+            {saveState === "saving" && "保存中…"}
+            {saveState === "saved" && "✓ 已自动保存"}
+            {saveState === "idle" && <span className="muted">变更会自动保存</span>}
+            {saveState === "error" && (
+              <>
+                <span className="save-status-err" title={saveError}>
+                  保存失败{saveError ? `：${saveError}` : ""}
+                </span>
+                <button type="button" className="link-btn" onClick={onRetrySave}>
+                  重试
+                </button>
+              </>
+            )}
+          </span>
         </div>
       </div>
 
@@ -213,7 +229,7 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
               </tr>
             </thead>
             <tbody>
-              {accounts.map((a) => {
+              {accounts.map((a, index) => {
                 const kindMeta = PROVIDER_KINDS.find((k) => k.value === a.kind);
                 const authLabel = a.token
                   ? "Token"
@@ -224,6 +240,9 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
                       : a.custom
                         ? "自定义"
                         : null;
+                const displayName = a.name || "未命名账号";
+                const atTop = index === 0;
+                const atBottom = index === accounts.length - 1;
                 return (
                   <tr
                     key={a.id}
@@ -238,7 +257,7 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
                         className="switch"
                         checked={a.enabled}
                         onChange={() => toggleEnabled(a.id)}
-                        aria-label={`启用 ${a.name || "未命名账号"}`}
+                        aria-label={`启用 ${displayName}`}
                         title={a.enabled ? "点击停用" : "点击启用"}
                       />
                     </td>
@@ -255,6 +274,27 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
                       {authLabel ? <span className="badge badge-auth">{authLabel}</span> : <span className="muted">—</span>}
                     </td>
                     <td className="cell-actions">
+                      {/* 上移/下移：aria-disabled 而非 disabled，边界时仍可聚焦（连续操作焦点不丢失） */}
+                      <button
+                        type="button"
+                        className="link-btn"
+                        aria-disabled={atTop}
+                        aria-label={`上移 ${displayName}（当前第 ${index + 1} 位）`}
+                        title={atTop ? "已在最前" : "上移一位"}
+                        onClick={() => !atTop && move(a.id, -1)}
+                      >
+                        上移
+                      </button>
+                      <button
+                        type="button"
+                        className="link-btn"
+                        aria-disabled={atBottom}
+                        aria-label={`下移 ${displayName}（当前第 ${index + 1} 位）`}
+                        title={atBottom ? "已在最后" : "下移一位"}
+                        onClick={() => !atBottom && move(a.id, 1)}
+                      >
+                        下移
+                      </button>
                       <button className="link-btn" onClick={() => setEditing(a)}>
                         编辑
                       </button>
@@ -276,7 +316,7 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
       {accounts.length > 0 && (
         <p className="muted small table-kbd-hint">
           提示：<kbd>Tab</kbd> 聚焦行后 <kbd>↑</kbd>
-          <kbd>↓</kbd> 移动，<kbd>Enter</kbd> 编辑；行内按钮仍可 Tab 直达。
+          <kbd>↓</kbd> 移动，<kbd>Enter</kbd> 编辑；「上移 / 下移」调整看板卡片顺序，全部变更自动保存。
         </p>
       )}
 
@@ -289,8 +329,8 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
             min={0}
             max={86400}
             className="input-compact"
-            value={autoRefreshSec}
-            onChange={(e) => setAutoRefreshSec(Number(e.target.value))}
+            value={config.settings.autoRefreshSec}
+            onChange={(e) => updateSettings({ autoRefreshSec: Number(e.target.value) })}
           />
         </label>
         <label className="setting-row">
@@ -298,15 +338,15 @@ export default function SettingsView({ config, onSave, onRefresh, addRequest, on
           <input
             type="checkbox"
             className="switch"
-            checked={refreshOnStart}
-            onChange={(e) => setRefreshOnStart(e.target.checked)}
+            checked={config.settings.refreshOnStart}
+            onChange={(e) => updateSettings({ refreshOnStart: e.target.checked })}
           />
         </label>
         <label className="setting-row column">
           <span>网络代理（可选，全部查询共用）</span>
           <input
-            value={proxy}
-            onChange={(e) => setProxy(e.target.value)}
+            value={config.settings.proxy ?? ""}
+            onChange={(e) => updateSettings({ proxy: e.target.value || null })}
             placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空则不走代理"
           />
         </label>

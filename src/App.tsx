@@ -9,6 +9,7 @@ import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from "./types";
 import { formatDurationMs } from "./format";
+import { mergeRotatedTokens } from "./configMerge";
 import {
   DEFAULT_NOTIFY_THRESHOLDS,
   computeProblemNotifications,
@@ -70,6 +71,17 @@ export default function App() {
   // 刷新开始时间戳（performance.now 单调时钟，不受系统时间调整影响）
   const refreshStartRef = useRef<number | null>(null);
 
+  // ---------- 自动保存（设置页任何变更立即乐观生效，防抖 400ms 落盘） ----------
+  // persistedConfigRef：我们认知中磁盘上的配置（上次成功保存/加载的值），作为 token 轮换合并的基准快照
+  // pendingSaveRef：防抖期间用户最新一次待保存的配置；savingRef：save_config IPC 是否进行中
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState("");
+  const persistedConfigRef = useRef<AppConfig | null>(null);
+  const pendingSaveRef = useRef<AppConfig | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const savingRef = useRef(false);
+  const savedFadeTimerRef = useRef<number | null>(null);
+
   // 通知中心：面板开关 + 已读映射（localStorage 持久化）+ 「已恢复」瞬时记录
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifRead, setNotifRead] = useState<NotificationReadMap>(loadReadMap);
@@ -126,6 +138,7 @@ export default function App() {
     try {
       const c = await api.getConfig();
       configRef.current = c;
+      persistedConfigRef.current = c;
       setConfig(c);
       setLoadError(null);
       return c;
@@ -237,40 +250,102 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [view, paletteOpen, config]);
 
-  const handleSaveSettings = useCallback(
-    async (newConfig: AppConfig) => {
-      // 合并后台轮转的 token：如果用户没改这个字段，而磁盘上的值已被刷新轮转更新，采用磁盘最新值
-      let toSave = newConfig;
+  // 把 pendingSaveRef 里的最新配置落盘（串行执行；token 轮换合并语义与原「保存全部」一致，
+  // 但基准用 persistedConfigRef（上次持久化值）而非 UI 态——乐观更新下 UI 态已是新值，不能作基准）
+  const flushSave = useCallback(async () => {
+    if (savingRef.current) return; // 上一次保存还在进行，结束后由 finally 接力
+    const next = pendingSaveRef.current;
+    if (!next || next === persistedConfigRef.current) return;
+    savingRef.current = true;
+    pendingSaveRef.current = null;
+    if (savedFadeTimerRef.current) {
+      window.clearTimeout(savedFadeTimerRef.current);
+      savedFadeTimerRef.current = null;
+    }
+    setSaveState("saving");
+    try {
+      let toSave = next;
       try {
+        // 每次落盘前重新拉磁盘最新配置做合并：refresh_all 刚轮换的 token 不会被旧值覆盖
         const disk = await api.getConfig();
-        toSave = {
-          ...newConfig,
-          accounts: newConfig.accounts.map((a) => {
-            const d = disk.accounts.find((x) => x.id === a.id);
-            const orig = config?.accounts.find((x) => x.id === a.id);
-            if (!d || !orig) return a;
-            const merged = { ...a };
-            if (a.token === orig.token && d.token && d.token !== orig.token) {
-              merged.token = d.token;
-            }
-            if (
-              (a.refreshToken ?? "") === (orig.refreshToken ?? "") &&
-              (d.refreshToken ?? "") !== (orig.refreshToken ?? "")
-            ) {
-              merged.refreshToken = d.refreshToken;
-            }
-            return merged;
-          }),
-        };
+        toSave = mergeRotatedTokens(next, persistedConfigRef.current, disk);
       } catch {
         // 磁盘读取失败就用用户输入的
       }
+      // 代理地址仅落盘时修剪空白（输入过程保留原样，不打断键入）
+      toSave = { ...toSave, settings: { ...toSave.settings, proxy: toSave.settings.proxy?.trim() || null } };
       await api.saveConfig(toSave);
-      configRef.current = toSave;
-      setConfig(toSave);
+      persistedConfigRef.current = toSave;
+      // 保存期间用户没有新编辑：把合并结果（可能含轮换后的新 token）同步进 UI 态；
+      // 有新编辑则不动 UI（用户的更新版本已在 pending/后续 flush 中处理）
+      if (configRef.current === next) {
+        configRef.current = toSave;
+        setConfig(toSave);
+      }
+      setSaveState("saved");
+      // 「已自动保存」短暂浮现后淡回 idle
+      savedFadeTimerRef.current = window.setTimeout(() => {
+        setSaveState((s) => (s === "saved" ? "idle" : s));
+        savedFadeTimerRef.current = null;
+      }, 2200);
+    } catch (e) {
+      setSaveError(String(e));
+      setSaveState("error");
+    } finally {
+      savingRef.current = false;
+      // 保存期间又有新变更：短延迟后接力落盘
+      if (pendingSaveRef.current && pendingSaveRef.current !== persistedConfigRef.current) {
+        saveTimerRef.current = window.setTimeout(() => {
+          saveTimerRef.current = null;
+          void flushSave();
+        }, 150);
+      }
+    }
+  }, []);
+
+  // 设置页统一入口：任何变更立即乐观生效（看板/快捷键/命令面板同步看到），400ms 防抖后落盘
+  const handleSaveSettings = useCallback(
+    (newConfig: AppConfig) => {
+      configRef.current = newConfig;
+      setConfig(newConfig);
+      pendingSaveRef.current = newConfig;
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
+        void flushSave();
+      }, 400);
     },
-    [config],
+    [flushSave],
   );
+
+  // 立即落盘（设置页「刷新数据」前先保证磁盘是最新配置；保存失败重试也走这里）
+  const flushSaveNow = useCallback(async () => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    await flushSave();
+  }, [flushSave]);
+
+  const handleRetrySave = useCallback(() => {
+    // 失败时 pending 已被消费，用当前 UI 配置重试（用户看到的就是要保存的）
+    if (configRef.current) pendingSaveRef.current = configRef.current;
+    void flushSaveNow();
+  }, [flushSaveNow]);
+
+  // 设置页「刷新数据」：先把待保存的变更落盘，再用最新配置刷新
+  const handleSettingsRefresh = useCallback(async () => {
+    await flushSaveNow();
+    await refresh();
+  }, [flushSaveNow, refresh]);
+
+  // 卸载时清理自动保存定时器
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+      if (savedFadeTimerRef.current) window.clearTimeout(savedFadeTimerRef.current);
+    };
+  }, []);
 
   // ---------- 通知推导（纯前端，从 refresh / get_last_results 的结果计算，不动 IPC 逻辑） ----------
 
@@ -500,9 +575,12 @@ export default function App() {
         <SettingsView
           config={config}
           onSave={handleSaveSettings}
-          onRefresh={refresh}
+          onRefresh={handleSettingsRefresh}
           addRequest={addRequest}
           onAddRequestHandled={clearAddRequest}
+          saveState={saveState}
+          saveError={saveError}
+          onRetrySave={handleRetrySave}
         />
       )}
 

@@ -131,7 +131,7 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
             </li>
             <li>
               <span className="step-num">3</span>
-              填入 Base URL 与密钥，保存后返回看板
+              填入 Base URL 与密钥，确定即自动保存，返回看板
               {onOpenHelp && (
                 <button type="button" className="link-btn empty-step-action" onClick={onOpenHelp}>
                   凭证教程 →
