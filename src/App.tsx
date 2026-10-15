@@ -12,13 +12,16 @@ import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from ".
 import { formatDurationMs } from "./format";
 import { mergeRotatedTokens } from "./configMerge";
 import {
-  DEFAULT_NOTIFY_THRESHOLDS,
   computeProblemNotifications,
   diffRecovered,
   filterActiveRecovered,
+  filterAlertsDisabled,
+  isAlertKind,
+  isNotifyEnabled,
   loadReadMap,
   mergeRecovered,
   pruneReadMap,
+  resolveNotifyThresholds,
   saveReadMap,
   type AppNotification,
   type NotificationReadMap,
@@ -363,23 +366,35 @@ export default function App() {
     [statuses, accountNames],
   );
 
-  // 问题类通知（余额不足 / 刷新失败 / 配额将满）+ 当前问题键集合
-  const problemResult = useMemo(
-    () => computeProblemNotifications(visibleOutcomes, accountNames, DEFAULT_NOTIFY_THRESHOLDS, lastRefreshAt ?? undefined),
-    [visibleOutcomes, accountNames, lastRefreshAt],
-  );
+  // 问题类通知（余额不足 / 刷新失败 / 配额将满）+ 当前问题键集合。
+  // R14：阈值从配置派生（旧配置缺字段 → 默认值）；总开关关闭时只丢弃提醒类，刷新失败保留。
+  const problemResult = useMemo(() => {
+    const result = computeProblemNotifications(
+      visibleOutcomes,
+      accountNames,
+      resolveNotifyThresholds(config?.settings),
+      lastRefreshAt ?? undefined,
+    );
+    return isNotifyEnabled(config?.settings) ? result : filterAlertsDisabled(result);
+  }, [visibleOutcomes, accountNames, lastRefreshAt, config?.settings]);
 
   // 恢复检测：上轮有、本轮消失且账号本轮刷新成功 → 追加一条「已恢复」（首轮不比）
+  // R14 终审 D-3：关闭提醒总开关时，提醒类问题键会从本轮集合里被清掉，
+  // 若照常比对就会凭空产生「已恢复」通知（其实只是用户关了开关）。这里用 shouldRecover
+  // 把提醒类排除在恢复检测之外 —— 这是 D-3 的**唯一修复点**，其余逻辑保持不变。
+  const alertsEnabled = isNotifyEnabled(config?.settings);
   useEffect(() => {
     const prev = prevProblemKeys.current;
     const cur = problemResult.problemKeys;
     if (prev !== null) {
       const okIds = new Set(visibleOutcomes.filter((o) => o.ok).map((o) => o.accountId));
-      const newly = diffRecovered(prev, cur, okIds, accountNames);
+      const newly = diffRecovered(prev, cur, okIds, accountNames, undefined, (kind) =>
+        alertsEnabled || !isAlertKind(kind),
+      );
       if (newly.length > 0) setRecoveredNotes((rs) => mergeRecovered(rs, newly));
     }
     prevProblemKeys.current = cur;
-  }, [problemResult, visibleOutcomes, accountNames]);
+  }, [problemResult, visibleOutcomes, accountNames, alertsEnabled]);
 
   // 可见通知 = 当前问题 + 仍有效的恢复（问题复发时对应恢复记录被剔除），按时间倒序
   const notifications = useMemo(() => {

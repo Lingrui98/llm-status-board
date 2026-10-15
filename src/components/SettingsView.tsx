@@ -3,6 +3,9 @@ import type { AccountConfig, AppConfig, ProviderKind, Settings } from "../types"
 import { PROVIDER_KINDS, DEFAULT_BASE_URLS, newAccountId } from "../types";
 import { moveAccount } from "../configMerge";
 import AccountForm from "./AccountForm";
+import ThresholdSlider from "./ui/ThresholdSlider";
+import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notifications";
+import { exportUsageCsv } from "../exportReport";
 import * as api from "../api";
 
 interface Props {
@@ -21,6 +24,24 @@ interface Props {
   onRetrySave?: () => void;
 }
 
+/**
+ * R14 设置校验：阈值/窗口越界或非整数一律拒绝落盘，返回可读中文原因。
+ * 判定用非法值优先：组件层面已钳制，这里是「保存前最后一道闸」（AC-9）。
+ */
+export function validateSettings(settings: Settings): { ok: true } | { ok: false; message: string } {
+  const { notifyLowBalanceUsd: usd, notifyLowBalanceCny: cny, notifyQuotaPercent: quota, insightWindowDays: days } =
+    settings;
+  if (usd != null && (!Number.isFinite(usd) || usd < 0 || usd > 10000))
+    return { ok: false, message: "低余额提醒阈值（USD）需在 0–10000 之间" };
+  if (cny != null && (!Number.isFinite(cny) || cny < 0 || cny > 100000))
+    return { ok: false, message: "低余额提醒阈值（CNY）需在 0–100000 之间" };
+  if (quota != null && (!Number.isFinite(quota) || quota < 1 || quota > 100 || !Number.isInteger(quota)))
+    return { ok: false, message: "配额用量提醒线需为 1–100 的整数" };
+  if (days != null && (!Number.isFinite(days) || days < 3 || days > 90 || !Number.isInteger(days)))
+    return { ok: false, message: "洞察统计窗口需为 3–90 的整数天" };
+  return { ok: true };
+}
+
 export default function SettingsView({
   config,
   onSave,
@@ -37,6 +58,9 @@ export default function SettingsView({
   const [editing, setEditing] = useState<AccountConfig | null>(null); // null=列表, {}=新增
   const [savedTip, setSavedTip] = useState("");
   const [cfgPath, setCfgPath] = useState<string>("");
+  const [exportBusy, setExportBusy] = useState(false);
+  // R14：提醒阈值（配置已解析出默认值，供滑块直接受控使用）
+  const alerts = resolveAlertSettings(config.settings);
 
   useEffect(() => {
     api.configPath().then(setCfgPath).catch(() => {});
@@ -48,8 +72,14 @@ export default function SettingsView({
   };
 
   const updateAccounts = (next: AccountConfig[]) => onSave({ ...config, accounts: next });
-  const updateSettings = (patch: Partial<Settings>) =>
-    onSave({ ...config, settings: { ...config.settings, ...patch } });
+
+  // R14：任何设置变更先过校验（阈值越界 / 非整数一律拒绝落盘，AC-9）
+  const updateSettings = (patch: Partial<Settings>) => {
+    const nextSettings: Settings = { ...config.settings, ...patch };
+    const result = validateSettings(nextSettings);
+    if (result.ok) onSave({ ...config, settings: nextSettings });
+    else showTip(`保存失败：${result.message}`);
+  };
 
   const addAccount = (kind: ProviderKind = "newApi") => {
     setEditing({
@@ -117,6 +147,24 @@ export default function SettingsView({
     } else if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
       e.preventDefault();
       setEditing(acc);
+    }
+  };
+
+  // 报表导出：按需拉取历史快照与上次结果（设置页不常驻这些数据，避免额外 props 传递）
+  const handleExportCsv = async () => {
+    setExportBusy(true);
+    try {
+      const [snapshots, outcomes] = await Promise.all([api.getHistory(), api.getLastResults()]);
+      const result = await exportUsageCsv(config.accounts, outcomes, snapshots, {
+        accountIds: config.accounts.filter((a) => a.enabled).map((a) => a.id),
+      });
+      if (result.status === "cancelled") return;
+      if (result.status === "error") showTip(`报表导出失败：${result.message}`);
+      else showTip(`已导出 ${result.rowCount} 行到 ${result.path}`);
+    } catch (e) {
+      showTip(`报表导出失败：${String(e)}`);
+    } finally {
+      setExportBusy(false);
     }
   };
 
@@ -366,6 +414,79 @@ export default function SettingsView({
           访问 OpenAI 等境外官方接口通常需要代理；中转站和国内厂商一般直连即可。
           API Key / Token 只保存在本机配置文件中，不会上传到任何服务器（查询请求直连各提供商）。
         </p>
+      </div>
+
+      {/* R14：提醒与洞察 —— 阈值从硬编码改为可配置，改动即时自动保存并在下一轮刷新生效 */}
+      <div className="settings-section">
+        <h3>提醒与洞察</h3>
+        <label className="setting-row">
+          <span>启用余额 / 配额提醒</span>
+          <input
+            type="checkbox"
+            className="switch"
+            checked={alerts.enabled}
+            onChange={(e) => updateSettings({ notifyEnabled: e.target.checked })}
+          />
+        </label>
+        <p className="muted small">
+          关闭后不再产生「余额不足」「配额将满」提醒；「刷新失败」属于事实状态，始终保留。通知阈值改动在下一轮刷新即生效。
+        </p>
+
+        <ThresholdSlider
+          label="低余额提醒阈值（USD 及其他法币）"
+          value={alerts.lowBalanceUsd}
+          min={0}
+          max={10000}
+          step={10}
+          unit="USD"
+          hint="低于该余额时提醒"
+          disabled={!alerts.enabled}
+          onChange={(v) => updateSettings({ notifyLowBalanceUsd: v })}
+        />
+        <ThresholdSlider
+          label="低余额提醒阈值（CNY）"
+          value={alerts.lowBalanceCny}
+          min={0}
+          max={100000}
+          step={10}
+          unit="CNY"
+          hint="独立于 USD 阈值，不做汇率换算"
+          disabled={!alerts.enabled}
+          onChange={(v) => updateSettings({ notifyLowBalanceCny: v })}
+        />
+        <ThresholdSlider
+          label="配额用量提醒线"
+          value={alerts.quotaPercent}
+          min={1}
+          max={100}
+          step={1}
+          unit="%"
+          hint="配额窗口用量达到该比例时提醒"
+          disabled={!alerts.enabled}
+          onChange={(v) => updateSettings({ notifyQuotaPercent: v })}
+        />
+        <ThresholdSlider
+          label="洞察统计窗口"
+          value={alerts.insightWindowDays}
+          min={3}
+          max={90}
+          step={1}
+          unit="天"
+          hint="看板洞察区用最近多少天的快照估算日均消耗"
+          onChange={(v) => updateSettings({ insightWindowDays: v })}
+        />
+
+        <div className="settings-actions insights-export-row">
+          <button
+            className="btn ghost"
+            onClick={handleExportCsv}
+            disabled={exportBusy}
+            title="导出各账号每日用量与余额快照（CSV，含 UTF-8 BOM，Excel 可直接打开）"
+          >
+            {exportBusy ? "导出中…" : "导出用量 CSV"}
+          </button>
+          <span className="muted small">列：账号 / 类型 / 币种 / 日期 / 花费 / 请求数 / Token / 余额快照</span>
+        </div>
       </div>
     </main>
   );

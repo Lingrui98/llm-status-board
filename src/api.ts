@@ -34,6 +34,20 @@ export async function getHistory(): Promise<BalanceSnapshot[]> {
   return invoke<BalanceSnapshot[]>("get_history");
 }
 
+/// R14 用量报表：弹保存对话框选 CSV 路径（用户取消返回 null）
+export async function pickCsvExportPath(defaultName: string): Promise<string | null> {
+  return save({
+    title: "导出用量报表（CSV）",
+    defaultPath: defaultName,
+    filters: [{ name: "CSV", extensions: ["csv"] }],
+  });
+}
+
+/// R14 用量报表：写盘（Rust 侧原子写入；内容含 UTF-8 BOM 与 RFC 4180 转义，均在前端生成）
+export async function exportCsv(path: string, content: string): Promise<void> {
+  return invoke("export_csv", { path, content });
+}
+
 export async function configPath(): Promise<string> {
   return invoke<string>("config_path");
 }

@@ -3,7 +3,12 @@
   "settings": {
     "autoRefreshSec": 0,
     "refreshOnStart": true,
-    "proxy": null
+    "proxy": null,
+    "notifyEnabled": true,
+    "notifyLowBalanceUsd": 1,
+    "notifyLowBalanceCny": 7,
+    "notifyQuotaPercent": 85,
+    "insightWindowDays": 14
   },
   "accounts": [
     {

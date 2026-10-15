@@ -2981,3 +2981,455 @@ button.notif-jump:focus-visible .notif-jump-hint {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* ============================================================
+   R14 设计系统原语（src/components/ui/）与洞察区布局
+   色彩全部引用现有变量（--bg-1 凹槽 / --bg-3 轨道、ok/warn/err 语义色），
+   暗/亮主题经变量自动覆盖，本区块不出现任何硬编码颜色。
+   动效只用过渡（无关键帧/无限动画），已被上方
+   prefers-reduced-motion 全局规则（transition-duration: 0.01ms）统一降级。
+   ============================================================ */
+
+/* ---------- 洞察区布局（供 Dashboard 集成：StatTile 网格 + 空态） ---------- */
+.insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+/* 无历史数据时的洞察区占位：与 .chart-empty 同一视觉语言（虚线框 + muted 文案） */
+.insights-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 64px;
+  padding: 0 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+/* 洞察区「注意」摘要条（round-14-plan §1.4：消耗最快账号，按 daysLeft 分级着色）：
+   默认=普通信息色；daysLeft ≤ 7 加 .warn；≤ 3 加 .err。
+   着色复用现有 soft 徽章语言（--warn-soft/--err-soft + 同色描边），无动画。 */
+.insights-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.insights-notice.warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  color: var(--warn);
+}
+
+.insights-notice.err {
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+  color: var(--err);
+}
+
+/* ---------- StatTile：洞察指标磁贴（卡面渐变/悬浮反馈与 .card 同源） ---------- */
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, var(--bg-2), color-mix(in srgb, var(--bg-2) 86%, var(--bg)));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), transform 0.18s var(--ease-out);
+}
+
+.stat-tile:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.stat-tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 小字标签：与 .balance-label 同节奏（11px / 大间距 / 三级灰） */
+.stat-tile-label {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-tile-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+
+.stat-tile-trend.ok {
+  color: var(--ok);
+}
+
+.stat-tile-trend.warn {
+  color: var(--warn);
+}
+
+.stat-tile-trend.err {
+  color: var(--err);
+}
+
+.stat-tile-body {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* 磁贴大数字：层级略低于卡片主余额 27px，保持同一排版语言 */
+.stat-tile-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-tile-value.ok {
+  color: var(--ok);
+}
+
+.stat-tile-value.warn {
+  color: var(--warn);
+}
+
+.stat-tile-value.err {
+  color: var(--err);
+}
+
+/* 占位符 "—"：不参与语义着色，恒为三级灰 */
+.stat-tile-value.placeholder {
+  color: var(--text-3);
+}
+
+/* 单位后缀：与 .balance-currency 同思路（小一号、muted、跟随基线） */
+.stat-tile-unit {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.stat-tile-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+
+/* 底部插槽（通常放 MiniSparkline） */
+.stat-tile-extra {
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  min-height: 0;
+}
+
+/* ---------- MiniSparkline：纯 SVG 迷你趋势线 ---------- */
+.spark {
+  display: block;
+  overflow: visible;
+  flex-shrink: 0;
+}
+
+.spark-line {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.spark-line.accent {
+  stroke: var(--accent);
+}
+
+.spark-line.ok {
+  stroke: var(--ok);
+}
+
+.spark-line.warn {
+  stroke: var(--warn);
+}
+
+.spark-line.err {
+  stroke: var(--err);
+}
+
+.spark-fill.accent {
+  fill: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.spark-fill.ok {
+  fill: color-mix(in srgb, var(--ok) 14%, transparent);
+}
+
+.spark-fill.warn {
+  fill: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+.spark-fill.err {
+  fill: color-mix(in srgb, var(--err) 14%, transparent);
+}
+
+.spark-dot.accent {
+  fill: var(--accent);
+}
+
+.spark-dot.ok {
+  fill: var(--ok);
+}
+
+.spark-dot.warn {
+  fill: var(--warn);
+}
+
+.spark-dot.err {
+  fill: var(--err);
+}
+
+/* 空态占位：虚线横条感，与 .insights-empty / .chart-empty 同源 */
+.spark-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------- ThresholdSlider：阈值设置控件（滑块 + 数字输入联动） ---------- */
+.threshold {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 8px 0;
+}
+
+/* 与 .disabled-row 同一降级（45% 透明） */
+.threshold.disabled {
+  opacity: 0.45;
+}
+
+.threshold-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.threshold-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.threshold-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: right;
+}
+
+.threshold-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 轨道：4px 凹槽（--bg-3），已选段用主色填充，比例由组件写 --ts-fill 驱动 */
+.threshold-range {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent) var(--ts-fill, 0%), var(--bg-3) var(--ts-fill, 0%));
+  cursor: pointer;
+  outline-offset: 3px;
+}
+
+.threshold-range:disabled {
+  cursor: not-allowed;
+}
+
+/* 拇指：白心主色描边，与 .switch 圆点（--on-accent）同一语言 */
+.threshold-range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--on-accent);
+  border: 2px solid var(--accent);
+  transition: transform 0.15s var(--ease-out), box-shadow 0.15s ease;
+}
+
+.threshold-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--on-accent);
+  border: 2px solid var(--accent);
+  transition: transform 0.15s var(--ease-out), box-shadow 0.15s ease;
+}
+
+.threshold-range:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.threshold-range:hover:not(:disabled)::-moz-range-thumb {
+  transform: scale(1.15);
+}
+
+.threshold-range:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.threshold-range:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.threshold-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 数字输入：与 .setting-row input 同一质感（深底 / 强边 / 聚焦主色光晕） */
+.threshold-number {
+  width: 76px;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.threshold-number:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 隐藏原生步进箭头（步进由滑块与钳制逻辑负责） */
+.threshold-number::-webkit-outer-spin-button,
+.threshold-number::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.threshold-unit {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+/* 超量程如实告知（R14 终审 D-4）：配置值合法但超出滑块几何量程。
+   沿用现有 soft 徽章语言（--warn-soft 底 + 同色描边 + 同色文字，同 .insights-notice.warn），
+   静态元素、无动画，reduced-motion 无需额外降级；
+   左对齐整行（不复用 .threshold-hint 的右对齐，那是标签行辅助文本）。 */
+.threshold-notice {
+  display: block;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ---------- SegmentedControl：分段切换（凹槽 --bg-1，选中浮层 --bg-3） ---------- */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+
+.segmented-option {
+  position: relative;
+  display: flex;
+}
+
+.segmented-text {
+  display: block;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s var(--ease-out), background 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
+}
+
+.segmented-option:hover .segmented-text {
+  color: var(--text-2);
+}
+
+/* 选中态：与现有选中行（bg-3 + 强边 + 主文本）一致 */
+.segmented-option.checked .segmented-text {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* 焦点环画在可见的 text 上（真实 input 是 .sr-only） */
+.segmented-option:has(:focus-visible) .segmented-text {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.segmented-option:has(input:disabled) .segmented-text {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

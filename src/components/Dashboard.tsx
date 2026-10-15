@@ -10,6 +10,7 @@ import {
   pickTrendCurrency,
 } from "./charts/lazy";
 import { ChartSection } from "./charts/shared";
+import InsightsPanel from "./InsightsPanel";
 import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome } from "../types";
 import { formatDurationMs, formatTimeAgo } from "../format";
 
@@ -196,6 +197,14 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
           )}
         </div>
       </div>
+
+      {/* R14 洞察区：可折叠。内部计算完全来自 history 快照，与本区块的 hasStats 判据解耦 */}
+      <InsightsPanel
+        accounts={config.accounts}
+        statuses={statuses}
+        snapshots={snapshots}
+        settings={config.settings}
+      />
 
       {hasStats && (
         <section className="global-stats">

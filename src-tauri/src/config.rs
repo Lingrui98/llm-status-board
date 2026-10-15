@@ -94,6 +94,29 @@ pub fn load_history(path: &Path) -> Result<Vec<BalanceSnapshot>, String> {
     serde_json::from_str(&text).map_err(|e| format!("历史文件格式错误: {e}"))
 }
 
+/// 原子写入「任意字节」（R14 `export_csv` 用）：先写临时文件再 rename，避免写一半损坏文件。
+///
+/// **原样落盘**：不做编码转换、不裁剪、不去除 BOM（CSV 的 UTF-8 BOM 由前端写进 content）。
+/// 返回写入字节数，便于调用方/测试核对。
+pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<usize, String> {
+    if path.as_os_str().to_string_lossy().trim().is_empty() {
+        return Err("导出路径为空".into());
+    }
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            fs::create_dir_all(dir).map_err(|e| format!("创建导出目录失败: {e}"))?;
+        }
+    }
+    // 临时文件名沿用 save_results 的 `<完整名>.tmp` 约定（不替换扩展名，
+    // 避免与用户目录里同名的 xxx.tmp 冲突）
+    let mut tmp_os = path.as_os_str().to_os_string();
+    tmp_os.push(".tmp");
+    let tmp = Path::new(&tmp_os);
+    fs::write(tmp, bytes).map_err(|e| format!("写入文件失败: {e}"))?;
+    fs::rename(tmp, path).map_err(|e| format!("替换文件失败: {e}"))?;
+    Ok(bytes.len())
+}
+
 pub fn load(app: &tauri::AppHandle) -> Result<AppConfig, String> {
     load_from_path(&config_file_path(app)?)
 }
@@ -331,6 +354,121 @@ mod tests {
         fs::write(&path, "###").unwrap();
         let err = load_results(&path).expect_err("损坏结果应报错");
         assert!(err.contains("结果文件格式错误"), "错误应可读: {err}");
+        let _ = fs::remove_file(&path);
+    }
+
+    /// R14 AC-8：旧 config.json（没有 5 个新字段）必须无迁移直接加载；
+    /// 保存后新字段落盘，且 load_from_path 往返一致
+    #[test]
+    fn test_legacy_config_without_r14_fields_loads() {
+        let path = temp_config_path("legacy-r14");
+        // 第十三轮及更早版本写出的配置：settings 里没有任何 R14 字段
+        let legacy = r#"{
+            "version": 1,
+            "settings": { "autoRefreshSec": 0, "refreshOnStart": true, "proxy": null, "closeToTray": null },
+            "accounts": [
+                { "id": "old-1", "name": "旧账号", "kind": "sub2Api", "enabled": true,
+                  "baseUrl": "https://relay.example.com", "apiKey": "sk-old", "token": "",
+                  "refreshToken": "", "userId": null, "username": "", "password": "",
+                  "quotaPerUnit": null, "custom": null }
+            ]
+        }"#;
+        fs::write(&path, legacy).unwrap();
+
+        let cfg = load_from_path(&path).expect("旧配置必须可加载");
+        assert_eq!(cfg.accounts.len(), 1);
+        assert_eq!(cfg.accounts[0].id, "old-1");
+        // None = 前端按默认阈值工作（true / 1 / 7 / 85 / 14）
+        assert_eq!(cfg.settings.notify_enabled, None);
+        assert_eq!(cfg.settings.notify_low_balance_usd, None);
+        assert_eq!(cfg.settings.notify_low_balance_cny, None);
+        assert_eq!(cfg.settings.notify_quota_percent, None);
+        assert_eq!(cfg.settings.insight_window_days, None);
+        assert!(crate::types::validate_settings(&cfg.settings).is_ok());
+
+        // 设置页改阈值 → 保存 → 新字段落盘 → 读回一致
+        let mut edited = cfg;
+        edited.settings.notify_enabled = Some(false);
+        edited.settings.notify_low_balance_usd = Some(10.0);
+        edited.settings.notify_quota_percent = Some(90.0);
+        edited.settings.insight_window_days = Some(30);
+        save_to_path(&path, &edited).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"notifyLowBalanceUsd\": 10.0"),
+            "实际: {text}"
+        );
+        assert!(text.contains("\"insightWindowDays\": 30"));
+        assert!(
+            !text.contains("notify_low_balance_usd"),
+            "不得写 snake_case"
+        );
+
+        let back = load_from_path(&path).unwrap();
+        assert_eq!(back.settings.notify_enabled, Some(false));
+        assert_eq!(back.settings.notify_low_balance_usd, Some(10.0));
+        assert_eq!(back.settings.notify_quota_percent, Some(90.0));
+        assert_eq!(back.settings.insight_window_days, Some(30));
+        // 旧账号数据不受影响
+        assert_eq!(back.accounts[0].api_key, "sk-old");
+        let _ = fs::remove_file(&path);
+    }
+
+    /// R14 `export_csv` 的写入路径：原子落盘、BOM 与内容逐字节保留
+    #[test]
+    fn test_write_bytes_atomic_preserves_bom_byte_for_byte() {
+        let path = temp_config_path("export-csv").with_file_name("llm-usage.csv");
+        let _ = fs::remove_file(&path);
+
+        // 前端 buildUsageCsv 的产物：BOM + 中文表头 + 含逗号/引号的转义字段 + CRLF
+        let content =
+            "\u{feff}账号名称,账号类型,币种,日期,当日花费,当日请求数,当日Token,当日余额快照\r\n\
+                       \"中转站, 主号\",\"new-api 系中转\",USD,2026-10-15,1.5,7,1234,10.25\r\n";
+        let n = write_bytes_atomic(&path, content.as_bytes()).unwrap();
+        assert_eq!(n, content.len());
+
+        let raw = fs::read(&path).unwrap();
+        assert_eq!(&raw[..3], &[0xEF, 0xBB, 0xBF], "首字节必须是 UTF-8 BOM");
+        assert_eq!(
+            String::from_utf8(raw).unwrap(),
+            content,
+            "必须原样落盘，不得加工/裁剪"
+        );
+        assert!(
+            !path.with_file_name("llm-usage.csv.tmp").exists(),
+            "不应残留临时文件"
+        );
+
+        // 覆写已存在文件也应成功（rename 覆盖）
+        let n2 = write_bytes_atomic(&path, b"\xEF\xBB\xBFx").unwrap();
+        assert_eq!(n2, 4);
+        assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFx");
+
+        // 临时文件名是 `<完整名>.tmp`，不会覆盖同目录里扩展名被替换后的同名文件
+        let decoy = path.with_extension("tmp");
+        fs::write(&decoy, "decoy").unwrap();
+        write_bytes_atomic(&path, "\u{feff}second".as_bytes()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&decoy).unwrap(),
+            "decoy",
+            "不得覆盖他人文件"
+        );
+        assert!(!path.with_file_name("llm-usage.csv.tmp").exists());
+        let _ = fs::remove_file(&decoy);
+
+        // 空路径：可读错误而不是 panic
+        let err = write_bytes_atomic(Path::new(""), b"x").expect_err("空路径应报错");
+        assert!(err.contains("导出路径为空"), "错误应可读: {err}");
+
+        // 父目录不存在时自动创建（与 save_results 一致）
+        let nested = temp_config_path("export-nested")
+            .with_file_name("sub")
+            .join("deep")
+            .join("out.csv");
+        write_bytes_atomic(&nested, "\u{feff}ok".as_bytes()).unwrap();
+        assert!(nested.exists(), "应自动创建父目录");
+        let _ = fs::remove_file(&nested);
         let _ = fs::remove_file(&path);
     }
 }

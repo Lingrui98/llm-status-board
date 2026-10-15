@@ -2,7 +2,9 @@
 // 全部为纯函数（localStorage 读写有 try/catch 兜底），便于单测。
 
 import { formatDecimal } from "./format";
-import type { QuotaWindow, RefreshOutcome } from "./types";
+import type { QuotaWindow, RefreshOutcome, Settings } from "./types";
+// credits/CNY 币种集与「跳过」判定是语义而非阈值，与洞察模块共用同一份定义（避免两处漂移）
+import { isCnyCurrency, normalizeCurrency, resolveInsightWindowDays, shouldSkipCurrency } from "./insights";
 
 /** 通知类型：余额不足 / 刷新失败 / 配额将满 / 已恢复（低优先级） */
 export type NotificationKind = "lowBalance" | "refreshError" | "quotaFull" | "recovered";
@@ -51,11 +53,78 @@ export const DEFAULT_NOTIFY_THRESHOLDS: NotifyThresholds = {
   quotaPercent: 85,
 };
 
-/** 额度/点数类单位不是法币，低余额提醒对它们无意义，直接跳过 */
-const SKIP_CURRENCIES = new Set(["CREDITS", "CREDIT"]);
+/**
+ * R14：把可选设置解析为可直接使用的阈值（旧配置缺字段 → 默认值）。
+ * 非法数值（非有限、超界、配额不在 (0,100]）一律回退默认值 —— 配置可能被手工编辑。
+ */
+export function resolveNotifyThresholds(settings?: Settings | null): NotifyThresholds {
+  const fallback = DEFAULT_NOTIFY_THRESHOLDS;
+  const num = (v: number | null | undefined, def: number, min: number, max: number): number =>
+    typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? v : def;
+  return {
+    lowBalanceUsd: num(settings?.notifyLowBalanceUsd, fallback.lowBalanceUsd, 0, 10000),
+    lowBalanceCny: num(settings?.notifyLowBalanceCny, fallback.lowBalanceCny, 0, 100000),
+    quotaPercent: num(settings?.notifyQuotaPercent, fallback.quotaPercent, 1, 100),
+  };
+}
 
-/** 人民币币种的常见写法 */
-const CNY_CURRENCIES = new Set(["CNY", "RMB", "CNH"]);
+/** R14：提醒总开关；缺省（undefined/null）视为开启，保证旧配置行为不变 */
+export function isNotifyEnabled(settings?: Settings | null): boolean {
+  return settings?.notifyEnabled ?? true;
+}
+
+/** R14：可配置化的提醒阈值（含总开关），供设置面板直接编辑 */
+export interface ResolvedAlertSettings extends NotifyThresholds {
+  enabled: boolean;
+  /** 洞察统计窗口（天），同时供 insights.ts 使用 */
+  insightWindowDays: number;
+}
+
+/** R14：设置 → 生效中的提醒配置（唯一解析入口，设置面板与通知计算共用） */
+export function resolveAlertSettings(settings?: Settings | null): ResolvedAlertSettings {
+  return {
+    ...resolveNotifyThresholds(settings),
+    enabled: isNotifyEnabled(settings),
+    insightWindowDays: resolveInsightWindowDays(settings),
+  };
+}
+
+/**
+ * 提醒口径的优先级：USD 阈值 → 其他法币，CNY 币种集 → CNY 阈值。
+ * 非法币单位（credits 等点数）返回 null，表示不适用低余额提醒。
+ */
+export function balanceThresholdFor(currency: string, thresholds: NotifyThresholds): number | null {
+  const cur = normalizeCurrency(currency);
+  if (shouldSkipCurrency(cur)) return null;
+  return isCnyCurrency(cur) ? thresholds.lowBalanceCny : thresholds.lowBalanceUsd;
+}
+
+/** 提醒线只作用于余额/配额两类「提醒」，刷新失败是事实，不受总开关影响 */
+export function isAlertKind(kind: NotificationKind): boolean {
+  return kind === "lowBalance" || kind === "quotaFull";
+}
+
+/**
+ * R14：总开关关闭时丢弃提醒类通知与对应问题键（refreshError 保留）。
+ * 一并过滤问题键是必要的：恢复检测以问题键为基准，若问题键残留，
+ * 重新开启开关后会凭空产生一批「已恢复」通知。
+ */
+export function filterAlertsDisabled(result: {
+  notifications: AppNotification[];
+  problemKeys: Set<string>;
+}): { notifications: AppNotification[]; problemKeys: Set<string> } {
+  return {
+    notifications: result.notifications.filter((n) => !isAlertKind(n.kind)),
+    problemKeys: new Set([...result.problemKeys].filter((k) => !isAlertProblemKey(k))),
+  };
+}
+
+function isAlertProblemKey(key: string): boolean {
+  const ref = parseProblemKey(key);
+  return ref !== null && isAlertKind(ref.kind);
+}
+
+/** 额度/点数类单位不是法币，低余额提醒对它们无意义，直接跳过（定义见 insights.ts#shouldSkipCurrency） */
 
 /** 问题键：`${kind}:${accountId}`，作为当前异常集合的元素与恢复检测的比对单位 */
 export function problemKey(kind: NotificationKind, accountId: string): string {
@@ -122,22 +191,20 @@ export function computeProblemNotifications(
     // a) 余额不足：法币按币种阈值判断；credits 等点数单位跳过
     const b = info.balance;
     if (b) {
-      const cur = b.currency.toUpperCase();
-      if (!SKIP_CURRENCIES.has(cur)) {
-        const threshold = CNY_CURRENCIES.has(cur) ? thresholds.lowBalanceCny : thresholds.lowBalanceUsd;
-        if (b.amount < threshold) {
-          problemKeys.add(problemKey("lowBalance", o.accountId));
-          notifications.push({
-            id: problemKey("lowBalance", o.accountId),
-            kind: "lowBalance",
-            accountId: o.accountId,
-            accountName: name,
-            title: KIND_LABELS.lowBalance,
-            detail: `当前余额 ${formatDecimal(b.amount)} ${b.currency}，低于提醒阈值 ${formatDecimal(threshold)} ${CNY_CURRENCIES.has(cur) ? "CNY" : "USD"}`,
-            at,
-            severity: "warn",
-          });
-        }
+      const threshold = balanceThresholdFor(b.currency, thresholds);
+      if (threshold !== null && b.amount < threshold) {
+        const isCny = isCnyCurrency(b.currency);
+        problemKeys.add(problemKey("lowBalance", o.accountId));
+        notifications.push({
+          id: problemKey("lowBalance", o.accountId),
+          kind: "lowBalance",
+          accountId: o.accountId,
+          accountName: name,
+          title: KIND_LABELS.lowBalance,
+          detail: `当前余额 ${formatDecimal(b.amount)} ${b.currency}，低于提醒阈值 ${formatDecimal(threshold)} ${isCny ? "CNY" : "USD"}`,
+          at,
+          severity: "warn",
+        });
       }
     }
 
@@ -171,6 +238,9 @@ export function computeProblemNotifications(
  * 恢复检测：上一轮存在、本轮消失的问题键 → 「已恢复」通知（绿色、低优先级）。
  * 仅当该账号本轮确实刷新成功（okAccountIds）才生成 —— 账号被删除/禁用时
  * 问题键也会消失，但那不是「恢复」，静默丢弃即可。
+ *
+ * R14 终审 D-3：可选的 `shouldRecover` 判定用于排除「问题是因为用户关掉提醒开关才消失」
+ * 的情况 —— 那不是恢复，不该提示「提醒已解除」。默认（不传）保持原行为，旧调用方不受影响。
  */
 export function diffRecovered(
   prevKeys: Iterable<string>,
@@ -178,12 +248,14 @@ export function diffRecovered(
   okAccountIds: ReadonlySet<string>,
   names: Record<string, string>,
   now: string = new Date().toISOString(),
+  shouldRecover: (kind: NotificationKind) => boolean = () => true,
 ): AppNotification[] {
   const out: AppNotification[] = [];
   for (const key of prevKeys) {
     if (curKeys.has(key)) continue;
     const ref = parseProblemKey(key);
     if (!ref || !okAccountIds.has(ref.accountId)) continue;
+    if (!shouldRecover(ref.kind)) continue;
     out.push({
       id: `${RECOVERED_PREFIX}${key}`,
       kind: "recovered",

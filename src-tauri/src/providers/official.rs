@@ -46,106 +46,6 @@ fn encode_uri_component(s: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::encode_uri_component;
-
-    /// Kimi 订阅形态 C（2026-09/10 起）：usages{limit_5h:{used_ratio,reset_time},...}
-    #[test]
-    fn test_kimi_parse_form_c() {
-        let v = serde_json::json!({
-            "usages": {
-                "limit_5h": { "used_ratio": 0.35, "reset_time": "2026-10-15T02:00:00Z" },
-                "limit_7d": { "used_ratio": 0.52 },
-                "limit_month_code": { "used_ratio": 0.61 },
-                "limit_month_total": { "used_ratio": 0.48 }
-            }
-        });
-        // 验证 ratio 百分比换算与 reset_time 提取
-        let pct = |path: &str| crate::jsonpath::lookup_number(&v, path).map(|r| r * 100.0);
-        assert_eq!(pct("usages.limit_5h.used_ratio"), Some(35.0));
-        assert_eq!(pct("usages.limit_month_code.used_ratio"), Some(61.0));
-        assert_eq!(
-            crate::jsonpath::lookup_string(&v, "usages.limit_5h.reset_time"),
-            Some("2026-10-15T02:00:00Z".into())
-        );
-    }
-
-    /// Kimi 订阅形态 A/B：usage(周配额) + limits[](5h) + parallel + boosterWallet
-    #[test]
-    fn test_kimi_parse_form_ab() {
-        let v = serde_json::json!({
-            "usage": { "limit": 300, "used": 90, "remaining": 210, "resetTime": "2026-10-16T00:00:00Z" },
-            "limits": [
-                { "window": { "duration": 5, "timeUnit": "HOUR" },
-                  "detail": { "used": 40, "limit": 200, "resetTime": "2026-10-14T16:00:00Z" } }
-            ],
-            "parallel": { "limit": 20 },
-            "boosterWallet": { "balance": { "type": "BOOSTER", "amount": 500, "amountLeft": 350 } },
-            "user": { "membership": { "level": "pro" } }
-        });
-        // 周配额
-        assert_eq!(
-            crate::jsonpath::lookup_number(&v, "usage.remaining"),
-            Some(210.0)
-        );
-        let limit = crate::jsonpath::lookup_number(&v, "usage.limit").unwrap_or(0.0);
-        let used = crate::jsonpath::lookup_number(&v, "usage.used").unwrap_or(0.0);
-        assert_eq!((used / limit * 100.0) as i64, 30);
-        // 5h 窗口识别（duration=5 + HOUR）
-        let l = &v["limits"][0];
-        assert_eq!(
-            crate::jsonpath::lookup_number(l, "window.duration"),
-            Some(5.0)
-        );
-        assert_eq!(
-            crate::jsonpath::lookup_string(l, "window.timeUnit").as_deref(),
-            Some("HOUR")
-        );
-        assert_eq!(crate::jsonpath::lookup_number(l, "detail.used"), Some(40.0));
-        // 并发 / 加油包 / 等级
-        assert_eq!(
-            crate::jsonpath::lookup_number(&v, "parallel.limit"),
-            Some(20.0)
-        );
-        assert_eq!(
-            crate::jsonpath::lookup_number(&v, "boosterWallet.balance.amountLeft"),
-            Some(350.0)
-        );
-        assert_eq!(
-            crate::jsonpath::lookup_string(&v, "user.membership.level").as_deref(),
-            Some("pro")
-        );
-    }
-
-    /// Kimi key 前缀分流逻辑
-    #[test]
-    fn test_kimi_key_prefix_routing() {
-        // sk-kimi- → 订阅端点（api.kimi.com）；其他 → 开放平台 balance
-        assert!("sk-kimi-abc123".starts_with("sk-kimi-"));
-        assert!(!"sk-abc123".starts_with("sk-kimi-"));
-        // base 域名修正：开放平台域名会被替换为订阅域名
-        let b = "https://api.moonshot.cn";
-        let fixed = if b.contains("api.kimi.com") || b.contains("api.kimi.ai") {
-            b.to_string()
-        } else {
-            "https://api.kimi.com".to_string()
-        };
-        assert_eq!(fixed, "https://api.kimi.com");
-    }
-
-    #[test]
-    fn test_encode_uri_component() {
-        assert_eq!(encode_uri_component("abc123-_."), "abc123-_.");
-        // 空格、&、=、+ 等会被编码
-        assert_eq!(encode_uri_component("a b"), "a%20b");
-        assert_eq!(encode_uri_component("a&b=c"), "a%26b%3Dc");
-        assert_eq!(encode_uri_component("pg+_cursor/"), "pg%2B_cursor%2F");
-        // 中文字节全部编码
-        assert_eq!(encode_uri_component("密"), "%E5%AF%86");
-    }
-}
-
 fn need_key(acc: &AccountConfig) -> Result<String, String> {
     if acc.api_key.trim().is_empty() {
         Err("需要填写 API Key".into())
@@ -693,4 +593,104 @@ async fn openai(client: &reqwest::Client, acc: &AccountConfig) -> Result<Account
         new_refresh_token: None,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_uri_component;
+
+    /// Kimi 订阅形态 C（2026-09/10 起）：usages{limit_5h:{used_ratio,reset_time},...}
+    #[test]
+    fn test_kimi_parse_form_c() {
+        let v = serde_json::json!({
+            "usages": {
+                "limit_5h": { "used_ratio": 0.35, "reset_time": "2026-10-15T02:00:00Z" },
+                "limit_7d": { "used_ratio": 0.52 },
+                "limit_month_code": { "used_ratio": 0.61 },
+                "limit_month_total": { "used_ratio": 0.48 }
+            }
+        });
+        // 验证 ratio 百分比换算与 reset_time 提取
+        let pct = |path: &str| crate::jsonpath::lookup_number(&v, path).map(|r| r * 100.0);
+        assert_eq!(pct("usages.limit_5h.used_ratio"), Some(35.0));
+        assert_eq!(pct("usages.limit_month_code.used_ratio"), Some(61.0));
+        assert_eq!(
+            crate::jsonpath::lookup_string(&v, "usages.limit_5h.reset_time"),
+            Some("2026-10-15T02:00:00Z".into())
+        );
+    }
+
+    /// Kimi 订阅形态 A/B：usage(周配额) + limits[](5h) + parallel + boosterWallet
+    #[test]
+    fn test_kimi_parse_form_ab() {
+        let v = serde_json::json!({
+            "usage": { "limit": 300, "used": 90, "remaining": 210, "resetTime": "2026-10-16T00:00:00Z" },
+            "limits": [
+                { "window": { "duration": 5, "timeUnit": "HOUR" },
+                  "detail": { "used": 40, "limit": 200, "resetTime": "2026-10-14T16:00:00Z" } }
+            ],
+            "parallel": { "limit": 20 },
+            "boosterWallet": { "balance": { "type": "BOOSTER", "amount": 500, "amountLeft": 350 } },
+            "user": { "membership": { "level": "pro" } }
+        });
+        // 周配额
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "usage.remaining"),
+            Some(210.0)
+        );
+        let limit = crate::jsonpath::lookup_number(&v, "usage.limit").unwrap_or(0.0);
+        let used = crate::jsonpath::lookup_number(&v, "usage.used").unwrap_or(0.0);
+        assert_eq!((used / limit * 100.0) as i64, 30);
+        // 5h 窗口识别（duration=5 + HOUR）
+        let l = &v["limits"][0];
+        assert_eq!(
+            crate::jsonpath::lookup_number(l, "window.duration"),
+            Some(5.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_string(l, "window.timeUnit").as_deref(),
+            Some("HOUR")
+        );
+        assert_eq!(crate::jsonpath::lookup_number(l, "detail.used"), Some(40.0));
+        // 并发 / 加油包 / 等级
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "parallel.limit"),
+            Some(20.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_number(&v, "boosterWallet.balance.amountLeft"),
+            Some(350.0)
+        );
+        assert_eq!(
+            crate::jsonpath::lookup_string(&v, "user.membership.level").as_deref(),
+            Some("pro")
+        );
+    }
+
+    /// Kimi key 前缀分流逻辑
+    #[test]
+    fn test_kimi_key_prefix_routing() {
+        // sk-kimi- → 订阅端点（api.kimi.com）；其他 → 开放平台 balance
+        assert!("sk-kimi-abc123".starts_with("sk-kimi-"));
+        assert!(!"sk-abc123".starts_with("sk-kimi-"));
+        // base 域名修正：开放平台域名会被替换为订阅域名
+        let b = "https://api.moonshot.cn";
+        let fixed = if b.contains("api.kimi.com") || b.contains("api.kimi.ai") {
+            b.to_string()
+        } else {
+            "https://api.kimi.com".to_string()
+        };
+        assert_eq!(fixed, "https://api.kimi.com");
+    }
+
+    #[test]
+    fn test_encode_uri_component() {
+        assert_eq!(encode_uri_component("abc123-_."), "abc123-_.");
+        // 空格、&、=、+ 等会被编码
+        assert_eq!(encode_uri_component("a b"), "a%20b");
+        assert_eq!(encode_uri_component("a&b=c"), "a%26b%3Dc");
+        assert_eq!(encode_uri_component("pg+_cursor/"), "pg%2B_cursor%2F");
+        // 中文字节全部编码
+        assert_eq!(encode_uri_component("密"), "%E5%AF%86");
+    }
 }

@@ -12,6 +12,8 @@ pub async fn get_config(app: AppHandle) -> Result<AppConfig, String> {
 
 #[tauri::command]
 pub async fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+    // R14 AC-9 的服务端保障：越界阈值拒绝落盘（前端也有同样的即时校验，这里是兜底）
+    crate::types::validate_settings(&config.settings)?;
     config::save(&app, &config)
 }
 
@@ -46,6 +48,8 @@ pub async fn import_config(app: AppHandle, path: String) -> Result<AppConfig, St
             imported.version
         ));
     }
+    // 导入的 settings 会整体替换本地设置，因此同样要过范围校验
+    crate::types::validate_settings(&imported.settings).map_err(|e| format!("导入失败: {e}"))?;
 
     let mut current = config::load(&app)?;
     // 设置整体替换
@@ -164,7 +168,8 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save_results(&path, &outcomes);
     }
 
-    // 余额历史追加（趋势图数据源）
+    // 余额历史追加（趋势图数据源 / R14 洞察指标差分推导的数据基础）；
+    // R14 规格 §2：快照结构不动
     let now = crate::types::now_iso();
     let snapshots: Vec<crate::types::BalanceSnapshot> = outcomes
         .iter()
@@ -200,4 +205,12 @@ pub async fn get_last_results(app: AppHandle) -> Result<Vec<RefreshOutcome>, Str
 #[tauri::command]
 pub async fn get_history(app: AppHandle) -> Result<Vec<crate::types::BalanceSnapshot>, String> {
     config::load_history(&config::history_file_path(&app)?)
+}
+
+/// 报表导出（R14）：CSV 内容由前端纯函数 `buildUsageCsv` 组好（含 UTF-8 BOM、
+/// RFC 4180 转义、CRLF），Rust 只做**原子字节写入**，不加工、不裁剪 content。
+#[tauri::command]
+pub async fn export_csv(_app: AppHandle, path: String, content: String) -> Result<(), String> {
+    // 原样字节落盘（BOM/换行/转义都由前端 content 决定），成功时只回 ()
+    config::write_bytes_atomic(std::path::Path::new(&path), content.as_bytes()).map(|_| ())
 }

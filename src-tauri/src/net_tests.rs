@@ -194,6 +194,17 @@ fn example_config_parses_as_app_config() {
         .unwrap();
     assert_eq!(ds.kind, crate::types::ProviderKind::DeepSeek);
     assert!(ds.base_url.contains("deepseek"));
+    // R14：示例文件应带上「提醒与洞察」的 5 个默认值，防止示例与 schema 漂移
+    assert_eq!(cfg.settings.notify_enabled, Some(true));
+    assert_eq!(cfg.settings.notify_low_balance_usd, Some(1.0));
+    assert_eq!(cfg.settings.notify_low_balance_cny, Some(7.0));
+    assert_eq!(cfg.settings.notify_quota_percent, Some(85.0));
+    assert_eq!(cfg.settings.insight_window_days, Some(14));
+    assert!(
+        crate::types::validate_settings(&cfg.settings).is_ok(),
+        "示例文件里的阈值必须在合法范围内"
+    );
+
     // AppConfig 应能无损序列化回 JSON（前端保存路径同样走这个结构）
     let back = serde_json::to_string(&cfg).expect("序列化 AppConfig 失败");
     assert!(back.contains("\"baseUrl\""));

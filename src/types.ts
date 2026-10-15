@@ -68,6 +68,16 @@ export interface Settings {
   proxy?: string | null;
   /** 关闭窗口时最小化到系统托盘；缺省（undefined/null）视为 true，与 Rust 端 Option<bool> 对应 */
   closeToTray?: boolean | null;
+  /** R14：余额/配额提醒总开关；缺省（undefined/null）视为 true（旧配置兼容） */
+  notifyEnabled?: boolean | null;
+  /** R14：低余额提醒阈值（USD 及其他法币）；缺省视为 1 */
+  notifyLowBalanceUsd?: number | null;
+  /** R14：低余额提醒阈值（CNY）；缺省视为 7 */
+  notifyLowBalanceCny?: number | null;
+  /** R14：配额用量提醒线（0-100）；缺省视为 85 */
+  notifyQuotaPercent?: number | null;
+  /** R14：洞察统计窗口（天）；缺省视为 14 */
+  insightWindowDays?: number | null;
 }
 
 export interface AppConfig {
