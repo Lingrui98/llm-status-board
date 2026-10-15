@@ -153,6 +153,13 @@ pub struct Settings {
     pub notify_quota_percent: Option<f64>,
     /// 洞察统计窗口（天）；None 视为 14，取值 3..=90 的整数
     pub insight_window_days: Option<u32>,
+    // ---- R16 常驻与自动化（同样 Option + serde default）----
+    /// 是否推送系统通知；None 视为 **false**（默认关，避免未授权就弹窗）
+    pub system_notifications: Option<bool>,
+    /// 刷新整轮失败时是否自动重试；None 视为 true
+    pub refresh_retry_enabled: Option<bool>,
+    /// 自动重试的最大次数；None 视为 1，取值 0..=3
+    pub refresh_retry_max: Option<u32>,
 }
 
 impl Default for Settings {
@@ -167,6 +174,9 @@ impl Default for Settings {
             notify_low_balance_cny: None,
             notify_quota_percent: None,
             insight_window_days: None,
+            system_notifications: None,
+            refresh_retry_enabled: None,
+            refresh_retry_max: None,
         }
     }
 }
@@ -176,6 +186,8 @@ pub const NOTIFY_LOW_BALANCE_USD_RANGE: (f64, f64) = (0.0, 10_000.0);
 pub const NOTIFY_LOW_BALANCE_CNY_RANGE: (f64, f64) = (0.0, 100_000.0);
 pub const NOTIFY_QUOTA_PERCENT_RANGE: (f64, f64) = (1.0, 100.0);
 pub const INSIGHT_WINDOW_DAYS_RANGE: (u32, u32) = (3, 90);
+/// R16 §1：自动重试次数范围（0 = 不重试）
+pub const REFRESH_RETRY_MAX_RANGE: (u32, u32) = (0, 3);
 
 /// 服务端范围校验（AC-9 的后端保障）：越界返回**可读中文错误**，全部合法返回 Ok。
 ///
@@ -206,6 +218,13 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
             return Err(format!(
                 "洞察统计窗口（天）必须在 {min}–{max} 之间，当前为 {v}"
             ));
+        }
+    }
+    // R16 §1：自动重试次数（u32，天然是整数）
+    if let Some(v) = settings.refresh_retry_max {
+        let (min, max) = REFRESH_RETRY_MAX_RANGE;
+        if v < min || v > max {
+            return Err(format!("刷新重试次数必须在 {min}–{max} 之间，当前为 {v}"));
         }
     }
     Ok(())
@@ -685,5 +704,79 @@ mod tests {
             ..rec
         }
         .is_site());
+    }
+
+    /// R16 §1 / AC-1：旧配置（无 R16 三字段）加载后为 None（= 默认 false/true/1）
+    #[test]
+    fn r16_legacy_settings_without_new_fields_are_none() {
+        let s: Settings = serde_json::from_str(r#"{"autoRefreshSec":0,"refreshOnStart":true}"#)
+            .expect("旧配置应可加载");
+        assert_eq!(s.system_notifications, None);
+        assert_eq!(s.refresh_retry_enabled, None);
+        assert_eq!(s.refresh_retry_max, None);
+        assert_eq!(Settings::default().system_notifications, None);
+        assert!(validate_settings(&s).is_ok());
+    }
+
+    /// R16 §1 / AC-1：三字段 camelCase 往返，不得出现 snake_case
+    #[test]
+    fn r16_settings_fields_round_trip_camel_case() {
+        let json = r#"{
+            "systemNotifications": true,
+            "refreshRetryEnabled": false,
+            "refreshRetryMax": 3
+        }"#;
+        let s: Settings = serde_json::from_str(json).expect("R16 字段应可反序列化");
+        assert_eq!(s.system_notifications, Some(true));
+        assert_eq!(s.refresh_retry_enabled, Some(false));
+        assert_eq!(s.refresh_retry_max, Some(3));
+
+        let back = serde_json::to_string(&s).unwrap();
+        assert!(
+            back.contains("\"systemNotifications\":true"),
+            "实际: {back}"
+        );
+        assert!(back.contains("\"refreshRetryEnabled\":false"));
+        assert!(back.contains("\"refreshRetryMax\":3"));
+        assert!(!back.contains("refresh_retry_max"), "不得出现 snake_case");
+
+        let again: Settings = serde_json::from_str(&back).unwrap();
+        assert_eq!(again.refresh_retry_max, Some(3));
+    }
+
+    /// R16 §1 / AC-2：`refreshRetryMax` 边界 0 与 3 通过，None 也通过
+    #[test]
+    fn validate_settings_accepts_retry_max_boundaries() {
+        for v in [0u32, 1, 3] {
+            let s = Settings {
+                refresh_retry_max: Some(v),
+                ..Default::default()
+            };
+            assert!(
+                validate_settings(&s).is_ok(),
+                "refreshRetryMax={v} 应被接受"
+            );
+        }
+        assert!(validate_settings(&Settings::default()).is_ok());
+    }
+
+    /// R16 §1 / AC-2：`refreshRetryMax` 越界（4）被拒且错误可读中文并点出范围
+    #[test]
+    fn validate_settings_rejects_retry_max_out_of_range() {
+        for v in [4u32, 10, 1000] {
+            let s = Settings {
+                refresh_retry_max: Some(v),
+                ..Default::default()
+            };
+            let err = validate_settings(&s).expect_err("越界必须被拒");
+            assert!(err.contains("刷新重试次数"), "错误应点出字段: {err}");
+            assert!(err.contains("0–3"), "错误应给出范围: {err}");
+        }
+    }
+
+    /// R16 §1：重试次数范围常量与规格一致
+    #[test]
+    fn r16_retry_max_range_matches_spec() {
+        assert_eq!(REFRESH_RETRY_MAX_RANGE, (0, 3));
     }
 }

@@ -1,8 +1,9 @@
 /**
- * R14/R15 设计系统原语统一出口。
+ * R14/R15/R16 设计系统原语统一出口。
  * 集成方（开发 A）只需：
  *   import { StatTile, MiniSparkline, ThresholdSlider, SegmentedControl } from "./components/ui";
  *   import { DeltaBadge, RankingRow, HeatStrip, MiniBars } from "./components/ui";
+ *   import { SettingRow, InlineNotice } from "./components/ui";
  */
 export { default as StatTile } from "./StatTile";
 export type { StatTileProps, StatTone, TrendDirection } from "./StatTile";
@@ -29,3 +30,11 @@ export type { HeatStripProps, HeatStripCell } from "./HeatStrip";
 
 export { default as MiniBars } from "./MiniBars";
 export type { MiniBarsProps } from "./MiniBars";
+
+/* ---------- R16：常驻与自动化（设置行 / 应用内提示条） ---------- */
+
+export { default as SettingRow } from "./SettingRow";
+export type { SettingRowProps, SettingRowA11y } from "./SettingRow";
+
+export { default as InlineNotice } from "./InlineNotice";
+export type { InlineNoticeProps, InlineNoticeAction, NoticeTone, NoticeLive } from "./InlineNotice";

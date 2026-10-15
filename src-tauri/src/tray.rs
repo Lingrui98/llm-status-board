@@ -1,6 +1,7 @@
 use crate::commands;
 use crate::config;
 use crate::types::{AccountConfig, RefreshOutcome};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
@@ -10,6 +11,10 @@ const TRAY_ID: &str = "main-tray";
 /// 托盘菜单项 id
 const MENU_SHOW: &str = "tray-show";
 const MENU_REFRESH: &str = "tray-refresh";
+/// R16 §6：暂停/恢复自动刷新（点击只 emit，真值在前端）
+const MENU_TOGGLE_PAUSE: &str = "tray-toggle-pause";
+/// R16 §6：打开设置（显示窗口 + emit 让前端切视图）
+const MENU_OPEN_SETTINGS: &str = "tray-open-settings";
 const MENU_QUIT: &str = "tray-quit";
 /// 「暂无数据」占位项 id（不可点击）
 const MENU_EMPTY: &str = "tray-empty";
@@ -21,6 +26,49 @@ const MENU_ACCOUNT_PREFIX: &str = "account:";
 const MAX_ACCOUNTS_IN_MENU: usize = 8;
 /// 失败原因在菜单里的最大字符数（超出截断并补省略号）
 const MAX_ERROR_CHARS: usize = 12;
+
+/// 自动刷新暂停状态（R16 §6）。
+///
+/// **运行态、不持久化**：重启即恢复「运行」，避免用户忘记恢复导致长期不刷新。
+/// **前端是唯一真值源**：托盘点击只 emit 事件，等前端回报 `set_auto_refresh_paused`
+/// 才更新这里，Rust 不自行翻转（避免两端漂移）。
+static AUTO_REFRESH_PAUSED: AtomicBool = AtomicBool::new(false);
+
+/// 当前是否暂停自动刷新
+pub fn is_auto_refresh_paused() -> bool {
+    AUTO_REFRESH_PAUSED.load(Ordering::SeqCst)
+}
+
+fn store_auto_refresh_paused(paused: bool) {
+    AUTO_REFRESH_PAUSED.store(paused, Ordering::SeqCst);
+}
+
+/// 暂停/恢复菜单项的（文案, 是否可点击）——纯函数，便于单测（R16 §6）。
+/// - `autoRefreshSec == 0`（未启用定时刷新）→ 置灰并显示「自动刷新已关闭」
+/// - 暂停中 → 「恢复自动刷新」；否则 → 「暂停自动刷新」
+pub fn pause_menu_item(auto_refresh_sec: u32, paused: bool) -> (String, bool) {
+    if auto_refresh_sec == 0 {
+        ("自动刷新已关闭".to_string(), false)
+    } else if paused {
+        ("恢复自动刷新".to_string(), true)
+    } else {
+        ("暂停自动刷新".to_string(), true)
+    }
+}
+
+/// 托盘 tooltip 文案（R16 §6：暂停时追加「 · 已暂停」）——纯函数，便于单测
+pub fn tooltip_text(total: usize, failed: usize, paused: bool) -> String {
+    let base = if failed > 0 {
+        format!("LLM Status Board · {total} 个账号 · {failed} 个异常")
+    } else {
+        format!("LLM Status Board · {total} 个账号全部正常")
+    };
+    if paused {
+        format!("{base} · 已暂停")
+    } else {
+        base
+    }
+}
 
 /// 显示并聚焦主窗口（左键单击托盘 / 菜单「显示看板」/ 点击账号项共用）
 fn show_main_window(app: &AppHandle) {
@@ -103,19 +151,24 @@ fn account_menu_id(account_id: &str) -> String {
     format!("{MENU_ACCOUNT_PREFIX}{account_id}")
 }
 
-/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）。
-/// 读取失败均降级为空——托盘必须总能建出来，不能因文件问题拖垮启动
-fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>) {
-    let enabled = config::load(app)
-        .map(|cfg| cfg.accounts.into_iter().filter(|a| a.enabled).collect())
-        .unwrap_or_default();
+/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）+
+/// `autoRefreshSec`（R16 暂停项是否可用）。
+/// 读取失败均降级为空/0——托盘必须总能建出来，不能因文件问题拖垮启动
+fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>, u32) {
+    let (enabled, auto_refresh_sec) = match config::load(app) {
+        Ok(cfg) => (
+            cfg.accounts.into_iter().filter(|a| a.enabled).collect(),
+            cfg.settings.auto_refresh_sec,
+        ),
+        Err(_) => (Vec::new(), 0),
+    };
     let outcomes = config::results_file_path(app)
         .and_then(|p| config::load_results(&p))
         .unwrap_or_default();
-    (enabled, outcomes)
+    (enabled, outcomes, auto_refresh_sec)
 }
 
-/// 构建托盘菜单：常规操作区（显示看板/立即刷新）/ 账号状态区 / 退出。
+/// 构建托盘菜单：常规操作区（显示看板/立即刷新/暂停自动刷新/打开设置）/ 账号状态区 / 退出。
 /// refreshing = true 时「立即刷新」置灰并显示「刷新中…」（刷新开始时重建一次即达到置灰效果）
 fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let show_item = MenuItem::with_id(app, MENU_SHOW, "显示看板", true, None::<&str>)?;
@@ -124,10 +177,22 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
     } else {
         MenuItem::with_id(app, MENU_REFRESH, "立即刷新", true, None::<&str>)?
     };
-    let quit_item = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
 
     // 账号状态区：按 config 的启用账号顺序，逐个配上 results.json 里的状态文本
-    let (enabled, outcomes) = load_tray_data(app);
+    let (enabled, outcomes, auto_refresh_sec) = load_tray_data(app);
+
+    // R16 §6：暂停/恢复项（文案与可用性由纯函数决定）
+    let (pause_label, pause_enabled) = pause_menu_item(auto_refresh_sec, is_auto_refresh_paused());
+    let pause_item = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_PAUSE,
+        pause_label,
+        pause_enabled,
+        None::<&str>,
+    )?;
+    let settings_item = MenuItem::with_id(app, MENU_OPEN_SETTINGS, "打开设置", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
+
     let mut account_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
     if !enabled.is_empty() {
         if outcomes.is_empty() {
@@ -166,9 +231,25 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
     let sep2 = PredefinedMenuItem::separator(app)?;
     if account_items.is_empty() {
         // 无启用账号：不显示账号区
-        Menu::with_items(app, &[&show_item, &refresh_item, &sep2, &quit_item])
+        Menu::with_items(
+            app,
+            &[
+                &show_item,
+                &refresh_item,
+                &pause_item,
+                &settings_item,
+                &sep2,
+                &quit_item,
+            ],
+        )
     } else {
-        let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![&show_item, &refresh_item, &sep1];
+        let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
+            &show_item,
+            &refresh_item,
+            &pause_item,
+            &settings_item,
+            &sep1,
+        ];
         for item in &account_items {
             items.push(item);
         }
@@ -189,18 +270,29 @@ fn rebuild_menu(app: &AppHandle, refreshing: bool) {
     }
 }
 
-/// 托盘 tooltip 摘要：「N 个账号 · M 个异常」或「N 个账号全部正常」
+/// 托盘 tooltip 摘要（R16 §6 起：暂停时追加「 · 已暂停」）
 fn update_tooltip(app: &AppHandle, outcomes: &[RefreshOutcome]) {
     let total = outcomes.len();
     let failed = outcomes.iter().filter(|o| !o.ok).count();
-    let tip = if failed > 0 {
-        format!("LLM Status Board · {total} 个账号 · {failed} 个异常")
-    } else {
-        format!("LLM Status Board · {total} 个账号全部正常")
-    };
+    let tip = tooltip_text(total, failed, is_auto_refresh_paused());
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(&tip));
     }
+}
+
+/// R16 §6：前端回报暂停状态后调用——更新运行态、重建菜单文案、刷新 tooltip。
+/// 失败保持旧菜单/旧 tooltip（沿用本文件「非关键失败静默降级」的风格）。
+pub fn apply_auto_refresh_paused(app: &AppHandle, paused: bool) {
+    store_auto_refresh_paused(paused);
+    rebuild_menu(app, false);
+    let (_, outcomes, _) = load_tray_data(app);
+    update_tooltip(app, &outcomes);
+}
+
+/// 供测试复位运行态（避免 `cargo test` 中用例互相污染）
+#[cfg(test)]
+fn reset_auto_refresh_paused_for_test() {
+    store_auto_refresh_paused(false);
 }
 
 /// 托盘「立即刷新」：复用 refresh_all 命令（结果照常落盘 results.json，前端下次 get_last_results 能拿到）。
@@ -254,6 +346,15 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             match id {
                 MENU_SHOW => show_main_window(app),
                 MENU_REFRESH => trigger_refresh(app),
+                // R16 §6：暂停/恢复的真值在前端——这里只 emit，不翻转本地状态，
+                // 等前端回报 set_auto_refresh_paused 后再重建菜单（避免两端漂移）
+                MENU_TOGGLE_PAUSE => {
+                    let _ = app.emit(MENU_TOGGLE_PAUSE, ());
+                }
+                MENU_OPEN_SETTINGS => {
+                    show_main_window(app);
+                    let _ = app.emit(MENU_OPEN_SETTINGS, ());
+                }
                 MENU_QUIT => app.exit(0),
                 _ => {}
             }
@@ -377,5 +478,68 @@ mod tests {
             "—"
         );
         assert_eq!(tray_status_text(None), "—");
+    }
+
+    // ---------- R16 §6 托盘增强 ----------
+
+    /// AC-18：暂停项文案与可用性——暂停/恢复两种文案；`autoRefreshSec=0` 置灰
+    #[test]
+    fn pause_menu_item_label_and_enabled() {
+        assert_eq!(
+            pause_menu_item(60, false),
+            ("暂停自动刷新".to_string(), true)
+        );
+        assert_eq!(
+            pause_menu_item(60, true),
+            ("恢复自动刷新".to_string(), true)
+        );
+        // 未启用定时刷新 → 置灰并说明原因（暂停与否都一样）
+        assert_eq!(
+            pause_menu_item(0, false),
+            ("自动刷新已关闭".to_string(), false)
+        );
+        assert_eq!(
+            pause_menu_item(0, true),
+            ("自动刷新已关闭".to_string(), false)
+        );
+    }
+
+    /// AC-18：暂停时 tooltip 追加「 · 已暂停」，且不破坏既有异常摘要
+    #[test]
+    fn tooltip_appends_paused_suffix() {
+        assert_eq!(
+            tooltip_text(3, 0, false),
+            "LLM Status Board · 3 个账号全部正常"
+        );
+        assert_eq!(
+            tooltip_text(3, 1, false),
+            "LLM Status Board · 3 个账号 · 1 个异常"
+        );
+        assert_eq!(
+            tooltip_text(3, 1, true),
+            "LLM Status Board · 3 个账号 · 1 个异常 · 已暂停"
+        );
+        assert_eq!(
+            tooltip_text(0, 0, true),
+            "LLM Status Board · 0 个账号全部正常 · 已暂停"
+        );
+    }
+
+    /// 运行态暂停标记：可置位/复位（不持久化，重启即恢复运行）
+    #[test]
+    fn auto_refresh_paused_state_round_trip() {
+        reset_auto_refresh_paused_for_test();
+        assert!(!is_auto_refresh_paused());
+        store_auto_refresh_paused(true);
+        assert!(is_auto_refresh_paused());
+        reset_auto_refresh_paused_for_test();
+        assert!(!is_auto_refresh_paused());
+    }
+
+    /// R16 §6：两个新菜单项 id 与规格一致（前端按事件名接线，改名会破坏契约）
+    #[test]
+    fn r16_menu_ids_match_spec() {
+        assert_eq!(MENU_TOGGLE_PAUSE, "tray-toggle-pause");
+        assert_eq!(MENU_OPEN_SETTINGS, "tray-open-settings");
     }
 }

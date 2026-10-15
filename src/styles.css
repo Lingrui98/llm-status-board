@@ -3763,3 +3763,238 @@ button.notif-jump:focus-visible .notif-jump-hint {
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* ============================================================
+   R16 设计系统原语（src/components/ui/）：常驻与自动化
+   SettingRow / InlineNotice
+   色彩全部引用现有变量，暗/亮主题经变量自动覆盖，本区块不出现硬编码颜色。
+   语义色配方**刻意与既有提示语言逐字一致**（info=--bg-1 60% 底+--border+--text-2；
+   warn/err=--*-soft 底 + 35% 同色描边 + 同色文字，同 .insights-notice / .threshold-notice），
+   不引入第三种「警示样式」；动效只用过渡，已被上方 prefers-reduced-motion 全局规则统一降级。
+   ============================================================ */
+
+/* ---------- SettingRow：统一设置行（节奏对齐既有 .setting-row） ---------- */
+/* 独立类名而非复用 .setting-row：后者带 `.setting-row input:not([type=checkbox])` 后代选择器，
+   会给嵌套原语（如 ThresholdSlider 的 .threshold-number）套上多余的 padding/边框。 */
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 7px 0;
+  font-size: 13px;
+}
+
+/* 与 .disabled-row 同一降级（45% 透明） */
+.set-row.disabled {
+  opacity: 0.45;
+}
+
+/* 可选容器：把多行 SettingRow 竖排（与既有分组内多条 .setting-row 的间距一致，靠行自身 padding） */
+.set-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.set-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.set-row-label {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 辅助说明：超长最多 2 行，超出省略号（title 里有全文） */
+.set-row-hint {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+
+.set-row-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.set-row-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 槽内原生控件：与既有 .setting-row input / .help-select 同一质感（深底 / 强边 / 聚焦主色光晕）。
+   只匹配**直接子元素**，因此不会波及嵌套原语——如 ThresholdSlider 的 .threshold-number
+   位于 .threshold-field 内（非直接子元素），保持自身样式。
+   控件被额外包一层（如 <label> 包裹）时，请显式加 .set-input / .set-select。 */
+.set-row-control > input:not([type="checkbox"]),
+.set-row-control > select,
+.set-input,
+.set-select {
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  max-width: 100%;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.set-row-control > input:not([type="checkbox"]):focus,
+.set-row-control > select:focus,
+.set-input:focus,
+.set-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 状态徽标：与 .kind-badge 同一药丸语言（11px / 99px 圆角 / bg-3 + 边框） */
+.set-row-badge {
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  padding: 2px 9px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.set-row-badge.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
+}
+
+.set-row-badge.warn {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+
+.set-row-badge.err {
+  color: var(--err);
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 28%, transparent);
+}
+
+/* ---------- InlineNotice：应用内轻量提示条 ---------- */
+/* 底/边/文字配方与 .insights-notice 完全一致，仅加宽为「可带标题 + 操作按钮」的条 */
+.inline-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+  /* 自动消退的淡出：reduced-motion 下被全局规则压到 0.01ms（即不淡出） */
+  transition: opacity 0.18s var(--ease-out);
+}
+
+.inline-notice.closing {
+  opacity: 0;
+}
+
+.inline-notice.warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  color: var(--warn);
+}
+
+.inline-notice.err {
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+  color: var(--err);
+}
+
+.inline-notice-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.inline-notice-title {
+  font-weight: 650;
+}
+
+/* 正文自动换行（提示必须可读，不截断）；长 URL/单词不撑破卡片 */
+.inline-notice-text {
+  overflow-wrap: anywhere;
+}
+
+.inline-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* 操作按钮：边框/底色由 currentColor 派生 —— 自动跟随本条提示的语义色，
+   无需为 info/warn/err 各写一套规则 */
+.inline-notice-action {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.inline-notice-action:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  border-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.inline-notice-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 关闭按钮：焦点环由全局 :focus-visible 提供 */
+.inline-notice-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.inline-notice-close:hover {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}

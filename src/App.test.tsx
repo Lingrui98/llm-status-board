@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import React from "react";
 import App from "./App";
 import { toLocalDateKey } from "./usageHistory";
+import { notificationManualPath } from "./pluginRuntime";
 import type { AppConfig, RefreshOutcome } from "./types";
 
 afterEach(cleanup);
@@ -31,13 +32,76 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   confirm: vi.fn(),
 }));
+// R16：自启插件（走真实 pluginRuntime → 动态 import 本 mock）
+vi.mock("@tauri-apps/plugin-autostart", () => ({
+  isEnabled: vi.fn(),
+  enable: vi.fn(),
+  disable: vi.fn(),
+}));
+// R16：系统通知插件（granted 默认 true；sendNotification 由用例按需替换）
+vi.mock("@tauri-apps/plugin-notification", () => ({
+  isPermissionGranted: vi.fn(),
+  requestPermission: vi.fn(),
+  sendNotification: vi.fn(),
+}));
+// R16：事件后端 —— 捕获 App 注册的托盘事件回调，供用例手动触发
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(),
+}));
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { listen } from "@tauri-apps/api/event";
+import { isEnabled as autostartIsEnabled, enable as autostartEnable, disable as autostartDisable } from "@tauri-apps/plugin-autostart";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 
 const mockInvoke = vi.mocked(invoke);
 const mockSave = vi.mocked(save);
 const mockOpen = vi.mocked(open);
 const mockConfirm = vi.mocked(confirm);
+
+/* R16 插件与事件后端的可观测桩 */
+const autostartEnabledMock = vi.mocked(autostartIsEnabled);
+const autostartEnableMock = vi.mocked(autostartEnable);
+const autostartDisableMock = vi.mocked(autostartDisable);
+const grantedMock = vi.mocked(isPermissionGranted);
+const requestPermMock = vi.mocked(requestPermission);
+const notifySend = vi.mocked(sendNotification);
+/** 托盘事件回调捕获（App 通过 listen 注册；用例手动触发） */
+let trayToggleHandler: (() => void) | null = null;
+let traySettingsHandler: (() => void) | null = null;
+type EventCb = (e: { payload: unknown }) => void;
+const eventHandlers = new Map<string, EventCb>();
+
+vi.mocked(listen).mockImplementation((async (event: string, cb: EventCb) => {
+  eventHandlers.set(event, cb);
+  if (event === "tray-toggle-pause") {
+    trayToggleHandler = () => cb({ payload: undefined });
+  }
+  if (event === "tray-open-settings") {
+    traySettingsHandler = () => cb({ payload: undefined });
+  }
+  return () => {
+    eventHandlers.delete(event);
+  };
+}) as unknown as typeof listen);
+
+beforeEach(() => {
+  eventHandlers.clear();
+  trayToggleHandler = null;
+  traySettingsHandler = null;
+  vi.clearAllMocks();
+  mockInvoke.mockReset();
+  // 插件桩的默认返回值（必须放在 clearAllMocks 之后，否则会被清掉）
+  grantedMock.mockResolvedValue(true);
+  requestPermMock.mockResolvedValue("granted");
+  autostartEnabledMock.mockResolvedValue(false);
+  autostartEnableMock.mockResolvedValue(undefined);
+  autostartDisableMock.mockResolvedValue(undefined);
+});
 
 function makeConfig(accounts: AppConfig["accounts"]): AppConfig {
   return {
@@ -422,8 +486,7 @@ function makeR14Config(accounts: AppConfig["accounts"], settings: Partial<AppCon
   };
 }
 
-function balanceOutcome(accountId: string, amount: number, currency: string): RefreshOutcome {
-  return {
+function balanceOutcome(accountId: string, amount: number, currency: string): RefreshOutcome {  return {
     accountId,
     ok: true,
     info: {
@@ -440,6 +503,11 @@ function balanceOutcome(accountId: string, amount: number, currency: string): Re
     },
     error: null,
   };
+}
+
+/** 失败的刷新结果（用于 §5 整轮失败 / 部分失败场景） */
+function failedOutcome(accountId: string): RefreshOutcome {
+  return { accountId, ok: false, info: null, error: "HTTP 500" };
 }
 
 describe("R14 设置页：提醒与洞察", () => {
@@ -885,5 +953,450 @@ describe("R15 用量历史接线", () => {
     expect(records[0].date).toBe(expectedDay);
     expect(records[0].usedTotal).toBe(1000);
     vi.useRealTimers();
+  });
+});
+
+/* ---------------- R16：常驻与自动化 ---------------- */
+
+/** 每轮 refresh_all 返回可控结果的桩 */
+function mockRefreshRounds(
+  rounds: RefreshOutcome[][],
+  extra: (cmd: string, args: unknown) => unknown = () => undefined,
+) {
+  let i = 0;
+  mockInvoke.mockImplementation((cmd: string, args?: unknown) => {
+    const custom = extra(cmd, args);
+    if (custom !== undefined) return Promise.resolve(custom);
+    if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { systemNotifications: true }));
+    if (cmd === "refresh_all") {
+      const r = rounds[Math.min(i, rounds.length - 1)];
+      i += 1;
+      return Promise.resolve(r);
+    }
+    if (cmd === "get_history") return Promise.resolve([]);
+    if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+    return Promise.resolve([]);
+  });
+}
+
+const r16Account = {
+  ...dsAccount,
+  id: "acc-r16",
+  name: "R16 账号",
+};
+
+/** 低余额结果（USD 阈值默认 1）→ 必然产生 lowBalance 问题 */
+function lowBalanceRound(): RefreshOutcome[] {
+  return [balanceOutcome("acc-r16", 0.5, "USD")];
+}
+
+describe("R16 系统通知接线（§4）", () => {
+  beforeEach(() => {
+    notifySend.mockClear();
+    window.localStorage.clear();
+  });
+
+  it("开启开关 + 新问题 → 发送一次系统通知（标题=类别名，正文含账号与数值）", async () => {
+    mockRefreshRounds([lowBalanceRound()]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+
+    await waitFor(() => expect(notifySend).toHaveBeenCalledTimes(1));
+    const payload = notifySend.mock.calls[0][0] as { title: string; body: string };
+    expect(payload.title).toBe("余额不足");
+    expect(payload.body).toContain("R16 账号");
+    expect(payload.body).toContain("USD");
+  });
+
+  it("AC-10：同一问题在 24h 抑制窗口内再刷新 → 不再发送", async () => {
+    mockRefreshRounds([lowBalanceRound(), lowBalanceRound()]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(notifySend).toHaveBeenCalledTimes(1));
+
+    // 第二次刷新（问题仍存在）→ 抑制表命中，不重复弹
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => {
+      expect(mockInvoke.mock.calls.filter((c) => c[0] === "refresh_all").length).toBe(2);
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifySend).toHaveBeenCalledTimes(1);
+  });
+
+  it("开关关闭 → 完全不调用发送，也不请求权限", async () => {
+    let i = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { systemNotifications: false }));
+      if (cmd === "refresh_all") {
+        i += 1;
+        return Promise.resolve(lowBalanceRound());
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(i).toBe(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifySend).not.toHaveBeenCalled();
+    expect(requestPermMock).not.toHaveBeenCalled();
+  });
+
+  it("权限被拒 → 不发送、不反复请求（应用内仍可看到通知中心）", async () => {
+    grantedMock.mockResolvedValue(false);
+    requestPermMock.mockResolvedValue("denied");
+    mockRefreshRounds([lowBalanceRound()]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+
+    await waitFor(() => expect(requestPermMock).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(notifySend).not.toHaveBeenCalled();
+    // 刷新主流程不受影响（账号名出现在卡片与通知里，故用 getAllByText）
+    expect(screen.getAllByText("R16 账号").length).toBeGreaterThan(0);
+  });
+
+  it("发送抛错 → 静默降级，刷新结果照常展示（不影响主流程）", async () => {
+    notifySend.mockImplementation(() => {
+      throw new Error("no notification daemon");
+    });
+    mockRefreshRounds([lowBalanceRound()]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(notifySend).toHaveBeenCalled());
+    // 看板仍然可用，没有整页失败
+    expect(screen.queryByText("配置加载失败")).toBeNull();
+    expect(screen.getAllByText("R16 账号").length).toBeGreaterThan(0);
+  });
+});
+
+describe("R16 自动重试接线（§5）", () => {
+  beforeEach(() => {
+    notifySend.mockClear();
+    window.localStorage.clear();
+  });
+
+  it("整轮失败 → 按退避重试；第二次成功则停止（不产生并发请求）", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { refreshRetryEnabled: true, refreshRetryMax: 2 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        // 第 1 轮整轮失败（okCount=0）；第 2 轮（重试）成功
+        return Promise.resolve(rounds === 1 ? [failedOutcome("acc-r16")] : [balanceOutcome("acc-r16", 9, "USD")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+
+    // 第 1 轮全部失败 → 安排重试（倒计时提示出现）
+    await waitFor(() => expect(screen.getByText(/刷新失败，\d+s 后重试（第 1\/2 次）/)).toBeTruthy());
+    expect(rounds).toBe(1);
+
+    // 推进 1s → 触发第 1 次重试（成功 → 停止，不再有第 2 次）
+    await vi.advanceTimersByTimeAsync(1100);
+    await waitFor(() => expect(rounds).toBe(2));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(rounds).toBe(2); // 成功即停止，没有第 3 轮
+    expect(screen.queryByText(/后重试/)).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("AC-17：等待重试期间用户手动刷新 → 不产生并发双请求，且旧重试不再叠加", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    let inFlight = 0;
+    let maxConcurrent = 0;
+    mockInvoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "get_config")
+        return makeR14Config([r16Account], { refreshRetryEnabled: true, refreshRetryMax: 2 });
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return [failedOutcome("acc-r16")];
+      }
+      if (cmd === "get_history") return [];
+      if (cmd === "get_usage_history") return { version: 1, records: [] };
+      return [];
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    // 第 1 次失败已安排重试（等待中）
+    await waitFor(() => expect(screen.getByText(/后重试（第 1\/2 次）/)).toBeTruthy());
+
+    // 用户在等待期间手动刷新 → 立即发起，不与后台重试并发
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(2));
+    expect(maxConcurrent).toBe(1); // 绝不并发两个请求
+
+    // 推进到原重试到点：不应再叠加出第三轮
+    await vi.advanceTimersByTimeAsync(2000);
+    await waitFor(() => expect(rounds).toBeGreaterThanOrEqual(2));
+    expect(maxConcurrent).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it("AC-16：达到上限仍失败 → 如实停止（不再安排），UI 不显示「在重试中」", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { refreshRetryEnabled: true, refreshRetryMax: 1 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        // R16 §5 触发条件：整轮失败 = 启用账号数 > 0 且 okCount === 0
+        return Promise.resolve([failedOutcome("acc-r16")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+
+    // 上限 1 → 推进很久也只重试 1 次
+    await vi.advanceTimersByTimeAsync(30000);
+    await waitFor(() => expect(rounds).toBe(2));
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(rounds).toBe(2);
+    vi.useRealTimers();
+  });
+
+  it("AC-15：部分失败（okCount > 0）不触发重试", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(
+          makeR14Config([r16Account, { ...dsAccount, id: "acc-2", name: "二号" }], {
+            refreshRetryEnabled: true,
+            refreshRetryMax: 2,
+          }),
+        );
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([balanceOutcome("acc-r16", 5, "USD"), failedOutcome("acc-2")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(rounds).toBe(1); // 部分失败不重试
+    vi.useRealTimers();
+  });
+
+  it("重试开关关闭 → 整轮失败也不安排重试", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { refreshRetryEnabled: false, refreshRetryMax: 3 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([failedOutcome("acc-r16")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(rounds).toBe(1);
+    vi.useRealTimers();
+  });
+});
+
+describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    autostartEnabledMock.mockResolvedValue(false);
+    autostartEnableMock.mockResolvedValue(undefined);
+    autostartDisableMock.mockResolvedValue(undefined);
+  });
+
+  it("设置页显示「常驻与通知」分组与全部新设置项", async () => {
+    mockRefreshRounds([]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+    expect(screen.getByText("开机自启")).toBeTruthy();
+    expect(screen.getByText("系统通知")).toBeTruthy();
+    expect(screen.getByText("刷新失败时自动重试")).toBeTruthy();
+    expect(screen.getByText("关闭窗口时最小化到系统托盘")).toBeTruthy();
+  });
+
+  it("AC-7：自启 enable 失败 → 开关回置为真实值且给可读错误（不谎报已开启）", async () => {
+    autostartEnabledMock.mockResolvedValue(false); // 真实状态：关
+    autostartEnableMock.mockRejectedValue(new Error("autostart is not supported on this platform"));
+    mockRefreshRounds([]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+    await waitFor(() => expect(screen.getByText("已关闭")).toBeTruthy());
+    const toggle = screen.getByLabelText("开机自启") as HTMLInputElement;
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(screen.getByText(/当前系统不支持开机自启/)).toBeTruthy());
+    // 关键：不显示"已开启"
+    expect(screen.queryByText("已开启")).toBeNull();
+  });
+
+  it("AC-7：自启切换成功 → 徽标显示真实状态「已开启」", async () => {
+    let enabled = false;
+    autostartEnabledMock.mockImplementation(async () => enabled);
+    autostartEnableMock.mockImplementation(async () => {
+      enabled = true;
+    });
+    mockRefreshRounds([]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+    await waitFor(() => expect(screen.getByText("已关闭")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("开机自启"));
+    await waitFor(() => expect(screen.getByText("已开启")).toBeTruthy());
+  });
+
+  it("§6：托盘暂停事件 → 定时器停（不自动刷新）+ 显示常驻提示与「恢复」", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 1, systemNotifications: false }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([balanceOutcome("acc-r16", 5, "USD")]);
+      }
+      if (cmd === "set_auto_refresh_paused") return Promise.resolve(undefined);
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+
+    // 触发托盘暂停事件
+    await waitFor(() => expect(trayToggleHandler).not.toBeNull());
+    trayToggleHandler?.();
+    await waitFor(() => expect(screen.getByText(/自动刷新已暂停/)).toBeTruthy());
+    // D-2：IPC 回报已移出 setState 更新函数，但回报行为本身必须保留
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("set_auto_refresh_paused", { paused: true }),
+    );
+
+    const before = rounds;
+    await vi.advanceTimersByTimeAsync(3500); // 3 个间隔
+    expect(rounds).toBe(before); // 暂停期间定时器不触发
+
+    // 点「恢复」→ 回到运行态
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(screen.queryByText(/自动刷新已暂停/)).toBeNull());
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith("set_auto_refresh_paused", { paused: false }),
+    );
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(rounds).toBeGreaterThan(before); // 恢复后按原间隔继续
+    vi.useRealTimers();
+  });
+
+  it("§6：托盘「打开设置」事件 → 切到设置视图", async () => {
+    mockRefreshRounds([]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    await waitFor(() => expect(traySettingsHandler).not.toBeNull());
+    traySettingsHandler?.();
+    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+  });
+
+  /* ---- task-27：权限被拒提示的文案诚实性 ---- */
+
+  it("task-27：权限被拒 → 提示含手动放行路径，按钮不再是「去授权」而是「重新请求授权」", async () => {
+    grantedMock.mockResolvedValue(false);
+    requestPermMock.mockResolvedValue("denied");
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { systemNotifications: true }));
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+
+    // 提示常驻：标题 + 手动放行路径 + 诚实的按钮文案
+    await waitFor(() => expect(screen.getByText("系统通知已被系统拒绝")).toBeTruthy());
+    // 平台文案按运行环境推导（jsdom 无平台标识 → 通用文案），断言不依赖具体平台。
+    // 提示正文 = 「系统拒绝了通知权限…」+ 手动放行路径，故按提示正文元素做包含匹配。
+    const path = notificationManualPath();
+    expect(path).toContain("通知");
+    const noticeText = document.querySelector(".inline-notice-text");
+    expect(noticeText?.textContent ?? "").toContain(path);
+    expect(screen.queryByRole("button", { name: "去授权" })).toBeNull();
+    expect(screen.getByRole("button", { name: "重新请求授权" })).toBeTruthy();
+  });
+
+  it("task-27：权限恢复为已授权 → 被拒提示消失（不是常驻错误）", async () => {
+    // 初始查询被拒 → 显示提示；点「重新请求授权」后授权通过 → 提示消失
+    let granted = false;
+    grantedMock.mockImplementation(async () => granted);
+    requestPermMock.mockImplementation(async () => {
+      granted = true;
+      return "granted";
+    });
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config")
+        return Promise.resolve(makeR14Config([r16Account], { systemNotifications: true }));
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(screen.getByText("系统通知已被系统拒绝")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "重新请求授权" }));
+    await waitFor(() => expect(screen.queryByText("系统通知已被系统拒绝")).toBeNull());
+    expect(screen.getByText("已授权")).toBeTruthy();
   });
 });

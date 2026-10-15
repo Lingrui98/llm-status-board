@@ -4,9 +4,22 @@ import { PROVIDER_KINDS, DEFAULT_BASE_URLS, newAccountId } from "../types";
 import { moveAccount } from "../configMerge";
 import AccountForm from "./AccountForm";
 import ThresholdSlider from "./ui/ThresholdSlider";
+import { InlineNotice, SettingRow } from "./ui";
 import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notifications";
+import { isSystemNotifyEnabled } from "../residentSettings";
+import { NOTIFY_PERMISSION_RETRY_LABEL, notificationManualPath } from "../pluginRuntime";
 import { exportUsageCsv } from "../exportReport";
 import * as api from "../api";
+
+/** R16 自启状态（§2）：真值以系统为准，查询中禁用开关 */
+export interface AutostartState {
+  /** 系统真实状态（isEnabled() 查询结果） */
+  enabled: boolean;
+  /** 正在查询/切换 → 开关禁用 */
+  busy: boolean;
+  /** 查询或切换失败的可读原因 */
+  error?: string | null;
+}
 
 interface Props {
   config: AppConfig;
@@ -22,6 +35,19 @@ interface Props {
   saveState: "idle" | "saving" | "saved" | "error";
   saveError?: string;
   onRetrySave?: () => void;
+  /* ---- R16 ---- */
+  /** 自启真实状态与忙碌标志（App 层拥有，设置页只读渲染 + 发起切换） */
+  autostart?: AutostartState;
+  /** 请求切换开机自启（App 层执行 enable/disable 并复查真实状态） */
+  onToggleAutostart?: (next: boolean) => void;
+  /** 系统通知权限状态（由 App 查询；'unknown' = 查询失败） */
+  notifyPermission?: "granted" | "denied" | "unknown";
+  /** 用户点「重新请求授权」：请求一次通知权限（不会打开系统设置页，故文案如实描述） */
+  onRequestNotifyPermission?: () => void;
+  /** 托盘侧的暂停状态（§6）：暂停时设置页也要显示一致 */
+  paused?: boolean;
+  /** 恢复自动刷新（暂停态的「恢复」操作） */
+  onResume?: () => void;
 }
 
 /**
@@ -39,8 +65,15 @@ export function validateSettings(settings: Settings): { ok: true } | { ok: false
     return { ok: false, message: "配额用量提醒线需为 1–100 的整数" };
   if (days != null && (!Number.isFinite(days) || days < 3 || days > 90 || !Number.isInteger(days)))
     return { ok: false, message: "洞察统计窗口需为 3–90 的整数天" };
+  // R16：自动重试次数 0–3 整数（Rust 侧 validate_settings 同步）
+  const retryMax = settings.refreshRetryMax;
+  if (retryMax != null && (!Number.isFinite(retryMax) || retryMax < 0 || retryMax > 3 || !Number.isInteger(retryMax)))
+    return { ok: false, message: "自动重试次数需为 0–3 的整数" };
   return { ok: true };
 }
+
+/** R16：Settings → 自动重试配置（旧配置缺字段 → 规格默认：启用 + 1 次） */
+export { resolveRetrySettings, isSystemNotifyEnabled } from "../residentSettings";
 
 export default function SettingsView({
   config,
@@ -51,6 +84,12 @@ export default function SettingsView({
   saveState,
   saveError,
   onRetrySave,
+  autostart,
+  onToggleAutostart,
+  notifyPermission = "unknown",
+  onRequestNotifyPermission,
+  paused = false,
+  onResume,
 }: Props) {
   // 不再持有本地草稿：列表/通用设置全部直接读写 config（App 层 state），
   // 每次变更经 onSave 走自动保存通道 —— 不存在「忘了点保存」的状态
@@ -390,18 +429,6 @@ export default function SettingsView({
             onChange={(e) => updateSettings({ refreshOnStart: e.target.checked })}
           />
         </label>
-        <label className="setting-row">
-          <span>关闭窗口时最小化到系统托盘</span>
-          <input
-            type="checkbox"
-            className="switch"
-            checked={config.settings.closeToTray ?? true}
-            onChange={(e) => updateSettings({ closeToTray: e.target.checked })}
-          />
-        </label>
-        <p className="muted small">
-          开启时点击窗口 ✕ 会隐藏到系统托盘（退出请右键托盘图标选「退出」）；关闭后 ✕ 直接退出应用。
-        </p>
         <label className="setting-row column">
           <span>网络代理（可选，全部查询共用）</span>
           <input
@@ -414,6 +441,139 @@ export default function SettingsView({
           访问 OpenAI 等境外官方接口通常需要代理；中转站和国内厂商一般直连即可。
           API Key / Token 只保存在本机配置文件中，不会上传到任何服务器（查询请求直连各提供商）。
         </p>
+      </div>
+
+      {/* R16：常驻与通知 —— 自启/托盘/系统通知/自动重试同组归置；改动即时自动保存 */}
+      <div className="settings-section">
+        <h3>常驻与通知</h3>
+        <div className="set-rows">
+          {/* §2 开机自启：真值以系统为准（查询中禁用），失败回滚由 App 层执行 */}
+          <SettingRow
+            label="开机自启"
+            hint="登录系统后自动启动看板（自启即普通启动）"
+            disabled={!autostart || autostart.busy}
+            badge={!autostart || autostart.busy ? "查询中" : autostart.enabled ? "已开启" : "已关闭"}
+            badgeTone={autostart?.enabled ? "ok" : "default"}
+            control={(a) => (
+              <input
+                type="checkbox"
+                className="switch"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                disabled={a.disabled}
+                checked={autostart?.enabled ?? false}
+                onChange={(e) => onToggleAutostart?.(e.target.checked)}
+              />
+            )}
+          />
+
+          {/* §1 关闭窗口 = 隐藏到托盘（R14 既有开关，移入常驻组） */}
+          <SettingRow
+            label="关闭窗口时最小化到系统托盘"
+            hint="开启时点 ✕ 隐藏到托盘（退出请右键托盘图标选「退出」）；关闭后 ✕ 直接退出"
+            control={(a) => (
+              <input
+                type="checkbox"
+                className="switch"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                checked={config.settings.closeToTray ?? true}
+                onChange={(e) => updateSettings({ closeToTray: e.target.checked })}
+              />
+            )}
+          />
+
+          {/* §6 托盘暂停态：与托盘菜单同步（暂停时定时器停，手动刷新仍可用） */}
+          <SettingRow
+            label="自动刷新已暂停"
+            hint={paused ? "暂停期间定时刷新不会触发；手动刷新不受影响" : "自动刷新按设定间隔运行"}
+            badge={paused ? "已暂停" : "运行中"}
+            badgeTone={paused ? "warn" : "ok"}
+            control={
+              paused ? (
+                <button type="button" className="btn ghost" onClick={onResume}>
+                  恢复自动刷新
+                </button>
+              ) : (
+                <span className="muted small">—</span>
+              )
+            }
+          />
+
+          {/* §4 系统通知开关（默认关；开关关闭时不请求权限、不发送） */}
+          <SettingRow
+            label="系统通知"
+            hint="余额不足、配额将满、刷新失败时发系统通知；同一问题 24 小时内只提醒一次"
+            badge={
+              notifyPermission === "granted" ? "已授权" : notifyPermission === "denied" ? "未授权" : "未知"
+            }
+            badgeTone={notifyPermission === "granted" ? "ok" : notifyPermission === "denied" ? "warn" : "default"}
+            control={(a) => (
+              <input
+                type="checkbox"
+                className="switch"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                checked={isSystemNotifyEnabled(config.settings)}
+                onChange={(e) => updateSettings({ systemNotifications: e.target.checked })}
+              />
+            )}
+          />
+
+          {/* §5 自动重试：开关 + 次数（0–3，越界拒绝保存） */}
+          <SettingRow
+            label="刷新失败时自动重试"
+            hint="仅整轮失败（刷新出错，或全部账号都失败）才重试；部分失败不重试"
+            control={(a) => (
+              <input
+                type="checkbox"
+                className="switch"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                checked={config.settings.refreshRetryEnabled ?? true}
+                onChange={(e) => updateSettings({ refreshRetryEnabled: e.target.checked })}
+              />
+            )}
+          />
+          <SettingRow
+            label="自动重试次数上限"
+            hint="0–3 次，间隔 1s / 2s / 4s（累计最长 7s）"
+            disabled={!(config.settings.refreshRetryEnabled ?? true)}
+            control={
+              <ThresholdSlider
+                label="自动重试次数上限"
+                value={config.settings.refreshRetryMax ?? 1}
+                min={0}
+                max={3}
+                step={1}
+                unit="次"
+                disabled={!(config.settings.refreshRetryEnabled ?? true)}
+                onChange={(v) => updateSettings({ refreshRetryMax: v })}
+              />
+            }
+          />
+        </div>
+
+        {/* §4 权限被拒：常驻（刻意不传 autoHideMs，err 也不会自动消退）。
+            文案诚实性（task-27）：插件只能「重新请求授权」，**无法打开系统设置页**，
+            因此按钮如实写「重新请求授权」，正文补上手动放行路径，让用户点完仍有下一步。 */}
+        {isSystemNotifyEnabled(config.settings) && notifyPermission === "denied" && (
+          <InlineNotice
+            tone="err"
+            title="系统通知已被系统拒绝"
+            message={`系统拒绝了通知权限，提醒目前只能在应用内看到。${notificationManualPath()}`}
+            action={
+              onRequestNotifyPermission
+                ? { label: NOTIFY_PERMISSION_RETRY_LABEL, onClick: onRequestNotifyPermission }
+                : undefined
+            }
+          />
+        )}
+
+        {/* §2 自启失败：可读原因 + 重试（绝不显示"已开启"但实际未生效） */}
+        {autostart?.error && (
+          <InlineNotice tone="warn" message={autostart.error} />
+        )}
       </div>
 
       {/* R14：提醒与洞察 —— 阈值从硬编码改为可配置，改动即时自动保存并在下一轮刷新生效 */}

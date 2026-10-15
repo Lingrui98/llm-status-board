@@ -1,6 +1,6 @@
 [package]
 name = "llm-status-board"
-version = "0.1.7"
+version = "0.1.8"
 description = "LLM 提供商余额与用量聚合看板"
 authors = ["Steve Gou"]
 edition = "2021"
@@ -17,6 +17,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-dialog = "2.8.1"
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-notification = "2.7.0"
 
 [profile.release]
 codegen-units = 1

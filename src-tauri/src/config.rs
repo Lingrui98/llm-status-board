@@ -264,6 +264,24 @@ pub fn normalize_usage_currency(records: &mut [UsageRecord]) {
     }
 }
 
+/// R16 §7 防御式兜底：丢弃「全空行」——六个可空数值字段
+/// （`cost`/`requests`/`tokens`/`inputTokens`/`outputTokens`/`usedTotal`）**全为 `null`**
+/// 的记录不携带任何信息，写入前剔除（与前端 `usageHistory.ts#isEmptyUsageRow` 同判据）。
+///
+/// **必须保留 B2 基准行**：只要 `usedTotal` 有值（used 计数器法的增量基准），
+/// 删掉它下次就算不出 delta，所以它不算「空行」。
+/// 作用范围：入批 + 合并后的整账（整账中的全空行同样无信息损失）。
+pub fn drop_empty_usage_records(records: &mut Vec<UsageRecord>) {
+    records.retain(|r| {
+        r.cost.is_some()
+            || r.requests.is_some()
+            || r.tokens.is_some()
+            || r.input_tokens.is_some()
+            || r.output_tokens.is_some()
+            || r.used_total.is_some()
+    });
+}
+
 /// R15 §1.1 防御式兜底：`source` 只允许 `USAGE_SOURCE_SITE` / `USAGE_SOURCE_LOCAL`。
 /// 未知/空/大小写不匹配（`"foo"` / `""` / `"SITE"`）一律降级为 `"local"`——
 /// **绝不冒充 site**（site 是权威数据，只有前端明确声明才配得上）。
@@ -338,9 +356,14 @@ pub fn upsert_usage_history(path: &Path, batch: &[UsageRecord]) -> Result<usize,
     let mut records = std::mem::take(&mut file.records);
     merge_usage_records(&mut records, batch);
     trim_usage_records(&mut records);
-    // 落盘前兜底：合并后的整份总账（含既有行）都不得出现空币种/非法 source
+    // 落盘前兜底：合并后的整份总账（含既有行）都不得出现空币种/非法 source/全空行
     normalize_usage_currency(&mut records);
     normalize_usage_source(&mut records);
+    drop_empty_usage_records(&mut records);
+    // 入批与既有行都被净化后一条不剩、且原本没有文件 → 别创建无意义的空文件
+    if records.is_empty() && existing_text.is_none() {
+        return Ok(0);
+    }
     file.version = USAGE_HISTORY_VERSION;
     file.records = records;
     let total = file.records.len();
@@ -1262,5 +1285,118 @@ mod tests {
         let healed = load_usage_history(&path).unwrap();
         assert_eq!(healed.records.len(), 1);
         assert_eq!(healed.records[0].cost, Some(3.0));
+    }
+
+    // ---------- R16 §7 全空行兜底 ----------
+
+    /// 构造一条「六字段全 null」的全空行
+    fn empty_row(account: &str, date: &str) -> UsageRecord {
+        UsageRecord {
+            account_id: account.into(),
+            date: date.into(),
+            cost: None,
+            currency: "USD".into(),
+            requests: None,
+            input_tokens: None,
+            output_tokens: None,
+            tokens: None,
+            used_total: None,
+            source: "site".into(),
+            updated_at: "2026-10-15T10:00:00+08:00".into(),
+        }
+    }
+
+    /// 纯函数：全空行删除，但只要任一字段有值就保留（含 B2 基准行 usedTotal）
+    #[test]
+    fn test_drop_empty_usage_records_keeps_b2_baseline() {
+        let mut records = vec![
+            empty_row("a1", "2026-10-15"),
+            UsageRecord {
+                tokens: Some(0.0),
+                ..empty_row("a2", "2026-10-15")
+            },
+            UsageRecord {
+                cost: Some(0.0),
+                ..empty_row("a3", "2026-10-15")
+            },
+            UsageRecord {
+                requests: Some(0),
+                ..empty_row("a4", "2026-10-15")
+            },
+            UsageRecord {
+                used_total: Some(123.0),
+                ..empty_row("kimi", "2026-10-15")
+            },
+        ];
+        drop_empty_usage_records(&mut records);
+        let ids: Vec<&str> = records.iter().map(|r| r.account_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["a2", "a3", "a4", "kimi"],
+            "只删全空行；0 值字段与 usedTotal 基准行都要保留"
+        );
+    }
+
+    /// AC-20：绕过前端直接传全空行 → 落盘后文件内无全空行，重复 upsert 幂等
+    #[test]
+    fn test_upsert_drops_all_empty_rows_from_batch() {
+        let path = usage_temp_path("usage-empty-row-batch");
+        let _ = fs::remove_file(&path);
+
+        let batch = vec![
+            empty_row("a1", "2026-10-15"),
+            empty_row("a2", "2026-10-16"),
+            rec("a3", "2026-10-17", Some(1.5), "site"),
+        ];
+        let total = upsert_usage_history(&path, &batch).unwrap();
+        assert_eq!(total, 1, "两条全空行应被丢弃");
+
+        let file = load_usage_history(&path).unwrap();
+        assert_eq!(file.records.len(), 1);
+        assert_eq!(file.records[0].account_id, "a3");
+
+        // 幂等：同一批（含全空行）再来一次，字节不变
+        let bytes = fs::read(&path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        assert_eq!(upsert_usage_history(&path, &batch).unwrap(), 1);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
+    /// AC-20：整账里的历史全空行也会在写入时被净化（与币种/source 归一同一策略）
+    #[test]
+    fn test_upsert_purges_existing_empty_rows_in_ledger() {
+        let path = usage_temp_path("usage-empty-row-ledger");
+        let _ = fs::remove_file(&path);
+
+        // 手工构造一个「含全空行」的历史文件（模拟旧版本/脏数据写入的产物）
+        let dirty = UsageHistoryFile {
+            version: 1,
+            records: vec![
+                empty_row("ghost", "2026-10-01"),
+                rec("keep", "2026-10-02", Some(2.0), "site"),
+            ],
+        };
+        fs::write(&path, serde_json::to_string_pretty(&dirty).unwrap()).unwrap();
+
+        upsert_usage_history(&path, &[rec("new", "2026-10-03", Some(3.0), "site")]).unwrap();
+
+        let file = load_usage_history(&path).unwrap();
+        let ids: Vec<&str> = file.records.iter().map(|r| r.account_id.as_str()).collect();
+        assert_eq!(ids, vec!["keep", "new"], "既有全空行应被清除");
+    }
+
+    /// AC-20 边界：批次非空但全是被过滤的空行、且文件不存在 → 不创建空文件
+    #[test]
+    fn test_upsert_all_empty_batch_creates_no_file() {
+        let path = usage_temp_path("usage-empty-row-nofile");
+        let _ = fs::remove_file(&path);
+
+        let total = upsert_usage_history(
+            &path,
+            &[empty_row("a1", "2026-10-15"), empty_row("a2", "2026-10-15")],
+        )
+        .unwrap();
+        assert_eq!(total, 0);
+        assert!(!path.exists(), "净化后一条不剩时不得创建空文件");
     }
 }

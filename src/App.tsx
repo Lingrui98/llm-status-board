@@ -6,12 +6,27 @@ import CommandPalette from "./components/CommandPalette";
 import WelcomeGuide from "./components/WelcomeGuide";
 import HelpPanel from "./components/HelpPanel";
 import NotificationCenter from "./components/NotificationCenter";
+import { InlineNotice } from "./components/ui";
 import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome, UsageRecord } from "./types";
 import { formatDurationMs } from "./format";
 import { mergeRotatedTokens } from "./configMerge";
 import { buildUsageBatch, hasUsageChanges, toLocalDateKey } from "./usageHistory";
+import { RefreshRetryController, isWholeRoundFailure } from "./refreshRetry";
+import { isSystemNotifyEnabled, resolveRetrySettings } from "./residentSettings";
+import {
+  commitSystemNotify,
+  emptySystemNotifyState,
+  isSystemNotifyKind,
+  loadSystemNotifyState,
+  saveSystemNotifyState,
+  shouldSendSystemNotification,
+  type SystemNotifySource,
+} from "./systemNotify";
+import { querySystemNotifyPermission, sendSystemNotify } from "./systemNotifyApi";
+import { toggleAutostart } from "./autostart";
+import { pluginAutostart, pluginSystemNotify } from "./pluginRuntime";
 import {
   computeProblemNotifications,
   diffRecovered,
@@ -112,6 +127,41 @@ export default function App() {
   const [recoveredNotes, setRecoveredNotes] = useState<AppNotification[]>([]);
   // 上一轮问题键集合（恢复检测比对基准；null = 首轮不算恢复）
   const prevProblemKeys = useRef<Set<string> | null>(null);
+
+  /* ---- R16 常驻与自动化 ---- */
+  // §6 自动刷新暂停（托盘菜单可切换）；前端是唯一真值源，翻转后回报给 Rust
+  const [autoPaused, setAutoPaused] = useState(false);
+  // 定时器回调读它判断是否暂停（避免把 autoPaused 放进定时器 effect 依赖导致重建）
+  const autoPausedRef = useRef(false);
+  // D-2：跳过首次挂载的暂停态回报（初始态由 Rust 自行维护）
+  const firstAutoPausedSyncRef = useRef(true);
+  // §2 开机自启：真值以系统为准（查询/切换中禁用开关）
+  const [autostart, setAutostart] = useState<{ enabled: boolean; busy: boolean; error?: string | null }>({
+    enabled: false,
+    busy: false,
+  });
+  // §4 系统通知权限状态（打开设置页时查询，不请求）
+  const [notifyPermission, setNotifyPermission] = useState<"granted" | "denied" | "unknown">("unknown");
+  // §5 重试倒计时展示（逐秒更新 → 渲染时 live="off"，状态变化单独播报一次）
+  const [retryInfo, setRetryInfo] = useState<{ attempt: number; max: number; remainingSec: number } | null>(null);
+  const [retryAnnouncement, setRetryAnnouncement] = useState("");
+  // 系统通知抑制表（localStorage 持久化，运行态不进配置）
+  const sysNotifyStateRef = useRef(loadSystemNotifyState());
+  // 上一轮「系统通知类」问题键（§4 规则 1：只推新问题）
+  const prevSystemProblemKeys = useRef<Set<string> | null>(null);
+  // 只在用户「打开开关」时请求一次通知权限
+  const notifyPermissionAsked = useRef(false);
+  const retryCtrlRef = useRef<RefreshRetryController | null>(null);
+  /** 本轮刷新的 okCount（供 finally 判定整轮失败；catch 也能读到） */
+  const roundOkCountRef = useRef(0);
+  if (retryCtrlRef.current === null) {
+    const ctrl = new RefreshRetryController();
+    ctrl.onStateChange = () => {
+      const info = ctrl.pendingInfo();
+      setRetryInfo(info ? { attempt: info.attempt, max: info.max, remainingSec: info.remainingSec } : null);
+    };
+    retryCtrlRef.current = ctrl;
+  }
 
   const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
   const clearAddRequest = useCallback(() => setAddRequest(null), []);
@@ -224,11 +274,21 @@ export default function App() {
     }
   }, []);
 
-  const refresh = useCallback(async () => {
+  /**
+   * 刷新全部账号。
+   * @param auto 是否由「自动重试」触发（true 时失败不再续接新的重试链）
+   *
+   * R16 §5：整轮失败（IPC 抛错，或启用账号数 > 0 且 okCount === 0）时安排退避重试；
+   * `okCount > 0` 的部分失败不重试（避免放大请求量）。
+   */
+  const refresh = useCallback(async (auto = false) => {
     if (refreshingRef.current) return;
     refreshingRef.current = true;
     refreshStartRef.current = performance.now();
     setRefreshing(true);
+    // 本轮是否整轮失败：用 ref 让 catch 也能读到（抛错时保持默认 false 之外需显式判定）
+    let ipcFailed = false;
+    roundOkCountRef.current = 0;
     try {
       const outcomes = await api.refreshAll();
       const map: Record<string, RefreshOutcome> = {};
@@ -237,6 +297,7 @@ export default function App() {
       const enabledIds = new Set((configRef.current?.accounts ?? []).filter((a) => a.enabled).map((a) => a.id));
       const visibleOutcomes = outcomes.filter((o) => enabledIds.has(o.accountId));
       const okCount = visibleOutcomes.filter((o) => o.ok).length;
+      roundOkCountRef.current = okCount;
       const failCount = visibleOutcomes.length - okCount;
       setRefreshAnnouncement(
         failCount > 0 ? `刷新完成，${okCount} 个账号正常，${failCount} 个异常` : `刷新完成，${okCount} 个账号正常`,
@@ -255,6 +316,7 @@ export default function App() {
       }
       setTodayKey(dayKey);
     } catch (e) {
+      ipcFailed = true;
       setLoadError(String(e));
     } finally {
       refreshingRef.current = false;
@@ -264,8 +326,145 @@ export default function App() {
         refreshStartRef.current = null;
       }
       setRefreshing(false);
+
+      // R16 §5：整轮失败 → 安排一次退避重试（启用账号数 > 0 且 okCount === 0，或 IPC 抛错）。
+      // 自动重试自己触发的这轮失败不再续接（由下一次定时/手动刷新重新开始）。
+      const enabledCount = (configRef.current?.accounts ?? []).filter((a) => a.enabled).length;
+      const wholeFailed = isWholeRoundFailure({
+        ipcFailed,
+        enabledAccountCount: enabledCount,
+        okCount: roundOkCountRef.current,
+      });
+      if (wholeFailed && !auto) {
+        const ctrl = retryCtrlRef.current;
+        // 非自动重试触发的整轮失败 = 新一轮（手动刷新或定时刷新）→ 把退避计数归零后重新安排
+        if (ctrl && ctrl.attemptCount >= ctrl.maxRetries) ctrl.cancel();
+        if (ctrl && ctrl.schedule()) {
+          setRetryAnnouncement(`刷新失败，${ctrl.attemptCount}/${ctrl.maxRetries} 次重试已安排`);
+        } else {
+          // 未启用或已达上限 → 如实报失败（不改写 loadError，也不假装在重试）
+          setRetryAnnouncement("");
+        }
+      } else if (!wholeFailed) {
+        retryCtrlRef.current?.cancel();
+        setRetryAnnouncement("");
+      }
     }
   }, [loadHistory, persistUsageBatch]);
+  // R16 §5：把配置同步进重试控制器（开关 / 次数上限）
+  useEffect(() => {
+    const { enabled, max } = resolveRetrySettings(config?.settings);
+    const ctrl = retryCtrlRef.current;
+    if (!ctrl) return;
+    ctrl.enabled = enabled;
+    ctrl.maxRetries = max;
+    if (!enabled || max === 0) {
+      ctrl.cancel();
+      setRetryInfo(null);
+      setRetryAnnouncement("");
+    } else {
+      ctrl.onStateChange?.(); // 上限变化后刷新展示信息
+    }
+  }, [config?.settings]);
+
+  // R16 §5：到点触发重试。自动重试自己不再续接新的重试链（避免无限循环）。
+  useEffect(() => {
+    const ctrl = retryCtrlRef.current;
+    if (!ctrl) return;
+    ctrl.onFire = (attempt) => {
+      setRetryAnnouncement(`第 ${attempt} 次重试中…`);
+      void refresh(true);
+    };
+    return () => {
+      ctrl.onFire = null;
+    };
+  }, [refresh]);
+
+  // R16 §5：倒计时逐秒刷新（仅用于展示；渲染时用 live="off" 避免读屏每秒播报）
+  useEffect(() => {
+    if (!retryInfo) return;
+    const timer = window.setInterval(() => retryCtrlRef.current?.onStateChange?.(), 500);
+    return () => window.clearInterval(timer);
+  }, [retryInfo]);
+
+  // 组件卸载：清理重试定时器
+  useEffect(() => {
+    const ctrl = retryCtrlRef.current;
+    return () => ctrl?.dispose();
+  }, []);
+
+  // R16 §6：托盘「暂停/恢复自动刷新」→ 前端翻转真值并回报给 Rust
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    (async () => {
+      try {
+        const u = await listen("tray-toggle-pause", () => {
+          // D-2：只做状态翻转（纯更新函数），IPC 回报交给下面的 useEffect([autoPaused])
+          setAutoPaused(!autoPausedRef.current);
+        });
+        if (disposed) u();
+        else unlisten = u;
+      } catch {
+        // 无事件后端（jsdom）：忽略
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // R16 §6：托盘「打开设置」→ 切到设置视图
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    (async () => {
+      try {
+        const u = await listen("tray-open-settings", () => setView("settings"));
+        if (disposed) u();
+        else unlisten = u;
+      } catch {
+        // 无事件后端：忽略
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // R16 §2：进入设置页时查询自启真实状态（查询中禁用开关）；离开时清掉错误提示
+  useEffect(() => {
+    if (view !== "settings") return;
+    let cancelled = false;
+    setAutostart((s) => ({ ...s, busy: true }));
+    (async () => {
+      try {
+        const on = await pluginAutostart.isEnabled();
+        if (!cancelled) setAutostart({ enabled: on, busy: false, error: null });
+      } catch (e) {
+        if (!cancelled) setAutostart((s) => ({ ...s, busy: false, error: readableError(e) }));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  // R16 §4：进入设置页时查询通知权限（**不**请求权限）
+  useEffect(() => {
+    if (view !== "settings") return;
+    let cancelled = false;
+    (async () => {
+      const p = await querySystemNotifyPermission(pluginSystemNotify);
+      if (!cancelled) setNotifyPermission(p);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view, config?.settings.systemNotifications]);
+
   // 初始化：加载配置 → 按设置决定是否自动刷新一次
   useEffect(() => {
     (async () => {
@@ -296,7 +495,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自动刷新定时器
+  // 自动刷新定时器（R16 §6：托盘暂停时不触发，但定时器保持运行以便恢复后立即按原间隔生效）
   useEffect(() => {
     if (refreshTimer.current) {
       window.clearInterval(refreshTimer.current);
@@ -304,7 +503,10 @@ export default function App() {
     }
     const sec = config?.settings.autoRefreshSec ?? 0;
     if (sec > 0) {
-      refreshTimer.current = window.setInterval(() => refresh(), sec * 1000);
+      refreshTimer.current = window.setInterval(() => {
+        if (autoPausedRef.current) return; // 暂停中：不自动刷新（手动刷新仍可用）
+        void refresh();
+      }, sec * 1000);
     }
     return () => {
       if (refreshTimer.current) window.clearInterval(refreshTimer.current);
@@ -489,6 +691,132 @@ export default function App() {
     return [...problemResult.notifications, ...active].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   }, [problemResult, recoveredNotes]);
 
+  /**
+   * R16 §4 系统通知派发。
+   * 三条防打扰规则全部由纯函数 `shouldSendSystemNotification` 判定（见 systemNotify.ts）：
+   *   ① 只推新问题（与上一轮快照比对）② 24h 抑制 ③ 5 分钟内最多 3 条。
+   * 开关关闭 / 权限被拒 / 发送失败一律静默降级为应用内通知，**绝不影响刷新主流程**。
+   */
+  useEffect(() => {
+    const settings = config?.settings;
+    if (!isSystemNotifyEnabled(settings)) {
+      // 关闭时不请求权限、不发送；但仍记录快照，避免重新打开时把"旧问题"误判为新问题
+      prevSystemProblemKeys.current = new Set(
+        [...problemResult.problemKeys].filter((k) => isSystemNotifyKind(k.split(":")[0])),
+      );
+      return;
+    }
+
+    const isSystemKey = (k: string) => isSystemNotifyKind(k.split(":")[0]);
+    const activeKeys = [...problemResult.problemKeys].filter(isSystemKey);
+    const prev = prevSystemProblemKeys.current;
+    const newKeys = activeKeys.filter((k) => !prev?.has(k));
+
+    if (newKeys.length > 0) {
+      // 本轮同意请求权限：仅在用户刚打开开关时（每次开启最多一次）
+      const allowRequest = !notifyPermissionAsked.current;
+      const byKey = new Map(problemResult.notifications.map((n) => [n.id, n]));
+      const sources: SystemNotifySource[] = newKeys
+        .map((k) => byKey.get(k))
+        .filter((n): n is NonNullable<typeof n> => !!n)
+        .map((n) => ({
+          kind: n.kind,
+          accountId: n.accountId,
+          accountName: n.accountName,
+          detail: n.detail ?? n.title,
+          active: true,
+        }));
+
+      void (async () => {
+        let state = sysNotifyStateRef.current;
+        let permissionNow = notifyPermission;
+        for (const src of sources) {
+          const decision = shouldSendSystemNotification(src, {
+            now: Date.now(),
+            enabled: true,
+            state,
+            // 新问题判定已在上方用快照完成，这里传空集让纯函数只做 24h 与速率判定
+            prevProblemKeys: new Set<string>(),
+          });
+          if (!decision.send) continue;
+          const res = await sendSystemNotify(
+            pluginSystemNotify,
+            { title: decision.title, body: decision.body },
+            allowRequest,
+          );
+          if (allowRequest) notifyPermissionAsked.current = true;
+          if (res.permission !== permissionNow) {
+            permissionNow = res.permission;
+            setNotifyPermission(res.permission);
+          }
+          if (res.sent) {
+            // 只有真正发出去才记账：被规则丢弃的通知不写抑制表、不计入速率（§4 规则 3）
+            state = commitSystemNotify(state, decision.key, Date.now());
+            sysNotifyStateRef.current = state;
+            saveSystemNotifyState(state);
+          } else if (res.skipped === "notGranted") {
+            break; // 未授权：本条及后续都不必再试（不反复骚扰）
+          }
+        }
+      })();
+    }
+
+    prevSystemProblemKeys.current = new Set(activeKeys);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [problemResult, config?.settings]);
+
+  /** R16 §2：切换开机自启 —— 命令成功后**再次查询**确认真实状态；失败回滚并给可读原因 */
+  const handleToggleAutostart = useCallback(async (next: boolean) => {
+    setAutostart((s) => ({ ...s, busy: true, error: null }));
+    const api2 = pluginAutostart;
+    const res = await toggleAutostart(api2, next);
+    setAutostart({ enabled: res.enabled, busy: false, error: res.ok ? null : (res.error ?? "开机自启设置失败") });
+  }, []);
+
+  /**
+   * R16 §4：用户点「重新请求授权」→ 再请求一次通知权限。
+   * 契约诚实性（task-27）：插件**没有**打开系统设置页的能力，本函数只做「重新请求」，
+   * 不谎称能跳转系统设置；手动放行路径由设置页提示正文告知用户。
+   */
+  const handleRequestNotifyPermission = useCallback(async () => {
+    notifyPermissionAsked.current = true;
+    const res = await sendSystemNotify(
+      pluginSystemNotify,
+      { title: "LLM Status Board", body: "通知已开启" },
+      true,
+    );
+    setNotifyPermission(res.permission);
+  }, []);
+
+  /** R16 §6：恢复自动刷新（暂停态的「恢复」操作）→ 回报由下方 useEffect 统一执行 */
+  const resumeAutoRefresh = useCallback(() => {
+    setAutoPaused(false);
+  }, []);
+
+  // autoPaused → ref 镜像（供定时器回调与暂停态回报读取，不进依赖）
+  useEffect(() => {
+    autoPausedRef.current = autoPaused;
+  }, [autoPaused]);
+
+  // R16 §6：暂停态**变化**时回报 Rust（重建托盘菜单文案/tooltip）。
+  // D-2：IPC 从 setState 更新函数里移到这里 —— 更新函数保持纯函数（StrictMode 下不会被重复调用）。
+  // 跳过首次挂载：初始态由 Rust 自行维护，只在真正发生翻转时回报。
+  useEffect(() => {
+    if (firstAutoPausedSyncRef.current) {
+      firstAutoPausedSyncRef.current = false;
+      return;
+    }
+    // 前端仍是暂停唯一真值源：翻转后按实际值如实回报（autoRefreshSec === 0 时行为不变）
+    void api.setAutoRefreshPaused(autoPaused).catch(() => {});
+  }, [autoPaused]);
+
+  // R16 §5+§6：暂停自动刷新时，等待中的自动重试一并取消（重试属于自动化行为）
+  useEffect(() => {
+    if (!autoPaused) return;
+    retryCtrlRef.current?.cancel();
+    setRetryAnnouncement("");
+  }, [autoPaused]);
+
   const unreadCount = notifications.reduce((n, x) => n + (notifRead[x.id] ? 0 : 1), 0);
   const hasUnreadError = notifications.some((x) => !notifRead[x.id] && x.severity === "err");
 
@@ -598,6 +926,10 @@ export default function App() {
       <div className="sr-only" role="status" aria-live="polite">
         {refreshAnnouncement}
       </div>
+      {/* R16 §5：重试状态**变化**只播报一次（逐秒倒计时本身不播报，见下方 live="off"） */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {retryAnnouncement}
+      </div>
       <header className="topbar">
         <div className="topbar-title">
           <span className="logo-dot" />
@@ -647,7 +979,7 @@ export default function App() {
               </span>
             )}
           </button>
-          <button type="button" className="btn ghost refresh-btn" onClick={refresh} disabled={refreshing}>
+          <button type="button" className="btn ghost refresh-btn" onClick={() => void refresh()} disabled={refreshing}>
             <svg
               className={`refresh-icon${refreshing ? " spinning" : ""}`}
               width="13"
@@ -682,6 +1014,29 @@ export default function App() {
         )}
       </header>
 
+      {/* R16 §5：重试倒计时。逐秒更新 → 必须 live="off"，否则读屏每秒播报一次；
+          状态变化已由上方 sr-only role="status" 播报一次。 */}
+      {retryInfo && retryInfo.remainingSec > 0 && (
+        <div className="app-notice-bar">
+          <InlineNotice
+            tone="warn"
+            live="off"
+            message={`刷新失败，${retryInfo.remainingSec}s 后重试（第 ${retryInfo.attempt}/${retryInfo.max} 次）`}
+          />
+        </div>
+      )}
+
+      {/* R16 §6：托盘暂停态 —— 常驻 info + 「恢复」操作（恢复后定时器按原间隔继续） */}
+      {autoPaused && (
+        <div className="app-notice-bar">
+          <InlineNotice
+            tone="info"
+            message="自动刷新已暂停（手动刷新仍可用）"
+            action={{ label: "恢复", onClick: resumeAutoRefresh }}
+          />
+        </div>
+      )}
+
       {view === "dashboard" ? (
         <Dashboard
           config={config}
@@ -712,6 +1067,12 @@ export default function App() {
           saveState={saveState}
           saveError={saveError}
           onRetrySave={handleRetrySave}
+          autostart={autostart}
+          onToggleAutostart={handleToggleAutostart}
+          notifyPermission={notifyPermission}
+          onRequestNotifyPermission={handleRequestNotifyPermission}
+          paused={autoPaused}
+          onResume={resumeAutoRefresh}
         />
       )}
 

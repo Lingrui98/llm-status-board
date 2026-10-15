@@ -224,6 +224,14 @@ pub async fn upsert_usage_history(
     config::upsert_usage_history(&config::usage_history_file_path(&app)?, &records)
 }
 
+/// R16 §6：前端回报「自动刷新已暂停」状态（前端是唯一真值源，Rust 不自行翻转）。
+/// 仅更新托盘菜单文案/tooltip 的运行态，**不持久化**、不返回业务错误之外的信息。
+#[tauri::command]
+pub async fn set_auto_refresh_paused(app: AppHandle, paused: bool) -> Result<(), String> {
+    crate::tray::apply_auto_refresh_paused(&app, paused);
+    Ok(())
+}
+
 /// 报表导出（R14）：CSV 内容由前端纯函数 `buildUsageCsv` 组好（含 UTF-8 BOM、
 /// RFC 4180 转义、CRLF），Rust 只做**原子字节写入**，不加工、不裁剪 content。
 #[tauri::command]

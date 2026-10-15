@@ -78,6 +78,13 @@ export interface Settings {
   notifyQuotaPercent?: number | null;
   /** R14：洞察统计窗口（天）；缺省视为 14 */
   insightWindowDays?: number | null;
+  /* ---- R16 常驻与自动化 ---- */
+  /** R16：系统通知总开关；缺省（undefined/null）视为 **false**（默认关闭，不对用户突然弹通知） */
+  systemNotifications?: boolean | null;
+  /** R16：刷新整轮失败时自动重试；缺省视为 true */
+  refreshRetryEnabled?: boolean | null;
+  /** R16：自动重试次数上限；缺省视为 1，合法区间 0–3 整数 */
+  refreshRetryMax?: number | null;
 }
 
 export interface AppConfig {
