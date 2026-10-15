@@ -3433,3 +3433,333 @@ button.notif-jump:focus-visible .notif-jump-hint {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ============================================================
+   R15 设计系统原语（src/components/ui/）：分析视图
+   DeltaBadge / RankingRow / HeatStrip / MiniBars
+   色彩全部引用现有变量（--accent/--ok/--warn/--err、--bg-1..3、--text*），
+   暗/亮主题经变量自动覆盖，本区块不出现硬编码颜色。
+   动效只用过渡（无关键帧/无限动画），已被上方 prefers-reduced-motion 全局规则
+   （transition-duration: 0.01ms）统一降级。
+   ============================================================ */
+
+/* ---------- DeltaBadge：涨跌徽标（药丸形，与 .kind-badge 同一语言） ---------- */
+.delta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 语义色只在调用方显式指定 tone 时出现（上涨是好是坏由业务决定，见组件注释） */
+.delta-badge.ok {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
+  color: var(--ok);
+}
+
+.delta-badge.warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 28%, transparent);
+  color: var(--warn);
+}
+
+.delta-badge.err {
+  background: var(--err-soft);
+  border-color: color-mix(in srgb, var(--err) 28%, transparent);
+  color: var(--err);
+}
+
+/* 空值降级为「—」：中性灰，不带任何语义色 */
+.delta-badge.placeholder {
+  color: var(--text-3);
+}
+
+.delta-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.delta-glyph {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.delta-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* ---------- RankingRow：排行行（列表容器 + 行网格） ---------- */
+.rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 行网格：名次徽标｜名称（可伸缩截断）｜占比条（定宽）｜数值（右对齐） */
+.rank-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 88px auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 3px 0;
+  list-style: none; /* 未套 .rank-list 时也不出现项目符号 */
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 1 名主色强调；2–3 名提升对比但不抢主色（不引入新色相） */
+.rank-badge.top1 {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+}
+
+.rank-badge.top2,
+.rank-badge.top3 {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.rank-name {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 占比条：与 .usage-bar / .quota-track 同一几何（6px 圆角轨道） */
+.rank-track {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+
+.rank-fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, var(--ok)), var(--accent));
+  transition: width 0.4s var(--ease-out);
+}
+
+.rank-value {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* 数值语义色（round-15-plan §3.3「效率最差标红」等）：只染数值，单位保持 muted */
+.rank-value.ok {
+  color: var(--ok);
+}
+
+.rank-value.warn {
+  color: var(--warn);
+}
+
+.rank-value.err {
+  color: var(--err);
+}
+
+.rank-unit {
+  margin-left: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+/* ---------- HeatStrip：近 N 天热力条（游标 tabindex，整条只占 1 个 Tab 停靠点） ---------- */
+.heat-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.heat-cell {
+  position: relative; /* 承载数值气泡 */
+  flex: 1 1 0;
+  min-width: 0; /* 允许窄容器里等比压扁，不撑破卡片 */
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: var(--bg-3);
+  font: inherit;
+  cursor: default;
+  outline-offset: 2px; /* 聚焦环沿用全局 :focus-visible（主色 2px） */
+  transition: border-color 0.15s var(--ease-out), transform 0.15s var(--ease-out);
+}
+
+.heat-cell:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+/* 强度档位：0 = 无数据/零值（轨道色）；1..8 = 主色强度递增。
+   单一色相表达「量级」而非「风险」，避免把高用量误读成告警。 */
+.heat-cell.lv-0 {
+  background: var(--bg-3);
+}
+
+.heat-cell.lv-1 {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-3));
+}
+
+.heat-cell.lv-2 {
+  background: color-mix(in srgb, var(--accent) 26%, var(--bg-3));
+}
+
+.heat-cell.lv-3 {
+  background: color-mix(in srgb, var(--accent) 40%, var(--bg-3));
+}
+
+.heat-cell.lv-4 {
+  background: color-mix(in srgb, var(--accent) 54%, var(--bg-3));
+}
+
+.heat-cell.lv-5 {
+  background: color-mix(in srgb, var(--accent) 66%, var(--bg-3));
+}
+
+.heat-cell.lv-6 {
+  background: color-mix(in srgb, var(--accent) 78%, var(--bg-3));
+}
+
+.heat-cell.lv-7 {
+  background: color-mix(in srgb, var(--accent) 88%, var(--bg-3));
+}
+
+.heat-cell.lv-8 {
+  background: var(--accent);
+}
+
+/* 数值气泡：hover 或键盘聚焦均显示（沿用 .alert-tip 的浮层语言） */
+.heat-tip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  z-index: 30;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-2) 96%, transparent);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s var(--ease-out), transform 0.15s var(--ease-out), visibility 0.15s;
+}
+
+.heat-cell:hover .heat-tip,
+.heat-cell:focus-visible .heat-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.heat-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---------- MiniBars：紧凑柱状条（tone 通过单一变量 --mini-tone 驱动） ---------- */
+.mini-bars {
+  --mini-tone: var(--accent);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--mini-gap, 2px);
+  overflow: hidden;
+}
+
+.mini-bars.ok {
+  --mini-tone: var(--ok);
+}
+
+.mini-bars.warn {
+  --mini-tone: var(--warn);
+}
+
+.mini-bars.err {
+  --mini-tone: var(--err);
+}
+
+.mini-bar {
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: 2px 2px 0 0;
+  background: color-mix(in srgb, var(--mini-tone) 42%, transparent);
+  transition: background 0.15s ease, height 0.3s var(--ease-out);
+}
+
+/* 最近一根高亮为满强度主色 */
+.mini-bar.last {
+  background: var(--mini-tone);
+}
+
+/* 全零/负值降级：保留最小可见高度并转 muted 灰（示意「有数据但无用量」） */
+.mini-bar.zero {
+  background: color-mix(in srgb, var(--text-3) 45%, transparent);
+}
+
+.mini-bars-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--bg-1) 60%, transparent);
+  color: var(--text-3);
+  font-size: 11px;
+  white-space: nowrap;
+}

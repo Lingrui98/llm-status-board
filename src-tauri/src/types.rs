@@ -331,6 +331,76 @@ pub struct BalanceSnapshot {
     pub currency: String,
 }
 
+// ---------- 本地用量历史（R15 usage-history.json） ----------
+
+/// `usage-history.json` 当前版本（§1.1 版本封套，便于将来迁移）
+pub const USAGE_HISTORY_VERSION: u32 = 1;
+
+/// 记录来源：站点权威数据（§1.2 A）。只有前端明确写 `"site"` 才算权威
+/// （`is_site()` 是严格相等，不做大小写/去空白容错）。
+pub const USAGE_SOURCE_SITE: &str = "site";
+/// 记录来源：本地估算（§1.2 B1 余额下降法 / B2 used 计数器法）；
+/// 也是未知/空/大小写不匹配 source 的降级目标（见 `config::normalize_usage_source`）
+pub const USAGE_SOURCE_LOCAL: &str = "local";
+
+/// `currency` 归一缺失时的兜底取值（§1.1 声明「永不空串」）
+pub const USAGE_CURRENCY_UNKNOWN: &str = "UNKNOWN";
+
+fn default_usage_history_version() -> u32 {
+    USAGE_HISTORY_VERSION
+}
+
+/// `usage-history.json` 顶层结构（R15 §1.1；**带版本封套，不是裸数组**）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHistoryFile {
+    #[serde(default = "default_usage_history_version")]
+    pub version: u32,
+    #[serde(default)]
+    pub records: Vec<UsageRecord>,
+}
+
+impl Default for UsageHistoryFile {
+    fn default() -> Self {
+        Self {
+            version: USAGE_HISTORY_VERSION,
+            records: Vec::new(),
+        }
+    }
+}
+
+/// 单条逐日用量记录，键 = `(accountId, date)`（R15 §1.1）。
+/// 所有字段都带 serde default：缺字段的文件仍能读，不会因单条脏数据整文件报废。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UsageRecord {
+    /// 账号 id（不存名字，改名不影响历史）
+    pub account_id: String,
+    /// 本地日历日 `YYYY-MM-DD`
+    pub date: String,
+    /// 当日花费（站点值或本地估算；无则 null）
+    pub cost: Option<f64>,
+    /// 归一币种（USD/CNY/CREDITS/UNKNOWN…）。**由前端归一，Rust 原样保存不换算**
+    pub currency: String,
+    pub requests: Option<i64>,
+    pub input_tokens: Option<f64>,
+    pub output_tokens: Option<f64>,
+    pub tokens: Option<f64>,
+    /// 仅 §1.2 B2（used 计数器法）使用，其余路径为 null
+    pub used_total: Option<f64>,
+    /// `"site"` 或 `"local"`
+    pub source: String,
+    /// 写入时刻（`now_iso()`，本地 RFC3339 带偏移）
+    pub updated_at: String,
+}
+
+impl UsageRecord {
+    /// 是否站点（权威）行
+    pub fn is_site(&self) -> bool {
+        self.source == USAGE_SOURCE_SITE
+    }
+}
+
 pub fn now_iso() -> String {
     chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -548,5 +618,72 @@ mod tests {
             r#"{"ts":"2026-10-14T09:00:00+08:00","accountId":"a1","balance":18.0,"currency":"USD"}"#,
             "快照序列化必须保持 4 字段不变"
         );
+    }
+
+    /// R15：`UsageHistoryFile` 是版本封套；缺字段的文件仍可读（不因单条脏数据报废）
+    #[test]
+    fn usage_history_file_tolerates_missing_fields() {
+        let empty: UsageHistoryFile = serde_json::from_str("{}").expect("{} 应可读");
+        assert_eq!(empty.version, USAGE_HISTORY_VERSION);
+        assert!(empty.records.is_empty());
+        assert_eq!(UsageHistoryFile::default().version, 1);
+
+        let partial: UsageHistoryFile =
+            serde_json::from_str(r#"{"records":[{"accountId":"a1","date":"2026-12-31"}]}"#)
+                .expect("部分字段应可读");
+        assert_eq!(partial.version, 1, "缺 version 时取当前版本");
+        assert_eq!(partial.records.len(), 1);
+        assert_eq!(partial.records[0].cost, None);
+        assert_eq!(partial.records[0].currency, "");
+        assert_eq!(partial.records[0].used_total, None);
+        assert_eq!(partial.records[0].source, "");
+        assert!(!partial.records[0].is_site());
+    }
+
+    /// R15 §1.1：`UsageRecord` 的 camelCase 往返（含 source/usedTotal/tokens），
+    /// 本地日期与 credits 币种一律原样保存（Rust 不做时区换算、不做币种换算）
+    #[test]
+    fn usage_record_round_trip_camel_case() {
+        let rec = UsageRecord {
+            account_id: "acc-1".into(),
+            date: "2026-12-31".into(),
+            cost: Some(7.5),
+            currency: "CREDITS".into(),
+            requests: Some(12),
+            input_tokens: Some(100.0),
+            output_tokens: Some(20.0),
+            tokens: Some(120.0),
+            used_total: Some(999.0),
+            source: "local".into(),
+            updated_at: "2026-12-31T23:59:59+08:00".into(),
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        for key in [
+            "\"accountId\"",
+            "\"date\"",
+            "\"cost\"",
+            "\"currency\"",
+            "\"requests\"",
+            "\"inputTokens\"",
+            "\"outputTokens\"",
+            "\"tokens\"",
+            "\"usedTotal\"",
+            "\"source\"",
+            "\"updatedAt\"",
+        ] {
+            assert!(json.contains(key), "缺少 camelCase 键 {key}: {json}");
+        }
+        assert!(!json.contains("account_id"), "不得出现 snake_case: {json}");
+
+        let back: UsageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, rec);
+        assert_eq!(back.date, "2026-12-31", "本地日期原样保存");
+        assert_eq!(back.currency, "CREDITS", "credits 原值保留");
+        assert!(!back.is_site());
+        assert!(UsageRecord {
+            source: USAGE_SOURCE_SITE.into(),
+            ..rec
+        }
+        .is_site());
     }
 }

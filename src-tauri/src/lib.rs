@@ -32,6 +32,8 @@ pub fn run() {
             commands::refresh_all,
             commands::get_last_results,
             commands::get_history,
+            commands::get_usage_history,
+            commands::upsert_usage_history,
             commands::export_csv,
             commands::export_config,
             commands::import_config,

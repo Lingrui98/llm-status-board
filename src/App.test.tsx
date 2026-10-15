@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import App from "./App";
+import { toLocalDateKey } from "./usageHistory";
 import type { AppConfig, RefreshOutcome } from "./types";
 
 afterEach(cleanup);
@@ -699,5 +700,190 @@ describe("R14 配置化告警阈值", () => {
       expect(screen.getByText("监控账号")).toBeTruthy();
     });
     expect(screen.queryByText(/已恢复/)).toBeNull();
+  });
+});
+
+/* ---------------- R15：本地用量历史接线 ---------------- */
+
+describe("R15 用量历史接线", () => {
+  const usageRecord = (date: string, cost: number): Record<string, unknown> => ({
+    accountId: "acc-ds",
+    date,
+    cost,
+    currency: "USD",
+    requests: 10,
+    inputTokens: null,
+    outputTokens: null,
+    tokens: null,
+    usedTotal: null,
+    source: "local",
+    updatedAt: "2026-06-15T10:00:00.000Z",
+  });
+
+  it("启动时拉取 get_usage_history；有记录时分析区展示周对比（含「周期对比」标题）", async () => {
+    const today = new Date();
+    const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+    const key = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const recent = key(today);
+
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([dsAccount]));
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [usageRecord(recent, 12.5)] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("get_usage_history");
+    });
+    // 分析区存在且渲染了周期对比小节
+    await waitFor(() => {
+      expect(screen.getByText("深度分析")).toBeTruthy();
+    });
+    expect(screen.getByText(/周期对比/)).toBeTruthy();
+    // 不应显示「暂无本地用量历史」占位
+    expect(screen.queryByText(/暂无本地用量历史/)).toBeNull();
+  });
+
+  it("无历史记录（空封套）→ 显示「暂无本地用量历史」占位，看板照常可用", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([dsAccount]));
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/暂无本地用量历史/)).toBeTruthy();
+    });
+    expect(screen.getByText("DeepSeek 官方")).toBeTruthy();
+  });
+
+  it("get_usage_history 失败 → 可读提示且看板不崩（AC-1/非阻塞）", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([dsAccount]));
+      if (cmd === "get_usage_history") return Promise.reject("用量历史文件格式错误: EOF");
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText(/本地用量历史读取失败/)).toBeTruthy();
+    });
+    expect(screen.getByText(/用量历史文件格式错误/)).toBeTruthy();
+    // 看板核心内容仍在
+    expect(screen.getByText("DeepSeek 官方")).toBeTruthy();
+    expect(screen.getByText("监控账号")).toBeTruthy();
+  });
+
+  it("upsert_usage_history 失败 → 刷新结果照常展示，只给轻量提示（不把整页判为失败）", async () => {
+    const outcomes: RefreshOutcome[] = [
+      {
+        accountId: "acc-ds",
+        ok: true,
+        info: {
+          balance: { amount: 88.5, currency: "USD" },
+          used: null,
+          total: null,
+          requests: 7,
+          note: null,
+          extras: [],
+          raw: null,
+          fetchedAt: "2026-06-15T10:00:00.000Z",
+          newToken: null,
+          newRefreshToken: null,
+        },
+        error: null,
+      },
+    ];
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([dsAccount]));
+      if (cmd === "refresh_all") return Promise.resolve(outcomes);
+      if (cmd === "get_history")
+        return Promise.resolve([
+          { ts: "2026-06-15T09:00:00+08:00", accountId: "acc-ds", balance: 100, currency: "USD" },
+          { ts: "2026-06-15T21:00:00+08:00", accountId: "acc-ds", balance: 88.5, currency: "USD" },
+        ]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      if (cmd === "upsert_usage_history") return Promise.reject("磁盘写入失败: 权限不足");
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("DeepSeek 官方")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+
+    // 硬要求：刷新主流程不受历史写入失败影响 —— 新余额照常上屏
+    await waitFor(() => {
+      expect(screen.getByText("88.50 USD")).toBeTruthy();
+    });
+    // 重量级失败态没有出现（不把整页判为加载失败）
+    expect(screen.queryByText("配置加载失败")).toBeNull();
+    // 且「刷新失败」类通知不应因为历史写入失败而产生
+    expect(screen.queryByText("刷新失败")).toBeNull();
+    // 只有一条可读的轻量提示
+    await waitFor(() => {
+      expect(screen.getByText(/本地用量历史写入失败/)).toBeTruthy();
+    });
+    expect(screen.getByText(/磁盘写入失败/)).toBeTruthy();
+  });
+
+  it("D-2：B2 行日期用本地日历日（App 透传 todayKey，不落 UTC 日）", async () => {
+    // 时间冻结在一个「UTC 日 ≠ 本地日」的瞬间附近仍有意义的时刻：
+    // 断言用同源的 toLocalDateKey 计算期望值，因此不管 CI 跑在 UTC 还是 UTC+8 都成立。
+    const frozen = new Date("2026-10-15T20:30:00.000Z");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(frozen);
+    const expectedDay = toLocalDateKey(frozen);
+
+    const kimi = { ...dsAccount, id: "acc-kimi", name: "Kimi 订阅", kind: "moonshot" as const };
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([kimi]));
+      if (cmd === "refresh_all")
+        return Promise.resolve<RefreshOutcome[]>([
+          {
+            accountId: "acc-kimi",
+            ok: true,
+            info: {
+              balance: null, // 无余额 → 走 B2 used 计数器路径
+              used: { amount: 1000, currency: "CREDITS" },
+              total: null,
+              requests: null,
+              note: null,
+              extras: [],
+              raw: null,
+              fetchedAt: frozen.toISOString(),
+              newToken: null,
+              newRefreshToken: null,
+            },
+            error: null,
+          },
+        ]);
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      if (cmd === "upsert_usage_history") return Promise.resolve(1);
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByText("Kimi 订阅")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+
+    await waitFor(() => {
+      const cmds = mockInvoke.mock.calls.map((c) => c[0]);
+      expect(cmds.filter((c) => c === "upsert_usage_history").length).toBe(1);
+    });
+    const call = mockInvoke.mock.calls.find((c) => c[0] === "upsert_usage_history");
+    const records = (call?.[1] as { records: { date: string; usedTotal: number | null }[] }).records;
+    expect(records).toHaveLength(1);
+    // 关键：日期是本地日历日，而不是 toISOString() 的 UTC 日
+    expect(records[0].date).toBe(expectedDay);
+    expect(records[0].usedTotal).toBe(1000);
+    vi.useRealTimers();
   });
 });

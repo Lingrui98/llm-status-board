@@ -207,6 +207,23 @@ pub async fn get_history(app: AppHandle) -> Result<Vec<crate::types::BalanceSnap
     config::load_history(&config::history_file_path(&app)?)
 }
 
+/// 本地用量历史总账（R15 §2）：文件缺失 → `{version:1, records:[]}`；
+/// 解析失败/版本过高 → 可读中文错误（**读路径不改动原文件**）
+#[tauri::command]
+pub async fn get_usage_history(app: AppHandle) -> Result<crate::types::UsageHistoryFile, String> {
+    config::load_usage_history(&config::usage_history_file_path(&app)?)
+}
+
+/// 合并写入本地用量历史（R15 §1.3，**Rust 是唯一合并点**），返回合并清理后的总条数。
+/// 同批次重复调用内容全等时不写盘；损坏文件先备份再自愈；所有失败路径都返回中文可读错误、不 panic。
+#[tauri::command]
+pub async fn upsert_usage_history(
+    app: AppHandle,
+    records: Vec<crate::types::UsageRecord>,
+) -> Result<usize, String> {
+    config::upsert_usage_history(&config::usage_history_file_path(&app)?, &records)
+}
+
 /// 报表导出（R14）：CSV 内容由前端纯函数 `buildUsageCsv` 组好（含 UTF-8 BOM、
 /// RFC 4180 转义、CRLF），Rust 只做**原子字节写入**，不加工、不裁剪 content。
 #[tauri::command]

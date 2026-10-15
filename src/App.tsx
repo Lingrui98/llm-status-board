@@ -8,9 +8,10 @@ import HelpPanel from "./components/HelpPanel";
 import NotificationCenter from "./components/NotificationCenter";
 import type { FocusRequest } from "./components/ProviderCard";
 import * as api from "./api";
-import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome } from "./types";
+import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome, UsageRecord } from "./types";
 import { formatDurationMs } from "./format";
 import { mergeRotatedTokens } from "./configMerge";
+import { buildUsageBatch, hasUsageChanges, toLocalDateKey } from "./usageHistory";
 import {
   computeProblemNotifications,
   diffRecovered,
@@ -29,6 +30,18 @@ import {
 
 /** localStorage 键：新手引导已关闭标记（桌面 WebView 的 localStorage 持久） */
 const GUIDE_DISMISSED_KEY = "lsb-guide-dismissed";
+
+/** 把任意异常转成可读单行提示（Tauri 命令的 Err 通常是字符串） */
+function readableError(e: unknown): string {
+  if (typeof e === "string") return e.trim() || "未知错误";
+  if (e instanceof Error && e.message.trim()) return e.message.trim();
+  try {
+    const s = String(e).trim();
+    return s && s !== "[object Object]" ? s : "未知错误";
+  } catch {
+    return "未知错误";
+  }
+}
 
 function readGuideDismissed(): boolean {
   try {
@@ -60,6 +73,13 @@ export default function App() {
   const [progressVisible, setProgressVisible] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [history, setHistory] = useState<BalanceSnapshot[]>([]);
+  // R15：本地用量历史（逐日总账）。读取/写入失败都只做轻量提示，绝不影响看板主流程。
+  const [usageRecords, setUsageRecords] = useState<UsageRecord[]>([]);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  // 「今日」本地日历日：整个分析视图共用同一份来源，避免多处 new Date() 造成口径漂移
+  const [todayKey, setTodayKey] = useState(() => toLocalDateKey());
+  // usageRecords 的镜像 ref：persistUsageBatch / refresh 里读最新值而不必把它们列入依赖
+  const usageRecordsRef = useRef<UsageRecord[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // 新手引导：accounts 为空 && 未跳过时自动出现；guideOpen 支持从帮助面板手动重开
@@ -139,6 +159,57 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * R15：读取本地用量历史。
+   * 读取失败（文件损坏等）→ 只记录可读提示并让分析视图走占位，**不阻塞**看板。
+   */
+  const loadUsageHistory = useCallback(async () => {
+    try {
+      const file = await api.getUsageHistory();
+      setUsageRecords(Array.isArray(file?.records) ? file.records : []);
+      setUsageError(null);
+    } catch (e) {
+      setUsageRecords([]);
+      setUsageError(`本地用量历史读取失败：${readableError(e)}`);
+    }
+  }, []);
+
+  /**
+   * R15：把本次刷新的结果算成批次并写入本地用量历史。
+   * 硬要求（Lead）：历史写入失败**不得**影响刷新主流程与看板可用性 ——
+   * 这里捕获所有异常，只设置一条可读提示；调用方（refresh）不会因此中断。
+   */
+  const persistUsageBatch = useCallback(
+    async (outcomes: RefreshOutcome[], snaps: BalanceSnapshot[], existing: UsageRecord[], dayKey: string) => {
+      try {
+        const accountIds = (configRef.current?.accounts ?? []).filter((a) => a.enabled).map((a) => a.id);
+        // D-2：日期用本地日历日 dayKey（todayKey），不再让 B2 从 toISOString() 里推导 UTC 日
+        const batch = buildUsageBatch(
+          outcomes,
+          snaps,
+          existing,
+          accountIds,
+          new Date().toISOString(),
+          dayKey,
+        );
+        // 无变化则不写盘（幂等；与 Rust 侧的字节级幂等双保险）
+        if (!hasUsageChanges(batch.records, existing)) {
+          setUsageError(null);
+          return;
+        }
+        await api.upsertUsageHistory(batch.records);
+        // 需要合并结果时再读一次（Rust 侧是唯一合并点）
+        const file = await api.getUsageHistory();
+        setUsageRecords(Array.isArray(file?.records) ? file.records : []);
+        setUsageError(null);
+      } catch (e) {
+        // 仅轻量提示：刷新结果照常展示
+        setUsageError(`本地用量历史写入失败（不影响看板）：${readableError(e)}`);
+      }
+    },
+    [],
+  );
+
   const loadConfig = useCallback(async () => {
     try {
       const c = await api.getConfig();
@@ -171,8 +242,18 @@ export default function App() {
         failCount > 0 ? `刷新完成，${okCount} 个账号正常，${failCount} 个异常` : `刷新完成，${okCount} 个账号正常`,
       );
       setLastRefreshAt(new Date().toISOString());
-      // 刷新成功后重新拉取余额历史（后端已追加本次快照）
-      await loadHistory();
+      // R15：刷新后「今天」重新取一次（跨零点刷新时窗口口径要跟着走），
+      // 并把它同时用于余额历史与用量历史批次（单一来源，避免时区漂移）。
+      const dayKey = toLocalDateKey();
+      // 刷新成功后重新拉取余额历史（后端已追加本次快照）；同一次读取结果同时喂给
+      // 余额趋势图与 R15 的「余额下降法」批次计算，避免重复 IPC。
+      const freshSnaps = await api.getHistory().catch(() => null);
+      if (freshSnaps) {
+        setHistory(freshSnaps);
+        // R15：算批次并写入本地用量历史。失败只提示、不抛出 —— 刷新主流程不受影响。
+        await persistUsageBatch(outcomes, freshSnaps, usageRecordsRef.current, dayKey);
+      }
+      setTodayKey(dayKey);
     } catch (e) {
       setLoadError(String(e));
     } finally {
@@ -184,8 +265,7 @@ export default function App() {
       }
       setRefreshing(false);
     }
-  }, [loadHistory]);
-
+  }, [loadHistory, persistUsageBatch]);
   // 初始化：加载配置 → 按设置决定是否自动刷新一次
   useEffect(() => {
     (async () => {
@@ -207,6 +287,8 @@ export default function App() {
       }
       // 拉取余额历史（供卡片内趋势图使用）
       await loadHistory();
+      // R15：拉取本地用量历史（分析视图数据源）。失败只记录提示，不影响启动。
+      await loadUsageHistory();
       if (c && c.settings.refreshOnStart && c.accounts.some((a) => a.enabled)) {
         refresh();
       }
@@ -351,6 +433,11 @@ export default function App() {
       if (savedFadeTimerRef.current) window.clearTimeout(savedFadeTimerRef.current);
     };
   }, []);
+
+  // usageRecords → ref 镜像（供刷新流程读取最新值，避免把 records 放进 refresh 的依赖导致重建）
+  useEffect(() => {
+    usageRecordsRef.current = usageRecords;
+  }, [usageRecords]);
 
   // ---------- 通知推导（纯前端，从 refresh / get_last_results 的结果计算，不动 IPC 逻辑） ----------
 
@@ -604,6 +691,9 @@ export default function App() {
           lastRefreshMs={lastRefreshMs}
           autoRefreshSec={config.settings.autoRefreshSec}
           snapshots={history}
+          usageRecords={usageRecords}
+          usageError={usageError}
+          todayKey={todayKey}
           focusRequest={focusRequest}
           onFocusRequestHandled={clearFocusRequest}
           onGoSettings={() => setView("settings")}

@@ -1,4 +1,8 @@
-use crate::types::{AppConfig, BalanceSnapshot, RefreshOutcome};
+use crate::types::{
+    AppConfig, BalanceSnapshot, RefreshOutcome, UsageHistoryFile, UsageRecord,
+    USAGE_CURRENCY_UNKNOWN, USAGE_HISTORY_VERSION, USAGE_SOURCE_LOCAL, USAGE_SOURCE_SITE,
+};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -115,6 +119,240 @@ pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<usize, String> {
     fs::write(tmp, bytes).map_err(|e| format!("写入文件失败: {e}"))?;
     fs::rename(tmp, path).map_err(|e| format!("替换文件失败: {e}"))?;
     Ok(bytes.len())
+}
+
+// ---------- R15 本地用量历史（usage-history.json）----------
+
+/// R15 §1.4：每账号保留最近多少天
+pub const MAX_USAGE_DAYS_PER_ACCOUNT: usize = 400;
+/// R15 §1.4：总条数上限
+pub const MAX_USAGE_RECORDS: usize = 20_000;
+
+pub fn usage_history_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("无法确定配置目录: {e}"))?;
+    Ok(dir.join("usage-history.json"))
+}
+
+/// 内部读取错误：对外都是可读中文 Err，但 upsert 需要区分两者——
+/// 损坏 → 备份后自愈重建；版本过高 → 拒绝且**绝不**动原文件。
+enum UsageHistoryIssue {
+    /// 解析失败（JSON 损坏）
+    Corrupt(String),
+    /// `version > USAGE_HISTORY_VERSION`
+    FutureVersion(String),
+}
+
+impl UsageHistoryIssue {
+    fn message(&self) -> &str {
+        match self {
+            Self::Corrupt(m) | Self::FutureVersion(m) => m,
+        }
+    }
+}
+
+fn read_usage_history(path: &Path, text: &str) -> Result<UsageHistoryFile, UsageHistoryIssue> {
+    let file: UsageHistoryFile = serde_json::from_str(text).map_err(|e| {
+        UsageHistoryIssue::Corrupt(format!("用量历史文件格式错误（{}）: {e}", path.display()))
+    })?;
+    if file.version > USAGE_HISTORY_VERSION {
+        return Err(UsageHistoryIssue::FutureVersion(format!(
+            "用量历史文件版本 {} 高于本应用支持的 {}，已保留原文件不做修改（{}）",
+            file.version,
+            USAGE_HISTORY_VERSION,
+            path.display()
+        )));
+    }
+    Ok(file)
+}
+
+/// 读取用量历史（R15 §1.5 读路径）：
+/// - 文件缺失 → `{version:1, records:[]}`（首次启动）
+/// - 解析失败 / 版本过高 → 可读中文 Err，**不移动、不改写原文件**（读路径零副作用）
+pub fn load_usage_history(path: &Path) -> Result<UsageHistoryFile, String> {
+    if !path.exists() {
+        return Ok(UsageHistoryFile::default());
+    }
+    let text = fs::read_to_string(path).map_err(|e| format!("读取用量历史失败: {e}"))?;
+    read_usage_history(path, &text).map_err(|issue| issue.message().to_string())
+}
+
+/// 把损坏文件重命名为 `usage-history.corrupt-<unix秒>.json`（§1.5 写路径留痕）。
+/// 若该名字已被占用则追加 `-1`、`-2`…，**绝不覆盖已有备份**。
+fn backup_corrupt_usage_history(path: &Path) -> Result<PathBuf, String> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut target = path.with_file_name(format!("usage-history.corrupt-{secs}.json"));
+    let mut n = 1u32;
+    while target.exists() {
+        target = path.with_file_name(format!("usage-history.corrupt-{secs}-{n}.json"));
+        n += 1;
+    }
+    fs::rename(path, &target).map_err(|e| format!("重命名损坏文件失败: {e}"))?;
+    Ok(target)
+}
+
+/// 合并一个批次（R15 §1.3，**Rust 是唯一合并点**）：
+/// 键 `(accountId, date)`；`site` 覆盖 `local`，`local` **永不**覆盖 `site`，
+/// 同 source 同键 → 新值覆盖旧值（同一天多次刷新只留最新）。
+pub fn merge_usage_records(all: &mut Vec<UsageRecord>, batch: &[UsageRecord]) {
+    for rec in batch {
+        match all
+            .iter_mut()
+            .find(|r| r.account_id == rec.account_id && r.date == rec.date)
+        {
+            // 站点批次一律覆盖；本地批次只能覆盖同为 local 的旧值
+            Some(slot) if rec.is_site() || !slot.is_site() => *slot = rec.clone(),
+            Some(_) => {}
+            None => all.push(rec.clone()),
+        }
+    }
+}
+
+/// 清理（R15 §1.4）：①每账号按 `date` 降序保留最近 `MAX_USAGE_DAYS_PER_ACCOUNT` 天；
+/// ②总量超 `MAX_USAGE_RECORDS` 时按 `(date, accountId)` 升序丢最旧直到 ≤ 上限。
+/// 最后按 `(accountId, date)` 升序排序——落盘顺序稳定，§1.3 的幂等字节比较依赖它。
+pub fn trim_usage_records(records: &mut Vec<UsageRecord>) {
+    let mut keep: HashSet<(String, String)> = HashSet::new();
+    let mut dates_by_account: HashMap<String, Vec<String>> = HashMap::new();
+    for r in records.iter() {
+        dates_by_account
+            .entry(r.account_id.clone())
+            .or_default()
+            .push(r.date.clone());
+    }
+    for (account, dates) in dates_by_account.iter_mut() {
+        dates.sort();
+        dates.dedup();
+        for d in dates.iter().rev().take(MAX_USAGE_DAYS_PER_ACCOUNT) {
+            keep.insert((account.clone(), d.clone()));
+        }
+    }
+    records.retain(|r| keep.contains(&(r.account_id.clone(), r.date.clone())));
+
+    if records.len() > MAX_USAGE_RECORDS {
+        records.sort_by(|a, b| {
+            a.date
+                .cmp(&b.date)
+                .then_with(|| a.account_id.cmp(&b.account_id))
+        });
+        let drain = records.len() - MAX_USAGE_RECORDS;
+        records.drain(..drain);
+    }
+    records.sort_by(|a, b| {
+        a.account_id
+            .cmp(&b.account_id)
+            .then_with(|| a.date.cmp(&b.date))
+    });
+}
+
+/// R15 §1.1 防御式兜底：文档对外声明 `currency` **永不空串**，不能只靠调用方自觉。
+/// 写入前 `trim()`：空串/纯空白 → `USAGE_CURRENCY_UNKNOWN`。
+/// **不做大小写归一**（归一由前端 `src/usageHistory.ts` 负责，Rust 不与其规则打架）。
+pub fn normalize_usage_currency(records: &mut [UsageRecord]) {
+    for r in records.iter_mut() {
+        let trimmed = r.currency.trim();
+        r.currency = if trimmed.is_empty() {
+            USAGE_CURRENCY_UNKNOWN.to_string()
+        } else {
+            trimmed.to_string()
+        };
+    }
+}
+
+/// R15 §1.1 防御式兜底：`source` 只允许 `USAGE_SOURCE_SITE` / `USAGE_SOURCE_LOCAL`。
+/// 未知/空/大小写不匹配（`"foo"` / `""` / `"SITE"`）一律降级为 `"local"`——
+/// **绝不冒充 site**（site 是权威数据，只有前端明确声明才配得上）。
+///
+/// 安全性：合并判定（`merge_usage_records`）用的是**原始** source，本函数在合并**之后**
+/// 才执行，所以任何脏值都不可能覆盖既有 site 行；已存在的脏 source 行也会在写入时被修复。
+pub fn normalize_usage_source(records: &mut [UsageRecord]) {
+    for r in records.iter_mut() {
+        // 严格相等：只有逐字 `"site"` 才保留，其余（含 "SITE"）降级为 local
+        if r.source != USAGE_SOURCE_SITE {
+            r.source = USAGE_SOURCE_LOCAL.to_string();
+        }
+    }
+}
+
+/// 原子写出（临时文件 + rename，沿用 `save_history` 模式；不残留 `.tmp`）
+fn write_usage_history_text(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            fs::create_dir_all(dir).map_err(|e| format!("创建用量历史目录失败: {e}"))?;
+        }
+    }
+    let mut tmp_os = path.as_os_str().to_os_string();
+    tmp_os.push(".tmp");
+    let tmp = Path::new(&tmp_os);
+    fs::write(tmp, text).map_err(|e| format!("写入用量历史失败: {e}"))?;
+    fs::rename(tmp, path).map_err(|e| format!("替换用量历史文件失败: {e}"))?;
+    Ok(())
+}
+
+/// upsert：把前端批次并入总账，返回合并清理后的**总条数**（R15 §1.3/§1.4/§1.5）。
+///
+/// - §1.3 强幂等：内容全等 → **完全不写盘**（文件字节与 mtime 不变）
+/// - §1.5 写路径自愈：现有文件损坏 → **先备份**为 `usage-history.corrupt-<unix秒>.json`，
+///   再用本批记录重建；备份失败则拒绝写入（宁可这次不写，也不覆盖未留痕的旧数据）。
+///   备份文件名写入日志（§2 的返回类型 `Result<usize, String>` 在成功路径上没有携带文本的位置）。
+/// - §1.5 版本过高 → 返回 Err 且不覆盖原文件
+/// - 空批次 **且** 文件不存在 → 直接 `Ok(0)`，不创建无意义的空文件
+pub fn upsert_usage_history(path: &Path, batch: &[UsageRecord]) -> Result<usize, String> {
+    let existing_text = if path.exists() {
+        Some(fs::read_to_string(path).map_err(|e| format!("读取用量历史失败: {e}"))?)
+    } else {
+        None
+    };
+
+    // 空批次 + 文件不存在：不落盘（避免用户配置目录里出现无意义空文件）。
+    // 文件已存在时按原逻辑处理，以保持 §1.3 的字节幂等。
+    if batch.is_empty() && existing_text.is_none() {
+        return Ok(0);
+    }
+
+    let mut file = match existing_text.as_deref() {
+        None => UsageHistoryFile::default(),
+        Some(text) => match read_usage_history(path, text) {
+            Ok(f) => f,
+            Err(UsageHistoryIssue::FutureVersion(m)) => return Err(m),
+            Err(UsageHistoryIssue::Corrupt(m)) => {
+                let backup = backup_corrupt_usage_history(path).map_err(|be| {
+                    format!(
+                        "用量历史文件损坏且备份失败（{be}）：为避免覆盖原文件，本次不写入。原错误: {m}"
+                    )
+                })?;
+                eprintln!(
+                    "[usage-history] {m}；原文件已备份为 {}，本次将用新批次重建",
+                    backup.display()
+                );
+                UsageHistoryFile::default()
+            }
+        },
+    };
+
+    let mut records = std::mem::take(&mut file.records);
+    merge_usage_records(&mut records, batch);
+    trim_usage_records(&mut records);
+    // 落盘前兜底：合并后的整份总账（含既有行）都不得出现空币种/非法 source
+    normalize_usage_currency(&mut records);
+    normalize_usage_source(&mut records);
+    file.version = USAGE_HISTORY_VERSION;
+    file.records = records;
+    let total = file.records.len();
+
+    let text =
+        serde_json::to_string_pretty(&file).map_err(|e| format!("序列化用量历史失败: {e}"))?;
+    // §1.3 幂等：内容全等 → 不碰文件（字节与 mtime 均不变）
+    if existing_text.as_deref() == Some(text.as_str()) {
+        return Ok(total);
+    }
+    write_usage_history_text(path, &text)?;
+    Ok(total)
 }
 
 pub fn load(app: &tauri::AppHandle) -> Result<AppConfig, String> {
@@ -470,5 +708,559 @@ mod tests {
         assert!(nested.exists(), "应自动创建父目录");
         let _ = fs::remove_file(&nested);
         let _ = fs::remove_file(&path);
+    }
+
+    // ---------- R15 usage-history.json ----------
+
+    fn usage_temp_path(tag: &str) -> PathBuf {
+        temp_config_path(tag).with_file_name("usage-history.json")
+    }
+
+    fn day(offset: i64) -> String {
+        (chrono::NaiveDate::from_ymd_opt(2025, 1, 1).unwrap() + chrono::Duration::days(offset))
+            .format("%Y-%m-%d")
+            .to_string()
+    }
+
+    fn rec(account: &str, date: &str, cost: Option<f64>, source: &str) -> UsageRecord {
+        UsageRecord {
+            account_id: account.into(),
+            date: date.into(),
+            cost,
+            currency: "USD".into(),
+            requests: Some(3),
+            input_tokens: None,
+            output_tokens: None,
+            tokens: None,
+            used_total: None,
+            source: source.into(),
+            updated_at: "2026-10-15T10:00:00+08:00".into(),
+        }
+    }
+
+    fn corrupt_backups(path: &Path) -> Vec<PathBuf> {
+        let dir = path.parent().unwrap();
+        let mut found: Vec<PathBuf> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().starts_with("usage-history.corrupt-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// §1.5：文件缺失 → 默认空封套，且读路径不创建任何文件
+    #[test]
+    fn test_usage_history_missing_file_is_empty_default() {
+        let path = usage_temp_path("usage-missing");
+        let _ = fs::remove_file(&path);
+
+        let file = load_usage_history(&path).unwrap();
+        assert_eq!(file.version, 1);
+        assert!(file.records.is_empty());
+        assert!(!path.exists(), "读缺失文件不得创建文件");
+        assert!(corrupt_backups(&path).is_empty());
+    }
+
+    /// §1.3 / AC-3 强幂等：同批次重复 upsert → 文件字节与 mtime 均不变、总条数不变
+    #[test]
+    fn test_upsert_same_batch_twice_is_byte_identical() {
+        let path = usage_temp_path("usage-idempotent");
+        let _ = fs::remove_file(&path);
+        let batch = vec![
+            rec("a1", "2026-10-15", Some(20.0), "local"),
+            rec("a2", "2026-10-15", Some(9.0), "site"),
+        ];
+
+        let n1 = upsert_usage_history(&path, &batch).unwrap();
+        assert_eq!(n1, 2);
+        let bytes1 = fs::read(&path).unwrap();
+        let mtime1 = fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let n2 = upsert_usage_history(&path, &batch).unwrap();
+        assert_eq!(n2, 2, "总条数不变");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            bytes1,
+            "同批次重复 upsert 字节必须不变"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime1,
+            "内容全等时不得写盘（mtime 不变）"
+        );
+    }
+
+    /// §1.3 / AC-4：site 覆盖 local；local **永不**覆盖 site（站点窗口后移即为升级）
+    #[test]
+    fn test_upsert_site_covers_local_and_local_never_covers_site() {
+        let path = usage_temp_path("usage-site-priority");
+        let _ = fs::remove_file(&path);
+
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(20.0), "local")]).unwrap();
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(5.0), "site")]).unwrap();
+        let after_site = load_usage_history(&path).unwrap();
+        assert_eq!(after_site.records.len(), 1, "同键不得产生重复行");
+        assert_eq!(after_site.records[0].cost, Some(5.0), "站点应覆盖本地估算");
+        assert_eq!(after_site.records[0].source, "site");
+
+        // 本地值更大也不得回退站点行
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(99.0), "local")]).unwrap();
+        let after_local = load_usage_history(&path).unwrap();
+        assert_eq!(after_local.records.len(), 1);
+        assert_eq!(
+            after_local.records[0].cost,
+            Some(5.0),
+            "local 永不覆盖 site"
+        );
+        assert_eq!(after_local.records[0].source, "site");
+    }
+
+    /// §1.3：同 source 同键 → 新值覆盖；跨日 → 追加
+    #[test]
+    fn test_upsert_same_source_newest_wins_and_cross_day_appends() {
+        let path = usage_temp_path("usage-merge");
+        let _ = fs::remove_file(&path);
+
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(20.0), "local")]).unwrap();
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(30.0), "local")]).unwrap();
+        let same_day = load_usage_history(&path).unwrap();
+        assert_eq!(same_day.records.len(), 1, "同日同源只保留一行");
+        assert_eq!(same_day.records[0].cost, Some(30.0), "新批次覆盖旧值");
+
+        upsert_usage_history(&path, &[rec("a1", "2026-10-16", Some(1.0), "local")]).unwrap();
+        let cross_day = load_usage_history(&path).unwrap();
+        assert_eq!(cross_day.records.len(), 2, "跨日应追加");
+        assert_eq!(
+            cross_day
+                .records
+                .iter()
+                .map(|r| r.date.clone())
+                .collect::<Vec<_>>(),
+            vec!["2026-10-15".to_string(), "2026-10-16".to_string()],
+            "落盘顺序按 (accountId, date) 升序"
+        );
+    }
+
+    /// §1.4 ① / AC-7：单账号 401 天 → 只留最近 400 天（最旧消失、最新仍在），其他账号不受影响
+    #[test]
+    fn test_trim_keeps_latest_400_days_per_account() {
+        let mut records: Vec<UsageRecord> = (0..401)
+            .map(|i| rec("a1", &day(i), Some(1.0), "site"))
+            .collect();
+        records.push(rec("a2", &day(0), Some(2.0), "site"));
+
+        trim_usage_records(&mut records);
+
+        let a1: Vec<&UsageRecord> = records.iter().filter(|r| r.account_id == "a1").collect();
+        assert_eq!(a1.len(), 400);
+        assert!(!a1.iter().any(|r| r.date == day(0)), "最旧一天应被丢弃");
+        assert!(a1.iter().any(|r| r.date == day(400)), "最新一天必须保留");
+        assert!(
+            records.iter().any(|r| r.account_id == "a2"),
+            "其他账号不应被误删"
+        );
+    }
+
+    /// §1.4 ② / AC-7：总量 20001 → 裁到 20000，丢的是最旧 (date, accountId)
+    #[test]
+    fn test_trim_global_cap_drops_oldest() {
+        let mut records: Vec<UsageRecord> = (0..=MAX_USAGE_RECORDS)
+            .map(|i| {
+                rec(
+                    &format!("a{:03}", i % 51),
+                    &day((i / 51) as i64),
+                    Some(1.0),
+                    "site",
+                )
+            })
+            .collect();
+        assert_eq!(records.len(), MAX_USAGE_RECORDS + 1);
+        // 每账号 <= 393 天，所以只可能触发全局上限
+        let max_dates = records.iter().filter(|r| r.account_id == "a000").count();
+        assert!(max_dates <= MAX_USAGE_DAYS_PER_ACCOUNT);
+
+        trim_usage_records(&mut records);
+
+        assert_eq!(records.len(), MAX_USAGE_RECORDS);
+        assert!(
+            !records
+                .iter()
+                .any(|r| r.account_id == "a000" && r.date == day(0)),
+            "最旧的 (date, accountId) 应被丢弃"
+        );
+        assert!(
+            records.iter().any(|r| r.date == day(392)),
+            "最新日期必须保留"
+        );
+        assert_eq!(
+            records.iter().filter(|r| r.date == day(0)).count(),
+            50,
+            "同日只丢一条"
+        );
+    }
+
+    /// §1.5 读路径 / AC-8：损坏 → 可读中文 Err，且**不移动、不改写**原文件、不产生备份
+    #[test]
+    fn test_load_corrupt_returns_readable_error_without_touching_file() {
+        let path = usage_temp_path("usage-corrupt-read");
+        let _ = fs::remove_file(&path);
+        fs::write(&path, "###").unwrap();
+
+        let err = load_usage_history(&path).expect_err("损坏文件必须报错");
+        assert!(err.contains("用量历史文件格式错误"), "错误应可读: {err}");
+        assert!(
+            err.contains("usage-history.json"),
+            "错误应带文件路径: {err}"
+        );
+        assert!(path.exists(), "读路径不得移动/删除文件");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "###",
+            "读路径不得改写文件"
+        );
+        assert!(corrupt_backups(&path).is_empty(), "读路径不得产生备份");
+    }
+
+    /// §1.5 写路径 / AC-8：upsert 遇损坏 → 先备份为 usage-history.corrupt-*.json，再用本批重建
+    #[test]
+    fn test_upsert_self_heals_corrupt_file_after_backup() {
+        let path = usage_temp_path("usage-corrupt-write");
+        let _ = fs::remove_file(&path);
+        fs::write(&path, "###").unwrap();
+
+        let n = upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(3.0), "site")]).unwrap();
+        assert_eq!(n, 1, "自愈后文件应由本批记录重建");
+
+        let healed = load_usage_history(&path).unwrap();
+        assert_eq!(healed.version, 1);
+        assert_eq!(healed.records.len(), 1);
+        assert_eq!(healed.records[0].cost, Some(3.0));
+
+        let backups = corrupt_backups(&path);
+        assert_eq!(backups.len(), 1, "必须产生且只产生一个备份");
+        assert_eq!(
+            fs::read_to_string(&backups[0]).unwrap(),
+            "###",
+            "备份必须保留原始损坏内容（用户历史可找回）"
+        );
+    }
+
+    /// §1.5：version > 1 → 返回 Err 且**不覆盖**原文件；读路径同样拒绝
+    #[test]
+    fn test_future_version_is_rejected_without_overwrite() {
+        let path = usage_temp_path("usage-future-version");
+        let _ = fs::remove_file(&path);
+        let original = r#"{"version":2,"records":[]}"#;
+        fs::write(&path, original).unwrap();
+
+        let err = upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(1.0), "site")])
+            .expect_err("未来版本必须拒绝");
+        assert!(err.contains("版本"), "错误应可读: {err}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            original,
+            "不得覆盖未来版本数据"
+        );
+        assert!(corrupt_backups(&path).is_empty(), "版本过高不应备份");
+
+        let read_err = load_usage_history(&path).expect_err("读路径也应拒绝");
+        assert!(read_err.contains("版本"), "错误应可读: {read_err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+
+    /// 写失败（父路径是文件）→ 可读中文 Err，不 panic；且不残留 .tmp
+    #[test]
+    fn test_upsert_write_failure_returns_readable_error() {
+        let tag_path = temp_config_path("usage-write-fail");
+        let dir = tag_path.parent().unwrap().to_path_buf();
+        let blocker = dir.join("blocker-file");
+        fs::write(&blocker, "x").unwrap();
+        let path = blocker.join("usage-history.json");
+
+        let err = upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(1.0), "site")])
+            .expect_err("写失败应返回错误而不是 panic");
+        assert!(err.contains("用量历史"), "错误应可读: {err}");
+        assert_eq!(fs::read_to_string(&blocker).unwrap(), "x");
+        let _ = fs::remove_file(&blocker);
+    }
+
+    /// 原子写不残留 `.tmp`
+    #[test]
+    fn test_usage_history_atomic_write_leaves_no_tmp() {
+        let path = usage_temp_path("usage-tmp");
+        let _ = fs::remove_file(&path);
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(1.0), "site")]).unwrap();
+        assert!(
+            !path.with_file_name("usage-history.json.tmp").exists(),
+            "不应残留临时文件"
+        );
+        assert!(path.exists());
+    }
+
+    /// §1.6 / AC-9：credits 币种原值保留，Rust 不做任何换算
+    #[test]
+    fn test_upsert_preserves_currency_verbatim() {
+        let path = usage_temp_path("usage-credits");
+        let _ = fs::remove_file(&path);
+        let mut credits = rec("kimi", "2026-10-15", None, "local");
+        credits.currency = "CREDITS".into();
+        credits.requests = None;
+        credits.used_total = Some(1234.0);
+        credits.tokens = None;
+
+        upsert_usage_history(&path, &[credits]).unwrap();
+
+        let file = load_usage_history(&path).unwrap();
+        assert_eq!(file.records.len(), 1);
+        assert_eq!(file.records[0].currency, "CREDITS", "不得换算或改写币种");
+        assert_eq!(file.records[0].cost, None);
+        assert_eq!(
+            file.records[0].used_total,
+            Some(1234.0),
+            "B2 增量基准必须落盘"
+        );
+    }
+
+    /// 空批次 + 文件不存在 → 返回 0 且**不创建**文件；文件已存在 → 内容与 mtime 均不变
+    #[test]
+    fn test_upsert_empty_batch_does_not_create_file() {
+        let path = usage_temp_path("usage-empty-batch");
+        let _ = fs::remove_file(&path);
+
+        let n = upsert_usage_history(&path, &[]).unwrap();
+        assert_eq!(n, 0);
+        assert!(!path.exists(), "空批次且文件不存在时不得创建空文件");
+
+        // 文件已存在（合法封套）→ 空批次不改变文件
+        let n = upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(1.0), "site")]).unwrap();
+        assert_eq!(n, 1);
+        let bytes = fs::read(&path).unwrap();
+        let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let n = upsert_usage_history(&path, &[]).unwrap();
+        assert_eq!(n, 1, "空批次不改变总条数");
+        assert_eq!(fs::read(&path).unwrap(), bytes, "空批次不得改变文件字节");
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime,
+            "空批次不得写盘"
+        );
+    }
+
+    /// §1.1 兜底：写入时空币种 → `UNKNOWN`、首尾空白被 trim；**不改大小写**
+    #[test]
+    fn test_upsert_normalizes_blank_currency_to_unknown() {
+        let path = usage_temp_path("usage-currency-fallback");
+        let _ = fs::remove_file(&path);
+
+        let mut blank = rec("a1", "2026-10-15", Some(1.0), "site");
+        blank.currency = "   ".into();
+        let mut empty = rec("a2", "2026-10-15", Some(2.0), "local");
+        empty.currency = String::new();
+        let mut padded = rec("a3", "2026-10-15", Some(3.0), "site");
+        padded.currency = "usd ".into();
+
+        upsert_usage_history(&path, &[blank, empty, padded]).unwrap();
+
+        let file = load_usage_history(&path).unwrap();
+        let currency_of = |account: &str| {
+            file.records
+                .iter()
+                .find(|r| r.account_id == account)
+                .map(|r| r.currency.clone())
+                .unwrap()
+        };
+        assert_eq!(currency_of("a1"), "UNKNOWN", "纯空白应兜底为 UNKNOWN");
+        assert_eq!(currency_of("a2"), "UNKNOWN", "空串应兜底为 UNKNOWN");
+        assert_eq!(currency_of("a3"), "usd", "只 trim，不做大小写归一");
+
+        // 既有行里的空币种也会在下次写入时被修复（文件不变量：永不空串）
+        let mut dirty = load_usage_history(&path).unwrap();
+        dirty
+            .records
+            .iter_mut()
+            .find(|r| r.account_id == "a1")
+            .unwrap()
+            .currency = String::new();
+        let text = serde_json::to_string_pretty(&dirty).unwrap();
+        fs::write(&path, text).unwrap();
+
+        upsert_usage_history(&path, &[rec("a4", "2026-10-16", Some(4.0), "site")]).unwrap();
+        let repaired = load_usage_history(&path).unwrap();
+        assert_eq!(
+            repaired
+                .records
+                .iter()
+                .find(|r| r.account_id == "a1")
+                .unwrap()
+                .currency,
+            "UNKNOWN",
+            "既有行的空币种也应在写入时被兜底修复"
+        );
+    }
+
+    /// 落盘顺序稳定：无论批次顺序如何，文件内按 (accountId, date) 升序
+    #[test]
+    fn test_usage_history_order_is_stable() {
+        let path = usage_temp_path("usage-order");
+        let _ = fs::remove_file(&path);
+        upsert_usage_history(
+            &path,
+            &[
+                rec("b", "2026-10-16", Some(1.0), "site"),
+                rec("a", "2026-10-16", Some(1.0), "site"),
+                rec("a", "2026-10-14", Some(1.0), "site"),
+            ],
+        )
+        .unwrap();
+
+        let file = load_usage_history(&path).unwrap();
+        let keys: Vec<(String, String)> = file
+            .records
+            .iter()
+            .map(|r| (r.account_id.clone(), r.date.clone()))
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                ("a".to_string(), "2026-10-14".to_string()),
+                ("a".to_string(), "2026-10-16".to_string()),
+                ("b".to_string(), "2026-10-16".to_string()),
+            ]
+        );
+    }
+
+    /// D-3：未知/空/大小写不匹配的 `source` 降级为 `local`（绝不冒充 site），
+    /// 且脏值**不得覆盖**既有 site 权威行
+    #[test]
+    fn test_upsert_normalizes_unknown_source_without_covering_site() {
+        let path = usage_temp_path("usage-source-fallback");
+        let _ = fs::remove_file(&path);
+
+        // 一条真正的 site 权威行
+        upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(5.0), "site")]).unwrap();
+
+        // 脏 source 批次：同键想覆盖 site，另有两条新键
+        let mut junk_same_key = rec("a1", "2026-10-15", Some(99.0), "foo");
+        junk_same_key.source = "foo".into();
+        let mut blank = rec("a2", "2026-10-15", Some(1.0), "");
+        blank.source = String::new();
+        let mut upper = rec("a3", "2026-10-15", Some(2.0), "SITE");
+        upper.source = "SITE".into();
+        let batch = vec![junk_same_key, blank, upper];
+
+        let total = upsert_usage_history(&path, &batch).unwrap();
+        assert_eq!(total, 3);
+
+        let file = load_usage_history(&path).unwrap();
+        let find = |account: &str| {
+            file.records
+                .iter()
+                .find(|r| r.account_id == account)
+                .unwrap()
+        };
+        let site_row = find("a1");
+        assert_eq!(site_row.cost, Some(5.0), "脏 source 不得覆盖既有 site 行");
+        assert_eq!(site_row.source, "site");
+        assert_eq!(find("a2").source, "local", "空 source 应降级为 local");
+        assert_eq!(
+            find("a3").source,
+            "local",
+            "SITE 大小写不匹配也应降级，不得冒充 site"
+        );
+        // 降级后的行内容本身保留（只有 source 被改写）
+        assert_eq!(find("a3").cost, Some(2.0));
+
+        // 同一批脏值再来一次：内容已归一，必须字节幂等
+        let bytes = fs::read(&path).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        let total_again = upsert_usage_history(&path, &batch).unwrap();
+        assert_eq!(total_again, 3);
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            bytes,
+            "归一后重复 upsert 必须字节不变"
+        );
+    }
+
+    /// D-5：同秒备份名已存在 → 落到 `-1` 后缀，**绝不覆盖**既有备份，两份内容各自保留
+    #[test]
+    fn test_backup_name_collision_uses_suffix_and_keeps_existing() {
+        let path = usage_temp_path("usage-backup-collision");
+        let _ = fs::remove_file(&path);
+        let dir = path.parent().unwrap().to_path_buf();
+        // 清掉同目录历史备份，避免干扰断言
+        for entry in fs::read_dir(&dir).unwrap() {
+            let p = entry.unwrap().path();
+            if p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("usage-history.corrupt-"))
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_file(&p);
+            }
+        }
+
+        // 占住「当前秒 ±1」的裸名备份位 —— 无论实现取哪一秒，裸名都已被占用，
+        // 从而确定性地走到 `-1` 后缀分支（不依赖测试与实现恰好同秒）
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let mut decoys: Vec<(PathBuf, String)> = Vec::new();
+        for offset in [-1i64, 0, 1] {
+            let s = (secs + offset) as u64;
+            let content = format!("PRE-EXISTING-{s}");
+            let decoy = path.with_file_name(format!("usage-history.corrupt-{s}.json"));
+            fs::write(&decoy, &content).unwrap();
+            decoys.push((decoy, content));
+        }
+
+        // 损坏文件 → upsert 必须先备份再自愈
+        fs::write(&path, "###").unwrap();
+        let n = upsert_usage_history(&path, &[rec("a1", "2026-10-15", Some(3.0), "site")]).unwrap();
+        assert_eq!(n, 1);
+
+        // 既有备份必须原样保留（不覆盖、不删除）
+        for (decoy, expected) in &decoys {
+            assert!(decoy.exists(), "既有备份不得被覆盖: {}", decoy.display());
+            assert_eq!(
+                &fs::read_to_string(decoy).unwrap(),
+                expected,
+                "既有备份内容必须原样保留"
+            );
+        }
+
+        // 新备份必须落到 `-1` 后缀名，并保留原始损坏内容
+        let suffixed: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .map(|n| n.to_string_lossy().ends_with("-1.json"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            suffixed.len(),
+            1,
+            "应恰好产生一个 -1 后缀备份: {suffixed:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&suffixed[0]).unwrap(),
+            "###",
+            "新备份必须保留原始损坏内容"
+        );
+
+        // 自愈结果仍可读
+        let healed = load_usage_history(&path).unwrap();
+        assert_eq!(healed.records.len(), 1);
+        assert_eq!(healed.records[0].cost, Some(3.0));
     }
 }

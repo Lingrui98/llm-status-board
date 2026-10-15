@@ -6,6 +6,8 @@ import type {
   AppConfig,
   BalanceSnapshot,
   RefreshOutcome,
+  UsageHistoryFile,
+  UsageRecord,
 } from "./types";
 
 export async function getConfig(): Promise<AppConfig> {
@@ -32,6 +34,16 @@ export async function getLastResults(): Promise<RefreshOutcome[]> {
 /// 余额历史快照（趋势图数据源）
 export async function getHistory(): Promise<BalanceSnapshot[]> {
   return invoke<BalanceSnapshot[]>("get_history");
+}
+
+/// R15 本地用量历史（逐日总账，带版本封套）；文件缺失时后端返回空记录集
+export async function getUsageHistory(): Promise<UsageHistoryFile> {
+  return invoke<UsageHistoryFile>("get_usage_history");
+}
+
+/// R15 写入用量历史批次（Rust 侧负责 site>local 合并、清理与幂等），返回合并后的总条数
+export async function upsertUsageHistory(records: UsageRecord[]): Promise<number> {
+  return invoke<number>("upsert_usage_history", { records });
 }
 
 /// R14 用量报表：弹保存对话框选 CSV 路径（用户取消返回 null）

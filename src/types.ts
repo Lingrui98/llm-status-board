@@ -119,6 +119,40 @@ export interface BalanceSnapshot {
   currency: string;
 }
 
+/* ---------- R15：本地用量历史（usage-history.json，与 Rust 侧 serde camelCase 对应） ---------- */
+
+/** 记录来源：站点接口（权威） / 本地估算（余额下降或 used 计数器差值） */
+export type UsageSource = "site" | "local";
+
+/**
+ * 逐日用量总账的一行 —— 键为 (accountId, date)。
+ * 只存「账号 × 本地日历日」维度，**不含模型维度**（模型维度唯一来源是 results.json#modelUsage）。
+ */
+export interface UsageRecord {
+  accountId: string;
+  /** 本地日历日 "YYYY-MM-DD" */
+  date: string;
+  /** 当日花费；站点未给则为 null（本地估算路径必有值） */
+  cost: number | null;
+  /** 归一币种（USD/CNY/CREDITS/UNKNOWN…），永不空串 */
+  currency: string;
+  requests: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  tokens: number | null;
+  /** 仅本地 used 计数器路径使用（§1.2 B2），其余为 null */
+  usedTotal: number | null;
+  source: UsageSource;
+  /** 写入时刻（本地 RFC3339 带偏移） */
+  updatedAt: string;
+}
+
+/** usage-history.json 的带版本封套（便于将来迁移，不用裸数组） */
+export interface UsageHistoryFile {
+  version: number;
+  records: UsageRecord[];
+}
+
 export interface AccountInfo {
   balance?: Money | null;
   used?: Money | null;

@@ -11,8 +11,10 @@ import {
 } from "./charts/lazy";
 import { ChartSection } from "./charts/shared";
 import InsightsPanel from "./InsightsPanel";
-import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome } from "../types";
+import AnalysisView from "./AnalysisView";
+import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome, UsageRecord } from "../types";
 import { formatDurationMs, formatTimeAgo } from "../format";
+import { toLocalDateKey } from "../usageHistory";
 
 interface Props {
   config: AppConfig;
@@ -23,6 +25,12 @@ interface Props {
   lastRefreshMs?: number | null;
   autoRefreshSec: number;
   snapshots: BalanceSnapshot[];
+  /** R15：本地用量历史（分析视图数据源） */
+  usageRecords?: UsageRecord[];
+  /** R15：用量历史读取/写入失败的轻量提示（不阻塞看板） */
+  usageError?: string | null;
+  /** R15：「今天」本地日历日（App 层单一来源，保证分析窗口口径一致） */
+  todayKey?: string;
   /** 外部「跳转到账号」请求（命令面板 / 数字键），透传给卡片开抽屉 */
   focusRequest?: FocusRequest | null;
   /** 请求已投递给匹配卡片后调用，App 据此清除请求（防重挂载复开） */
@@ -51,7 +59,7 @@ function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny
   return { usd, cny };
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, usageRecords, usageError, todayKey, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
@@ -204,6 +212,15 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         statuses={statuses}
         snapshots={snapshots}
         settings={config.settings}
+      />
+
+      {/* R15 深度分析区：数据源是本地用量历史（usage-history.json）+ results.json 的 modelUsage */}
+      <AnalysisView
+        records={usageRecords ?? []}
+        statuses={statuses}
+        accounts={config.accounts}
+        today={todayKey ?? toLocalDateKey()}
+        errorNote={usageError ?? undefined}
       />
 
       {hasStats && (
