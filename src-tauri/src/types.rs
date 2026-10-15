@@ -140,6 +140,8 @@ pub struct Settings {
     pub refresh_on_start: bool,
     /// 全局代理（http://… 或 socks5://…），留空用环境变量
     pub proxy: Option<String>,
+    /// 关闭窗口时隐藏到系统托盘；None 视为 true（向后兼容旧配置文件）
+    pub close_to_tray: Option<bool>,
 }
 
 impl Default for Settings {
@@ -148,6 +150,7 @@ impl Default for Settings {
             auto_refresh_sec: 0,
             refresh_on_start: true,
             proxy: None,
+            close_to_tray: None,
         }
     }
 }

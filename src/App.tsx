@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
 import CommandPalette from "./components/CommandPalette";
@@ -119,8 +120,9 @@ export default function App() {
     setGuideOpen(true);
   }, []);
 
-  // 命令面板「跳转到账号」：确保在看板视图后下发请求（卡片抽屉由 ProviderCard 自己打开）
-  const handleFocusAccount = useCallback((accountId: string) => {
+  // 「跳转到账号」共用入口（命令面板 / 通知中心 / 托盘菜单）：确保在看板视图后下发请求
+  //（卡片抽屉由 ProviderCard 自己打开）
+  const openAccountOnDashboard = useCallback((accountId: string) => {
     setFocusRequest({ accountId, nonce: Date.now() });
     setView("dashboard");
   }, []);
@@ -411,11 +413,35 @@ export default function App() {
   const openNotifications = useCallback(() => setNotifOpen(true), []);
 
   // 通知中心「刷新失败」→ 关闭抽屉 + 复用 focusRequest 机制打开对应账号详情（第五轮机制，不另造）
-  const handleOpenAccountFromNotification = useCallback((accountId: string) => {
-    setNotifOpen(false);
-    setFocusRequest({ accountId, nonce: Date.now() });
-    setView("dashboard");
-  }, []);
+  const handleOpenAccountFromNotification = useCallback(
+    (accountId: string) => {
+      setNotifOpen(false);
+      openAccountOnDashboard(accountId);
+    },
+    [openAccountOnDashboard],
+  );
+
+  // 托盘菜单点击某账号 → Rust 侧已显示/聚焦窗口，这里复用同一跳转逻辑打开该账号详情抽屉。
+  // 非 Tauri 环境（如单元测试 jsdom）没有事件后端：listen 抛错时静默降级，不影响其它功能
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    (async () => {
+      try {
+        const u = await listen<string>("tray-open-account", (e) => {
+          openAccountOnDashboard(e.payload);
+        });
+        if (disposed) u();
+        else unlisten = u;
+      } catch {
+        // 无事件后端：忽略
+      }
+    })();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openAccountOnDashboard]);
 
   // 顶栏进度条：刷新开始即出现；结束后进入完成态（整条淡出）再卸载，避免戛然而止
   useEffect(() => {
@@ -591,7 +617,7 @@ export default function App() {
           onClose={() => setPaletteOpen(false)}
           onRefresh={refresh}
           onNavigate={setView}
-          onFocusAccount={handleFocusAccount}
+          onFocusAccount={openAccountOnDashboard}
           onOpenHelp={() => setHelpOpen(true)}
           onOpenNotifications={openNotifications}
         />

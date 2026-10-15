@@ -342,6 +342,18 @@ export default function SettingsView({
             onChange={(e) => updateSettings({ refreshOnStart: e.target.checked })}
           />
         </label>
+        <label className="setting-row">
+          <span>关闭窗口时最小化到系统托盘</span>
+          <input
+            type="checkbox"
+            className="switch"
+            checked={config.settings.closeToTray ?? true}
+            onChange={(e) => updateSettings({ closeToTray: e.target.checked })}
+          />
+        </label>
+        <p className="muted small">
+          开启时点击窗口 ✕ 会隐藏到系统托盘（退出请右键托盘图标选「退出」）；关闭后 ✕ 直接退出应用。
+        </p>
         <label className="setting-row column">
           <span>网络代理（可选，全部查询共用）</span>
           <input

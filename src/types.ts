@@ -66,6 +66,8 @@ export interface Settings {
   autoRefreshSec: number;
   refreshOnStart: boolean;
   proxy?: string | null;
+  /** 关闭窗口时最小化到系统托盘；缺省（undefined/null）视为 true，与 Rust 端 Option<bool> 对应 */
+  closeToTray?: boolean | null;
 }
 
 export interface AppConfig {
