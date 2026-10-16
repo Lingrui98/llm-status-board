@@ -110,7 +110,6 @@ pub fn run() {
             commands::get_history,
             commands::get_usage_history,
             commands::upsert_usage_history,
-            commands::set_auto_refresh_paused,
             commands::show_summary_popup,
             commands::hide_summary_popup,
             commands::set_summary_pointer_inside,

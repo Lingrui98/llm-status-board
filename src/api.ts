@@ -96,9 +96,3 @@ export async function importConfig(path: string): Promise<AppConfig> {
 export async function confirmDialog(message: string): Promise<boolean> {
   return confirm(message, { title: "确认", kind: "warning" });
 }
-
-/// R16 §6：把自动刷新暂停状态回报给 Rust（据此重建托盘菜单文案与 tooltip）。
-/// 前端是暂停状态的唯一真值源（Rust 不自行翻转）。
-export async function setAutoRefreshPaused(paused: boolean): Promise<void> {
-  return invoke("set_auto_refresh_paused", { paused });
-}

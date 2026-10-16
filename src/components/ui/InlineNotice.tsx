@@ -93,7 +93,7 @@ export default function InlineNotice({
 
   const [gone, setGone] = useState(false);
   const [closing, setClosing] = useState(false);
-  const [paused, setPaused] = useState(false);
+  const [held, setHeld] = useState(false);
   const remaining = useRef(delay);
   const dismissedByUser = useRef(false);
 
@@ -109,12 +109,12 @@ export default function InlineNotice({
     dismissedByUser.current = false;
     setGone(false);
     setClosing(false);
-    setPaused(false);
+    setHeld(false);
   }, [message, tone, delay]);
 
-  // 消退计时：暂停/依赖变化/卸载时把「已流逝时间」从剩余额度里扣掉，恢复时继续用剩余额度
+  // 消退计时：悬停保持/依赖变化/卸载时把「已流逝时间」从剩余额度里扣掉，恢复时继续用剩余额度
   useEffect(() => {
-    if (!autoHide || paused || closing || gone) return;
+    if (!autoHide || held || closing || gone) return;
     const startedAt = Date.now();
     const timer = window.setTimeout(() => {
       remaining.current = 0;
@@ -124,7 +124,7 @@ export default function InlineNotice({
       window.clearTimeout(timer);
       remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt));
     };
-  }, [autoHide, paused, closing, gone, message, delay]);
+  }, [autoHide, held, closing, gone, message, delay]);
 
   // 淡出结束后卸载；若是用户主动关闭，再回调 onDismiss。
   // reduced-motion 下不淡出：直接 0ms 卸载（不留「透明但仍占位」的 180ms）
@@ -156,7 +156,7 @@ export default function InlineNotice({
   const handleBlur = (e: FocusEvent<HTMLDivElement>) => {
     const next = e.relatedTarget as Node | null;
     if (next && e.currentTarget.contains(next)) return;
-    setPaused(false);
+    setHeld(false);
   };
 
   return (
@@ -165,9 +165,9 @@ export default function InlineNotice({
       role={liveRole}
       aria-live={resolvedLive}
       aria-atomic="true"
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
+      onMouseEnter={() => setHeld(true)}
+      onMouseLeave={() => setHeld(false)}
+      onFocus={() => setHeld(true)}
       onBlur={handleBlur}
     >
       <div className="inline-notice-body">

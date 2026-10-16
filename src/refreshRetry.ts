@@ -33,7 +33,7 @@ interface RetryDeps {
 
 /**
  * 刷新失败自动重试控制器。
- * 用法：整轮失败 → `schedule()`；成功/手动刷新/暂停 → `cancel()`。
+ * 用法：整轮失败 → `schedule()`；成功/手动刷新 → `cancel()`。
  */
 export class RefreshRetryController {
   private timerId: number | null = null;
@@ -97,7 +97,7 @@ export class RefreshRetryController {
     return true;
   }
 
-  /** 取消待执行的重试并把退避计数归零（手动刷新 / 成功 / 暂停自动刷新） */
+  /** 取消待执行的重试并把退避计数归零（手动刷新 / 成功） */
   cancel(): void {
     if (this.timerId !== null) {
       this.clearT(this.timerId);

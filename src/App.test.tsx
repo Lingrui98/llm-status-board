@@ -44,13 +44,14 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: vi.fn(),
   sendNotification: vi.fn(),
 }));
-// R16：事件后端 —— 捕获 App 注册的托盘事件回调，供用例手动触发
+// R16/R21：事件后端 —— 捕获 App 注册的托盘事件回调（listen）并断言 App 发出的事件（emit）
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(),
+  emit: vi.fn(),
 }));
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { isEnabled as autostartIsEnabled, enable as autostartEnable, disable as autostartDisable } from "@tauri-apps/plugin-autostart";
 import {
   isPermissionGranted,
@@ -59,6 +60,9 @@ import {
 } from "@tauri-apps/plugin-notification";
 
 const mockInvoke = vi.mocked(invoke);
+const mockEmit = vi.mocked(emit);
+/** App 发出的 frontend-refresh-settled 次数（R21：刷新结束回报，供托盘恢复菜单） */
+const settledCount = () => mockEmit.mock.calls.filter((c) => c[0] === "frontend-refresh-settled").length;
 const mockSave = vi.mocked(save);
 const mockOpen = vi.mocked(open);
 const mockConfirm = vi.mocked(confirm);
@@ -71,16 +75,12 @@ const grantedMock = vi.mocked(isPermissionGranted);
 const requestPermMock = vi.mocked(requestPermission);
 const notifySend = vi.mocked(sendNotification);
 /** 托盘事件回调捕获（App 通过 listen 注册；用例手动触发） */
-let trayToggleHandler: (() => void) | null = null;
 let traySettingsHandler: (() => void) | null = null;
 type EventCb = (e: { payload: unknown }) => void;
 const eventHandlers = new Map<string, EventCb>();
 
 vi.mocked(listen).mockImplementation((async (event: string, cb: EventCb) => {
   eventHandlers.set(event, cb);
-  if (event === "tray-toggle-pause") {
-    trayToggleHandler = () => cb({ payload: undefined });
-  }
   if (event === "tray-open-settings") {
     traySettingsHandler = () => cb({ payload: undefined });
   }
@@ -91,7 +91,7 @@ vi.mocked(listen).mockImplementation((async (event: string, cb: EventCb) => {
 
 beforeEach(() => {
   eventHandlers.clear();
-  trayToggleHandler = null;
+  traySettingsHandler = null;
   traySettingsHandler = null;
   vi.clearAllMocks();
   mockInvoke.mockReset();
@@ -1302,7 +1302,7 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
     await waitFor(() => expect(screen.getByText("已开启")).toBeTruthy());
   });
 
-  it("§6：托盘暂停事件 → 定时器停（不自动刷新）+ 显示常驻提示与「恢复」", async () => {
+  it("R21：暂停能力已移除 —— 间隔>0 时定时器始终触发，且没有任何 pause 类 IPC", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let rounds = 0;
     mockInvoke.mockImplementation((cmd: string) => {
@@ -1312,7 +1312,6 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
         rounds += 1;
         return Promise.resolve([balanceOutcome("acc-r16", 5, "USD")]);
       }
-      if (cmd === "set_auto_refresh_paused") return Promise.resolve(undefined);
       if (cmd === "get_history") return Promise.resolve([]);
       if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
       return Promise.resolve([]);
@@ -1321,28 +1320,165 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
 
-    // 触发托盘暂停事件
-    await waitFor(() => expect(trayToggleHandler).not.toBeNull());
-    trayToggleHandler?.();
-    await waitFor(() => expect(screen.getByText(/自动刷新已暂停/)).toBeTruthy());
-    // D-2：IPC 回报已移出 setState 更新函数，但回报行为本身必须保留
-    await waitFor(() =>
-      expect(mockInvoke).toHaveBeenCalledWith("set_auto_refresh_paused", { paused: true }),
-    );
-
+    // 定时器不受任何暂停态短路：3 个间隔至少触发 1 轮（自动刷新照常）
     const before = rounds;
-    await vi.advanceTimersByTimeAsync(3500); // 3 个间隔
-    expect(rounds).toBe(before); // 暂停期间定时器不触发
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(rounds).toBeGreaterThan(before);
 
-    // 点「恢复」→ 回到运行态
-    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
-    await waitFor(() => expect(screen.queryByText(/自动刷新已暂停/)).toBeNull());
-    await waitFor(() =>
-      expect(mockInvoke).toHaveBeenCalledWith("set_auto_refresh_paused", { paused: false }),
-    );
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(rounds).toBeGreaterThan(before); // 恢复后按原间隔继续
+    // 不再有 pause 类 IPC（命令名里不应出现 pause）
+    const calledCommands = mockInvoke.mock.calls.map((c) => String(c[0]));
+    expect(calledCommands.some((c) => c.includes("pause"))).toBe(false);
+
+    // 设置页：整页不再出现该能力相关字样与恢复入口；间隔说明写清 0 = 关闭
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+    expect(document.body.textContent).not.toContain("暂停");
+    expect(document.body.textContent).not.toContain("恢复自动刷新");
+    expect(screen.getByText(/设为 0 即关闭自动刷新/)).toBeTruthy();
     vi.useRealTimers();
+  });
+
+  /* ---- R21 task-53：刷新结束回报 + 托盘刷新走同一路径 ---- */
+
+  it("R21①：手动刷新成功 → refresh_all 恰 1 次且恰好回报 1 次 frontend-refresh-settled", async () => {
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 0 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([balanceOutcome("acc-r16", 5, "USD")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    const baseSettled = settledCount();
+
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    await waitFor(() => expect(settledCount()).toBe(baseSettled + 1));
+    expect(settledCount()).toBe(baseSettled + 1); // 不多不少
+    expect(rounds).toBe(1);
+  });
+
+  it("R21②：刷新失败路径 → 同样恰好回报 1 次（不是只在成功路径发）", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 0 }));
+      if (cmd === "refresh_all") return Promise.reject("上游中转站超时");
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    const baseSettled = settledCount();
+
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(settledCount()).toBe(baseSettled + 1));
+    expect(settledCount()).toBe(baseSettled + 1);
+  });
+
+  it("R21③：tray-refresh 事件 → 同一 refresh 路径：refresh_all 恰 1 次 + 回报 1 次 + 结果上屏", async () => {
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 0 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([balanceOutcome("acc-r16", 5, "USD")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    await waitFor(() => expect(eventHandlers.get("tray-refresh")).toBeTruthy());
+    const baseSettled = settledCount();
+
+    eventHandlers.get("tray-refresh")?.({ payload: undefined });
+
+    await waitFor(() => expect(rounds).toBe(1)); // 防双跑：一次托盘触发只跑一轮
+    await waitFor(() => expect(settledCount()).toBe(baseSettled + 1));
+    expect(rounds).toBe(1);
+    // 与主面板同一个 refresh：看板金额随之上屏
+    await waitFor(() => expect(screen.getByText("$5.00")).toBeTruthy());
+  });
+
+  it("R21④：tray-refresh 监听不是死代码 —— 与顶栏按钮调用同一个 refresh", async () => {
+    let rounds = 0;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 0 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        return Promise.resolve([balanceOutcome("acc-r16", 5, "USD")]);
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    // 监听已注册（存在 → 不是死代码）
+    await waitFor(() => expect(eventHandlers.has("tray-refresh")).toBe(true));
+
+    // 顶栏按钮：1 次 refresh_all + 1 次回报
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    const afterButton = settledCount();
+
+    // 托盘事件：同一增量（同一条 refresh 链路，没有第二套逻辑）
+    eventHandlers.get("tray-refresh")?.({ payload: undefined });
+    await waitFor(() => expect(rounds).toBe(2));
+    await waitFor(() => expect(settledCount()).toBe(afterButton + 1));
+    expect(rounds).toBe(2);
+  });
+
+  it("R21⑤：在途刷新期间再点托盘 → 不发第二个 settled，但在途轮次结束时一定补发一次", async () => {
+    // 前提不变量（dev-backend 的托盘恢复逻辑依赖它）：
+    //   被 refreshingRef 挡掉的点击不产生新轮次，但它对应的「在途轮次」结束时会走 finally 补发 settled。
+    let rounds = 0;
+    const releases: ((v: RefreshOutcome[]) => void)[] = [];
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([r16Account], { autoRefreshSec: 0 }));
+      if (cmd === "refresh_all") {
+        rounds += 1;
+        // 挂起的在途刷新：由用例决定何时结束
+        return new Promise<RefreshOutcome[]>((resolve) => {
+          releases.push(resolve);
+        });
+      }
+      if (cmd === "get_history") return Promise.resolve([]);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
+    await waitFor(() => expect(eventHandlers.has("tray-refresh")).toBe(true));
+    const baseSettled = settledCount();
+
+    // 第一轮开始（挂起中）；顶栏按钮此时 disabled，托盘事件仍可点（真实场景）
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await waitFor(() => expect(rounds).toBe(1));
+    expect(releases.length).toBe(1);
+
+    // 在途期间再点托盘 → 被 refreshingRef 挡掉：不新增轮次、不提前发 settled
+    eventHandlers.get("tray-refresh")?.({ payload: undefined });
+    expect(rounds).toBe(1);
+    expect(releases.length).toBe(1);
+    expect(settledCount()).toBe(baseSettled);
+
+    // 在途轮次结束 → 恰好补发一次 settled（菜单据此恢复，不会永久置灰）
+    releases[0]([balanceOutcome("acc-r16", 5, "USD")]);
+    await waitFor(() => expect(settledCount()).toBe(baseSettled + 1));
+    expect(rounds).toBe(1);
+    await waitFor(() => expect(screen.getByText("$5.00")).toBeTruthy());
   });
 
   it("§6：托盘「打开设置」事件 → 切到设置视图", async () => {

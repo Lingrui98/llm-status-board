@@ -44,10 +44,6 @@ interface Props {
   notifyPermission?: "granted" | "denied" | "unknown";
   /** 用户点「重新请求授权」：请求一次通知权限（不会打开系统设置页，故文案如实描述） */
   onRequestNotifyPermission?: () => void;
-  /** 托盘侧的暂停状态（§6）：暂停时设置页也要显示一致 */
-  paused?: boolean;
-  /** 恢复自动刷新（暂停态的「恢复」操作） */
-  onResume?: () => void;
 }
 
 /**
@@ -88,8 +84,6 @@ export default function SettingsView({
   onToggleAutostart,
   notifyPermission = "unknown",
   onRequestNotifyPermission,
-  paused = false,
-  onResume,
 }: Props) {
   // 不再持有本地草稿：列表/通用设置全部直接读写 config（App 层 state），
   // 每次变更经 onSave 走自动保存通道 —— 不存在「忘了点保存」的状态
@@ -409,7 +403,7 @@ export default function SettingsView({
 
       <div className="settings-section">
         <h3>通用设置</h3>
-        <label className="setting-row">
+        <label className="setting-row column">
           <span>自动刷新间隔（秒，0 = 关闭）</span>
           <input
             type="number"
@@ -419,6 +413,7 @@ export default function SettingsView({
             value={config.settings.autoRefreshSec}
             onChange={(e) => updateSettings({ autoRefreshSec: Number(e.target.value) })}
           />
+          <span className="muted small">设为 0 即关闭自动刷新；手动刷新（顶栏 / 总览条 / 托盘 / 本页「刷新数据」）不受影响</span>
         </label>
         <label className="setting-row">
           <span>启动时自动刷新一次</span>
@@ -481,23 +476,6 @@ export default function SettingsView({
                 onChange={(e) => updateSettings({ closeToTray: e.target.checked })}
               />
             )}
-          />
-
-          {/* §6 托盘暂停态：与托盘菜单同步（暂停时定时器停，手动刷新仍可用） */}
-          <SettingRow
-            label="自动刷新已暂停"
-            hint={paused ? "暂停期间定时刷新不会触发；手动刷新不受影响" : "自动刷新按设定间隔运行"}
-            badge={paused ? "已暂停" : "运行中"}
-            badgeTone={paused ? "warn" : "ok"}
-            control={
-              paused ? (
-                <button type="button" className="btn ghost" onClick={onResume}>
-                  恢复自动刷新
-                </button>
-              ) : (
-                <span className="muted small">—</span>
-              )
-            }
           />
 
           {/* §4 系统通知开关（默认关；开关关闭时不请求权限、不发送） */}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { emitRefreshSettled } from "./refreshEvents";
 import Dashboard from "./components/Dashboard";
 import SettingsView from "./components/SettingsView";
 import CommandPalette from "./components/CommandPalette";
@@ -129,12 +130,7 @@ export default function App() {
   const prevProblemKeys = useRef<Set<string> | null>(null);
 
   /* ---- R16 常驻与自动化 ---- */
-  // §6 自动刷新暂停（托盘菜单可切换）；前端是唯一真值源，翻转后回报给 Rust
-  const [autoPaused, setAutoPaused] = useState(false);
-  // 定时器回调读它判断是否暂停（避免把 autoPaused 放进定时器 effect 依赖导致重建）
-  const autoPausedRef = useRef(false);
-  // D-2：跳过首次挂载的暂停态回报（初始态由 Rust 自行维护）
-  const firstAutoPausedSyncRef = useRef(true);
+  // R21：不再有「暂停自动刷新」开关 —— 自动刷新的唯一控制点是 autoRefreshSec（0 = 关闭）
   // §2 开机自启：真值以系统为准（查询/切换中禁用开关）
   const [autostart, setAutostart] = useState<{ enabled: boolean; busy: boolean; error?: string | null }>({
     enabled: false,
@@ -326,6 +322,9 @@ export default function App() {
         refreshStartRef.current = null;
       }
       setRefreshing(false);
+      // R21：刷新结束（成功与失败都）通知 Rust —— 托盘菜单据此从「刷新中…」恢复、重载账号区。
+      // 收口在 finally，保证多 return / 异常路径都恰好回报一次。
+      emitRefreshSettled();
 
       // R16 §5：整轮失败 → 安排一次退避重试（启用账号数 > 0 且 okCount === 0，或 IPC 抛错）。
       // 自动重试自己触发的这轮失败不再续接（由下一次定时/手动刷新重新开始）。
@@ -351,6 +350,7 @@ export default function App() {
       }
     }
   }, [loadHistory, persistUsageBatch]);
+
   // R16 §5：把配置同步进重试控制器（开关 / 次数上限）
   useEffect(() => {
     const { enabled, max } = resolveRetrySettings(config?.settings);
@@ -393,15 +393,15 @@ export default function App() {
     return () => ctrl?.dispose();
   }, []);
 
-  // R16 §6：托盘「暂停/恢复自动刷新」→ 前端翻转真值并回报给 Rust
+  // R21：托盘「立即刷新」与主面板刷新是**同一个动作** —— Rust 在托盘菜单项上 emit `tray-refresh`，
+  // 这里调用与顶栏 / 总览条 / 设置页 / 命令面板 / 各区块完全相同的 refresh()（不另建刷新路径）。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     (async () => {
       try {
-        const u = await listen("tray-toggle-pause", () => {
-          // D-2：只做状态翻转（纯更新函数），IPC 回报交给下面的 useEffect([autoPaused])
-          setAutoPaused(!autoPausedRef.current);
+        const u = await listen("tray-refresh", () => {
+          void refresh();
         });
         if (disposed) u();
         else unlisten = u;
@@ -413,7 +413,7 @@ export default function App() {
       disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [refresh]);
 
   // R16 §6：托盘「打开设置」→ 切到设置视图
   useEffect(() => {
@@ -495,7 +495,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自动刷新定时器（R16 §6：托盘暂停时不触发，但定时器保持运行以便恢复后立即按原间隔生效）
+  // 自动刷新定时器（R21：唯一控制点是 autoRefreshSec；0 = 关闭，不再有暂停态短路）
   useEffect(() => {
     if (refreshTimer.current) {
       window.clearInterval(refreshTimer.current);
@@ -504,7 +504,6 @@ export default function App() {
     const sec = config?.settings.autoRefreshSec ?? 0;
     if (sec > 0) {
       refreshTimer.current = window.setInterval(() => {
-        if (autoPausedRef.current) return; // 暂停中：不自动刷新（手动刷新仍可用）
         void refresh();
       }, sec * 1000);
     }
@@ -788,35 +787,6 @@ export default function App() {
     setNotifyPermission(res.permission);
   }, []);
 
-  /** R16 §6：恢复自动刷新（暂停态的「恢复」操作）→ 回报由下方 useEffect 统一执行 */
-  const resumeAutoRefresh = useCallback(() => {
-    setAutoPaused(false);
-  }, []);
-
-  // autoPaused → ref 镜像（供定时器回调与暂停态回报读取，不进依赖）
-  useEffect(() => {
-    autoPausedRef.current = autoPaused;
-  }, [autoPaused]);
-
-  // R16 §6：暂停态**变化**时回报 Rust（重建托盘菜单文案/tooltip）。
-  // D-2：IPC 从 setState 更新函数里移到这里 —— 更新函数保持纯函数（StrictMode 下不会被重复调用）。
-  // 跳过首次挂载：初始态由 Rust 自行维护，只在真正发生翻转时回报。
-  useEffect(() => {
-    if (firstAutoPausedSyncRef.current) {
-      firstAutoPausedSyncRef.current = false;
-      return;
-    }
-    // 前端仍是暂停唯一真值源：翻转后按实际值如实回报（autoRefreshSec === 0 时行为不变）
-    void api.setAutoRefreshPaused(autoPaused).catch(() => {});
-  }, [autoPaused]);
-
-  // R16 §5+§6：暂停自动刷新时，等待中的自动重试一并取消（重试属于自动化行为）
-  useEffect(() => {
-    if (!autoPaused) return;
-    retryCtrlRef.current?.cancel();
-    setRetryAnnouncement("");
-  }, [autoPaused]);
-
   const unreadCount = notifications.reduce((n, x) => n + (notifRead[x.id] ? 0 : 1), 0);
   const hasUnreadError = notifications.some((x) => !notifRead[x.id] && x.severity === "err");
 
@@ -1026,17 +996,6 @@ export default function App() {
         </div>
       )}
 
-      {/* R16 §6：托盘暂停态 —— 常驻 info + 「恢复」操作（恢复后定时器按原间隔继续） */}
-      {autoPaused && (
-        <div className="app-notice-bar">
-          <InlineNotice
-            tone="info"
-            message="自动刷新已暂停（手动刷新仍可用）"
-            action={{ label: "恢复", onClick: resumeAutoRefresh }}
-          />
-        </div>
-      )}
-
       {view === "dashboard" ? (
         <Dashboard
           config={config}
@@ -1071,8 +1030,6 @@ export default function App() {
           onToggleAutostart={handleToggleAutostart}
           notifyPermission={notifyPermission}
           onRequestNotifyPermission={handleRequestNotifyPermission}
-          paused={autoPaused}
-          onResume={resumeAutoRefresh}
         />
       )}
 

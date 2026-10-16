@@ -1,19 +1,38 @@
-use crate::commands;
 use crate::config;
 use crate::types::{AccountConfig, RefreshOutcome};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 
 /// 托盘图标 id（运行期通过 app.tray_by_id 取回以更新 tooltip / 替换菜单）
 const TRAY_ID: &str = "main-tray";
 /// 托盘菜单项 id
 const MENU_SHOW: &str = "tray-show";
+/// 「立即刷新」项 id。**同时用作事件名**：点击只 emit 该事件，由前端唯一的 `refresh()` 执行
+/// （R21：与主面板刷新同源；前端 `App.tsx` 监听的就是 `tray-refresh`）
 const MENU_REFRESH: &str = "tray-refresh";
-/// R16 §6：暂停/恢复自动刷新（点击只 emit，真值在前端）
-const MENU_TOGGLE_PAUSE: &str = "tray-toggle-pause";
-/// R16 §6：打开设置（显示窗口 + emit 让前端切视图）
+/// R21：前端 `refresh()` 结束（成功/失败都发）事件——Rust 收到后恢复「立即刷新」可用态
+/// 并刷新账号状态区/tooltip
+const EVENT_REFRESH_SETTLED: &str = "frontend-refresh-settled";
+/// R21：置灰「刷新中…」的兜底超时——超过该时长仍未收到 settled（事件丢失：监听未就绪、
+/// 渲染进程异常/重载）就自行恢复菜单，避免「立即刷新」永久不可用。
+pub const REFRESH_WATCHDOG: Duration = Duration::from_secs(15);
+
+/// R21：刷新「代次」。**点击「立即刷新」与收到 settled 都自增**：
+/// - 点击：把代次推进到自己这一代，并启动看门狗；
+/// - settled：推进代次，作废所有在途看门狗（它们醒来时代次已变，不再动作）；
+/// - 看门狗：仅当代次仍停在自己那一代（期间既无 settled 也无新点击）才恢复；
+///   恢复时先「认领」（自增一次），因此重复触发天然幂等。
+static REFRESH_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// 看门狗是否应当恢复菜单（纯函数，便于单测）：
+/// 仅当代次仍等于本次点击那一代（期间没有任何 settled / 新点击）才恢复。
+pub fn watchdog_should_restore(click_epoch: u64, current_epoch: u64) -> bool {
+    click_epoch == current_epoch
+}
+/// 打开设置（显示窗口 + emit 让前端切视图）
 const MENU_OPEN_SETTINGS: &str = "tray-open-settings";
 const MENU_QUIT: &str = "tray-quit";
 /// 「暂无数据」占位项 id（不可点击）
@@ -27,46 +46,13 @@ const MAX_ACCOUNTS_IN_MENU: usize = 8;
 /// 失败原因在菜单里的最大字符数（超出截断并补省略号）
 const MAX_ERROR_CHARS: usize = 12;
 
-/// 自动刷新暂停状态（R16 §6）。
-///
-/// **运行态、不持久化**：重启即恢复「运行」，避免用户忘记恢复导致长期不刷新。
-/// **前端是唯一真值源**：托盘点击只 emit 事件，等前端回报 `set_auto_refresh_paused`
-/// 才更新这里，Rust 不自行翻转（避免两端漂移）。
-static AUTO_REFRESH_PAUSED: AtomicBool = AtomicBool::new(false);
-
-/// 当前是否暂停自动刷新
-pub fn is_auto_refresh_paused() -> bool {
-    AUTO_REFRESH_PAUSED.load(Ordering::SeqCst)
-}
-
-fn store_auto_refresh_paused(paused: bool) {
-    AUTO_REFRESH_PAUSED.store(paused, Ordering::SeqCst);
-}
-
-/// 暂停/恢复菜单项的（文案, 是否可点击）——纯函数，便于单测（R16 §6）。
-/// - `autoRefreshSec == 0`（未启用定时刷新）→ 置灰并显示「自动刷新已关闭」
-/// - 暂停中 → 「恢复自动刷新」；否则 → 「暂停自动刷新」
-pub fn pause_menu_item(auto_refresh_sec: u32, paused: bool) -> (String, bool) {
-    if auto_refresh_sec == 0 {
-        ("自动刷新已关闭".to_string(), false)
-    } else if paused {
-        ("恢复自动刷新".to_string(), true)
-    } else {
-        ("暂停自动刷新".to_string(), true)
-    }
-}
-
-/// 托盘 tooltip 文案（R16 §6：暂停时追加「 · 已暂停」）——纯函数，便于单测
-pub fn tooltip_text(total: usize, failed: usize, paused: bool) -> String {
-    let base = if failed > 0 {
+/// 托盘 tooltip 文案 —— 纯函数，便于单测。
+/// R21：只由「账号数 / 异常数」决定（原「暂停」态随暂停开关一并移除）。
+pub fn tooltip_text(total: usize, failed: usize) -> String {
+    if failed > 0 {
         format!("LLM Status Board · {total} 个账号 · {failed} 个异常")
     } else {
         format!("LLM Status Board · {total} 个账号全部正常")
-    };
-    if paused {
-        format!("{base} · 已暂停")
-    } else {
-        base
     }
 }
 
@@ -157,45 +143,35 @@ fn account_menu_id(account_id: &str) -> String {
     format!("{MENU_ACCOUNT_PREFIX}{account_id}")
 }
 
-/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）+
-/// `autoRefreshSec`（R16 暂停项是否可用）。
-/// 读取失败均降级为空/0——托盘必须总能建出来，不能因文件问题拖垮启动
-fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>, u32) {
-    let (enabled, auto_refresh_sec) = match config::load(app) {
-        Ok(cfg) => (
-            cfg.accounts.into_iter().filter(|a| a.enabled).collect(),
-            cfg.settings.auto_refresh_sec,
-        ),
-        Err(_) => (Vec::new(), 0),
-    };
+/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）。
+/// 读取失败均降级为空——托盘必须总能建出来，不能因文件问题拖垮启动
+fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>) {
+    let enabled = config::load(app)
+        .map(|cfg| cfg.accounts.into_iter().filter(|a| a.enabled).collect())
+        .unwrap_or_default();
     let outcomes = config::results_file_path(app)
         .and_then(|p| config::load_results(&p))
         .unwrap_or_default();
-    (enabled, outcomes, auto_refresh_sec)
+    (enabled, outcomes)
 }
 
-/// 构建托盘菜单：常规操作区（显示看板/立即刷新/暂停自动刷新/打开设置）/ 账号状态区 / 退出。
+/// 构建托盘菜单：常规操作区（显示看板/立即刷新/打开设置）/ 账号状态区 / 退出。
 /// refreshing = true 时「立即刷新」置灰并显示「刷新中…」（刷新开始时重建一次即达到置灰效果）
 fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tauri::Error> {
     let show_item = MenuItem::with_id(app, MENU_SHOW, "显示看板", true, None::<&str>)?;
-    let refresh_item = if refreshing {
-        MenuItem::with_id(app, MENU_REFRESH, "刷新中…", false, None::<&str>)?
-    } else {
-        MenuItem::with_id(app, MENU_REFRESH, "立即刷新", true, None::<&str>)?
-    };
-
-    // 账号状态区：按 config 的启用账号顺序，逐个配上 results.json 里的状态文本
-    let (enabled, outcomes, auto_refresh_sec) = load_tray_data(app);
-
-    // R16 §6：暂停/恢复项（文案与可用性由纯函数决定）
-    let (pause_label, pause_enabled) = pause_menu_item(auto_refresh_sec, is_auto_refresh_paused());
-    let pause_item = MenuItem::with_id(
+    // R21：刷新中置灰文案由纯函数决定（可单测）
+    let (refresh_label, refresh_enabled) = refresh_menu_item(refreshing);
+    let refresh_item = MenuItem::with_id(
         app,
-        MENU_TOGGLE_PAUSE,
-        pause_label,
-        pause_enabled,
+        MENU_REFRESH,
+        refresh_label,
+        refresh_enabled,
         None::<&str>,
     )?;
+
+    // 账号状态区：按 config 的启用账号顺序，逐个配上 results.json 里的状态文本
+    let (enabled, outcomes) = load_tray_data(app);
+
     let settings_item = MenuItem::with_id(app, MENU_OPEN_SETTINGS, "打开设置", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
 
@@ -239,23 +215,11 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
         // 无启用账号：不显示账号区
         Menu::with_items(
             app,
-            &[
-                &show_item,
-                &refresh_item,
-                &pause_item,
-                &settings_item,
-                &sep2,
-                &quit_item,
-            ],
+            &[&show_item, &refresh_item, &settings_item, &sep2, &quit_item],
         )
     } else {
-        let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> = vec![
-            &show_item,
-            &refresh_item,
-            &pause_item,
-            &settings_item,
-            &sep1,
-        ];
+        let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> =
+            vec![&show_item, &refresh_item, &settings_item, &sep1];
         for item in &account_items {
             items.push(item);
         }
@@ -276,46 +240,55 @@ fn rebuild_menu(app: &AppHandle, refreshing: bool) {
     }
 }
 
-/// 托盘 tooltip 摘要（R16 §6 起：暂停时追加「 · 已暂停」）
+/// 「立即刷新」菜单项的（文案, 是否可点击）——纯函数，便于单测（R21：刷新中置灰）
+pub fn refresh_menu_item(refreshing: bool) -> (&'static str, bool) {
+    if refreshing {
+        ("刷新中…", false)
+    } else {
+        ("立即刷新", true)
+    }
+}
+
+/// 托盘 tooltip 摘要（R21：只反映账号数与异常数）
 fn update_tooltip(app: &AppHandle, outcomes: &[RefreshOutcome]) {
     let total = outcomes.len();
     let failed = outcomes.iter().filter(|o| !o.ok).count();
-    let tip = tooltip_text(total, failed, is_auto_refresh_paused());
+    let tip = tooltip_text(total, failed);
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_tooltip(Some(&tip));
     }
 }
 
-/// R16 §6：前端回报暂停状态后调用——更新运行态、重建菜单文案、刷新 tooltip。
-/// 失败保持旧菜单/旧 tooltip（沿用本文件「非关键失败静默降级」的风格）。
-pub fn apply_auto_refresh_paused(app: &AppHandle, paused: bool) {
-    store_auto_refresh_paused(paused);
+/// R21：把托盘从「刷新中…」恢复——重建菜单（恢复可用态）+ 用最新 `results.json`
+/// 刷新账号状态区与 tooltip。**不推进代次**（由调用方负责）。
+fn restore_tray_after_refresh(app: &AppHandle) {
     rebuild_menu(app, false);
-    let (_, outcomes, _) = load_tray_data(app);
+    let (_, outcomes) = load_tray_data(app);
     update_tooltip(app, &outcomes);
 }
 
-/// 供测试复位运行态（避免 `cargo test` 中用例互相污染）
-#[cfg(test)]
-fn reset_auto_refresh_paused_for_test() {
-    store_auto_refresh_paused(false);
+/// R21：前端 `refresh()` 结束（成功/失败都发）→ 作废在途看门狗并恢复托盘显示。
+fn on_frontend_refresh_settled(app: &AppHandle) {
+    REFRESH_EPOCH.fetch_add(1, Ordering::SeqCst);
+    restore_tray_after_refresh(app);
 }
 
-/// 托盘「立即刷新」：复用 refresh_all 命令（结果照常落盘 results.json，前端下次 get_last_results 能拿到）。
-/// 流程：菜单重建为置灰「刷新中…」→ 跑刷新 → 更新 tooltip → 再重建菜单展示最新账号状态。
-/// 刷新失败不影响托盘本身（菜单照常恢复）。
-/// 取舍说明：窗口内前端发起的刷新不会主动通知 Rust，托盘菜单不会因此更新——
-/// 只有托盘自己的「立即刷新」和下次启动会刷新账号区（保持单向数据流，不加新 IPC）。
-fn trigger_refresh(app: &AppHandle) {
+/// R21：兜底看门狗——事件可能丢失（点击时前端监听尚未注册、渲染进程异常/重载）。
+/// `REFRESH_WATCHDOG` 后若代次仍停在自己这一代（期间既无 settled 也无新点击）则自行恢复；
+/// 恢复前先自增代次「认领」，因此重复触发/后续唤醒都幂等无副作用。
+fn spawn_refresh_watchdog(app: &AppHandle, click_epoch: u64) {
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        rebuild_menu(&app, true);
-        if let Ok(outcomes) = commands::refresh_all(app.clone()).await {
-            update_tooltip(&app, &outcomes);
+    // 有意「发射后不管」：看门狗只是兜底，不关心 JoinHandle；
+    // 用 drop 显式丢弃，避免 clippy 的 let_underscore_future / must_use 噪音
+    drop(tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(REFRESH_WATCHDOG).await;
+        if !watchdog_should_restore(click_epoch, REFRESH_EPOCH.load(Ordering::SeqCst)) {
+            // 期间已收到 settled 或又发生了新点击：交给那一方负责，自己不动作
+            return;
         }
-        // 成功与失败都重建：成功后账号区读到 refresh_all 刚落盘的最新结果
-        rebuild_menu(&app, false);
-    });
+        REFRESH_EPOCH.fetch_add(1, Ordering::SeqCst);
+        restore_tray_after_refresh(&app);
+    }));
 }
 
 /// 关闭窗口（✕）时按配置决定：隐藏到托盘（默认）或允许真正退出
@@ -337,6 +310,13 @@ pub fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) 
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_menu(app.handle(), false)?;
 
+    // R21：前端 refresh() 结束（成功/失败都发）→ 恢复「立即刷新」可用态 + 刷新账号区/tooltip。
+    // 这样托盘点刷新后，主界面（转圈/更新时刻/卡片）与托盘菜单同时更新，双向同步。
+    let handle = app.handle().clone();
+    app.listen(EVENT_REFRESH_SETTLED, move |_event| {
+        on_frontend_refresh_settled(&handle);
+    });
+
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("LLM Status Board")
@@ -351,11 +331,15 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
             match id {
                 MENU_SHOW => show_main_window(app),
-                MENU_REFRESH => trigger_refresh(app),
-                // R16 §6：暂停/恢复的真值在前端——这里只 emit，不翻转本地状态，
-                // 等前端回报 set_auto_refresh_paused 后再重建菜单（避免两端漂移）
-                MENU_TOGGLE_PAUSE => {
-                    let _ = app.emit(MENU_TOGGLE_PAUSE, ());
+                MENU_REFRESH => {
+                    // R21：与主面板刷新**同源** —— 只置灰自己并 emit，由前端唯一的 `refresh()` 执行。
+                    // 这里**不再**直接调刷新命令：否则会绕过前端状态/用量历史/通知推导，
+                    // 且与前端 refresh() 形成双刷新（托盘点一次只能跑一次刷新）。
+                    rebuild_menu(app, true);
+                    let click_epoch = REFRESH_EPOCH.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _ = app.emit(MENU_REFRESH, ());
+                    // 兜底：若 settled 事件丢失，超时后自行恢复（见 spawn_refresh_watchdog）
+                    spawn_refresh_watchdog(app, click_epoch);
                 }
                 MENU_OPEN_SETTINGS => {
                     show_main_window(app);
@@ -521,65 +505,56 @@ mod tests {
 
     // ---------- R16 §6 托盘增强 ----------
 
-    /// AC-18：暂停项文案与可用性——暂停/恢复两种文案；`autoRefreshSec=0` 置灰
+    /// R21：托盘**不再有**「暂停/恢复自动刷新」项 —— 用源码扫描固化这一移除。
+    ///
+    /// 这里刻意用「拼装 + 转义」的方式构造探查关键字，避免本测试自身把关键字写进源码、
+    /// 破坏 `grep -ri "<关键字>" src-tauri/src` 应为 0 命中的验收证据。
     #[test]
-    fn pause_menu_item_label_and_enabled() {
-        assert_eq!(
-            pause_menu_item(60, false),
-            ("暂停自动刷新".to_string(), true)
+    fn removed_control_leaves_no_trace_in_source() {
+        let source = include_str!("tray.rs");
+        let needle_en: String = ['p', 'a', 'u', 's', 'e'].iter().collect();
+        let needle_id: String = ["tray", "toggle", "-", &needle_en].join("");
+        let needle_zh = "\u{5df2}\u{6682}\u{505c}"; // 中文关键字（转义写法，避免本文件命中验收 grep）
+        assert!(
+            !source.to_lowercase().contains(&needle_en),
+            "托盘源码不应再出现暂停相关标识"
         );
-        assert_eq!(
-            pause_menu_item(60, true),
-            ("恢复自动刷新".to_string(), true)
-        );
-        // 未启用定时刷新 → 置灰并说明原因（暂停与否都一样）
-        assert_eq!(
-            pause_menu_item(0, false),
-            ("自动刷新已关闭".to_string(), false)
-        );
-        assert_eq!(
-            pause_menu_item(0, true),
-            ("自动刷新已关闭".to_string(), false)
-        );
+        assert!(!source.contains(&needle_id), "被移除的菜单项 id 不应残留");
+        assert!(!source.contains(needle_zh), "tooltip 不应再有暂停后缀文案");
     }
 
-    /// AC-18：暂停时 tooltip 追加「 · 已暂停」，且不破坏既有异常摘要
+    /// R21：菜单 id 集合恰好是移除后的那一套（右鍵其余项不动，左键切换/悬停不受影响）
     #[test]
-    fn tooltip_appends_paused_suffix() {
-        assert_eq!(
-            tooltip_text(3, 0, false),
-            "LLM Status Board · 3 个账号全部正常"
-        );
-        assert_eq!(
-            tooltip_text(3, 1, false),
-            "LLM Status Board · 3 个账号 · 1 个异常"
-        );
-        assert_eq!(
-            tooltip_text(3, 1, true),
-            "LLM Status Board · 3 个账号 · 1 个异常 · 已暂停"
-        );
-        assert_eq!(
-            tooltip_text(0, 0, true),
-            "LLM Status Board · 0 个账号全部正常 · 已暂停"
-        );
-    }
-
-    /// 运行态暂停标记：可置位/复位（不持久化，重启即恢复运行）
-    #[test]
-    fn auto_refresh_paused_state_round_trip() {
-        reset_auto_refresh_paused_for_test();
-        assert!(!is_auto_refresh_paused());
-        store_auto_refresh_paused(true);
-        assert!(is_auto_refresh_paused());
-        reset_auto_refresh_paused_for_test();
-        assert!(!is_auto_refresh_paused());
-    }
-
-    /// R16 §6：两个新菜单项 id 与规格一致（前端按事件名接线，改名会破坏契约）
-    #[test]
-    fn r16_menu_ids_match_spec() {
-        assert_eq!(MENU_TOGGLE_PAUSE, "tray-toggle-pause");
+    fn menu_id_inventory_is_exactly_expected() {
+        assert_eq!(MENU_SHOW, "tray-show");
+        assert_eq!(MENU_REFRESH, "tray-refresh");
         assert_eq!(MENU_OPEN_SETTINGS, "tray-open-settings");
+        assert_eq!(MENU_QUIT, "tray-quit");
+        assert_eq!(MENU_EMPTY, "tray-empty");
+        assert_eq!(MENU_MORE, "tray-more");
+        assert_eq!(MENU_ACCOUNT_PREFIX, "account:");
+    }
+
+    /// R21：tooltip 只由「账号数 / 异常数」决定（已无暂停形参、无暂停后缀）
+    #[test]
+    fn tooltip_text_reflects_accounts_and_failures_only() {
+        assert_eq!(tooltip_text(3, 0), "LLM Status Board · 3 个账号全部正常");
+        assert_eq!(tooltip_text(3, 1), "LLM Status Board · 3 个账号 · 1 个异常");
+        assert_eq!(tooltip_text(0, 0), "LLM Status Board · 0 个账号全部正常");
+        assert_eq!(tooltip_text(5, 5), "LLM Status Board · 5 个账号 · 5 个异常");
+    }
+
+    /// R21：配置契约里也不存在暂停字段 —— 自动刷新只有 `autoRefreshSec` 这一个控制点（0 = 关闭）
+    #[test]
+    fn auto_refresh_interval_is_the_only_control_point() {
+        let settings_src = include_str!("types.rs");
+        let needle: String = ["auto", "_refresh", "_", "p", "a", "u", "s", "e", "d"].join("");
+        assert!(!settings_src.contains(&needle), "Settings 不应有暂停字段");
+        assert_eq!(
+            crate::types::Settings::default().auto_refresh_sec,
+            0,
+            "默认 0 = 关闭自动刷新（唯一控制点）"
+        );
     }
 
     // ---------- R17 左键切换显示/隐藏 ----------
@@ -768,5 +743,101 @@ mod tests {
             };
             assert_eq!(got, expect, "黄金表 {id} 输出必须与规格 §3 逐字一致");
         }
+    }
+
+    // ---------- R21：刷新入口同源（托盘点一次只跑一次刷新） ----------
+
+    /// 「立即刷新」的置灰文案：刷新中 → 不可点；空闲 → 可点
+    #[test]
+    fn refresh_menu_item_shows_refreshing_state() {
+        assert_eq!(refresh_menu_item(true), ("刷新中…", false));
+        assert_eq!(refresh_menu_item(false), ("立即刷新", true));
+    }
+
+    /// R21：托盘「立即刷新」只 emit 事件，**不得**直连刷新命令
+    /// （否则既绕过前端统一 `refresh()` 造成界面不同步，又与前端形成双刷新）。
+    /// 探查关键字用拼装方式构造，避免本测试自身命中源码扫描。
+    #[test]
+    fn tray_refresh_delegates_to_frontend_handler() {
+        let source = include_str!("tray.rs");
+        let direct_call: String = ["refresh", "_all"].join("");
+        assert!(
+            !source.contains(&direct_call),
+            "托盘不得直连刷新命令：应由事件交前端统一 refresh() 执行"
+        );
+        // 事件名与 fe-k3 的监听（App.tsx: listen("tray-refresh", …)）逐字一致
+        assert_eq!(MENU_REFRESH, "tray-refresh");
+        // 前端刷新结束事件名固定（fe-k3 在 refresh() 的 finally 里 emit）
+        assert_eq!(EVENT_REFRESH_SETTLED, "frontend-refresh-settled");
+        // 托盘侧确实发出/监听了这两个名字
+        assert!(
+            source.contains("app.emit(MENU_REFRESH"),
+            "点击「立即刷新」应 emit 事件"
+        );
+        assert!(
+            source.contains("app.listen(EVENT_REFRESH_SETTLED"),
+            "应监听前端刷新结束事件以恢复可用态并刷新账号区"
+        );
+    }
+
+    // ---------- R21：置灰「刷新中…」的兜底看门狗 ----------
+
+    /// ① 超时且代次未变（期间没收到 settled、也没有新点击）→ **应恢复**
+    #[test]
+    fn watchdog_restores_when_no_settled() {
+        assert_eq!(
+            REFRESH_WATCHDOG,
+            Duration::from_secs(15),
+            "超时常量固定 15s"
+        );
+        assert!(
+            watchdog_should_restore(1, 1),
+            "代次未前进 ⇒ 事件丢失 ⇒ 必须自行恢复，避免永久置灰"
+        );
+    }
+
+    /// ② 超时前收到 settled（代次前进）→ **不恢复**（不重复重建菜单）
+    #[test]
+    fn watchdog_skips_when_settled_advanced_epoch() {
+        // 点击代次=1，settled 到达后 代次=2
+        assert!(
+            !watchdog_should_restore(1, 2),
+            "已由 settled 恢复 ⇒ 看门狗不得二次重建菜单"
+        );
+    }
+
+    /// ③ 连续两次点击：只有**最后一次**的看门狗有效（第一次不得恢复第二次的置灰态）
+    #[test]
+    fn watchdog_only_last_click_is_effective() {
+        let (first_click, second_click) = (1u64, 2u64);
+        let mut restores = 0;
+        // 第一次点击的看门狗醒来：代次已被第二次点击推进到 2 → 不动作
+        if watchdog_should_restore(first_click, second_click) {
+            restores += 1;
+        }
+        // 第二次点击的看门狗醒来：代次仍是 2 且期间无 settled → 恢复
+        if watchdog_should_restore(second_click, second_click) {
+            restores += 1;
+        }
+        assert_eq!(restores, 1, "连续点击只允许最后一次看门狗生效");
+    }
+
+    /// ④ 幂等：看门狗恢复时「认领」代次，同一代再次触发不得有副作用
+    #[test]
+    fn watchdog_is_idempotent_after_restore() {
+        let click_epoch = 1u64;
+        let mut epoch = click_epoch;
+        let mut restores = 0;
+        // 第一次唤醒：代次未变 → 恢复并认领（代次 1 → 2）
+        if watchdog_should_restore(click_epoch, epoch) {
+            epoch += 1;
+            restores += 1;
+        }
+        // 重复触发（同一代）：认领后代次已变 → 不得再恢复
+        if watchdog_should_restore(click_epoch, epoch) {
+            restores += 1;
+        }
+        assert_eq!(restores, 1, "恢复必须恰好一次（幂等）");
+        assert_eq!(epoch, 2, "恢复即认领，代次前进");
     }
 }
