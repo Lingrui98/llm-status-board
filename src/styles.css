@@ -3998,3 +3998,128 @@ button.notif-jump:focus-visible .notif-jump-hint {
   opacity: 1;
   background: color-mix(in srgb, currentColor 12%, transparent);
 }
+
+/* ============================================================
+   R17 底部报告区块（余额消耗预测 / 用量花费分析）观感重做
+   - 区块头与「全局统计」同族（.global-stats-head），收起态给一行摘要（单行截断）；
+   - 数字优先：StatTile 磁贴在区块内「去卡片化」（区块本身已有一层边框+阴影，
+     磁贴只留浅底，不再叠加边框/阴影/悬浮位移）；
+   - 分析区四个小节用「分隔线 + 小标题」分段，不套卡片；
+   - 颜色全部走现有主题变量（暗/亮主题自动覆盖），无新增硬编码色值；
+   - 动效只有 charts-in 过渡，已被 prefers-reduced-motion 全局规则统一降级。
+   ============================================================ */
+
+/* 收起态一行摘要：头部内单行截断，完整文案在 title 提示 */
+.global-stats-head .section-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 洞察区主体 / 动作条（此前未定义，R17 补齐节奏与分隔） */
+.insights-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 4px;
+  border-top: 1px solid var(--border);
+  animation: charts-in 0.24s var(--ease-out);
+}
+
+.insights-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insights-notices p {
+  margin: 0;
+}
+
+.insights-skip-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.insights-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 18px 14px;
+}
+
+.insights-panel-body + .insights-panel-actions {
+  padding-top: 4px;
+}
+
+/* 分析区主体：小标题分段 + 分隔线（不套卡片、不叠阴影） */
+.analysis-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--border);
+  animation: charts-in 0.24s var(--ease-out);
+}
+
+.analysis-body .chart-section {
+  padding: 2px 0 6px;
+}
+
+.analysis-body .chart-section + .chart-section {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.analysis-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.analysis-note.err {
+  color: var(--err);
+}
+
+/* 常驻错误提示（收起时也不藏）：贴区块头下方，与内容区同距 */
+.analysis-note-outer {
+  padding: 0 18px 10px;
+}
+
+.analysis-subgroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.analysis-subgroup + .analysis-subgroup {
+  margin-top: 10px;
+}
+
+/* 周期对比关键指标行：紧凑数字磁贴网格 */
+.stat-grid-tight {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+/* 数字磁贴在报告区块内去卡片化：无外框 / 无阴影 / 无悬浮位移（区块边框唯一） */
+.insights-panel .stat-tile,
+.analysis-panel .stat-tile {
+  border: none;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--bg-1) 55%, transparent);
+}
+
+.insights-panel .stat-tile:hover,
+.analysis-panel .stat-tile:hover {
+  border: none;
+  box-shadow: none;
+  transform: none;
+}

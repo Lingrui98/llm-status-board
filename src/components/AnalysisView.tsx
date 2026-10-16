@@ -2,12 +2,14 @@
 // - recharts 图表（逐日趋势）走 charts/lazy 懒加载边界，不把 recharts 拉回主包；
 // - 「今天」由 App 层注入（单一来源，避免多处 new Date() 造成跨时区不一致）；
 // - 无本地历史时显示明确占位，**不回退** results.json（§3.5.4，避免「看起来有数据其实只有一天」）。
+// R17：移到账号卡片下方、默认收起（用户选择存 localStorage），收起态头部给一行与展开同源的摘要。
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { DeltaBadge, HeatStrip, MiniBars, RankingRow, StatTile } from "./ui";
 import type { HeatStripCell } from "./ui";
 import { ChartEmpty, ChartSection } from "./charts/shared";
 import { LazyAnalysisTrendChart as AnalysisTrendChart } from "./charts/lazy";
+import { useSectionOpen } from "./useSectionOpen";
 import {
   ANOMALY_WINDOW_DAYS,
   PERIOD_DAYS,
@@ -37,6 +39,8 @@ interface Props {
   errorNote?: string;
   /** 本地历史刚开始积累时的提示（例如记录数很少） */
   hintNote?: string;
+  /** R17 空态可执行提示：立即刷新（本地历史随刷新积累） */
+  onRefresh?: () => void;
 }
 
 /** 逐日花费序列（按币种）：缺失日补 0，保证 x 轴连续 */
@@ -62,8 +66,29 @@ function deltaTone(delta: number): "default" | "ok" | "warn" | "err" {
   return "default";
 }
 
-export default function AnalysisView({ records, statuses, accounts, today, errorNote, hintNote }: Props) {
-  const [open, setOpen] = useState(true);
+/** 币种符号前缀（仅展示；未知币种退化为代码后缀） */
+function periodAmountText(amount: number, currency: string): string {
+  const n = formatDecimal(amount);
+  if (currency === "USD") return `$${n}`;
+  if (currency === "CNY") return `¥${n}`;
+  return `${n} ${currency}`;
+}
+
+/**
+ * 收起态一行摘要——与展开内容**同源**：只读同一份 AnalysisReport.period，不另算口径。
+ * 例：「近 7 天花费 $70.00 · 环比 +40%」；无本地历史 / 无法币花费时给可解释占位。
+ */
+function collapsedSummary(report: AnalysisReport): string {
+  if (!report.hasUsageHistory) return "暂无本地用量数据 · 随刷新自动积累";
+  const c = report.period.byCurrency[0];
+  if (!c) return `近 ${PERIOD_DAYS} 天无法币花费记录`;
+  const delta =
+    c.deltaPct === null ? (c.label ?? "—") : `${c.deltaPct > 0 ? "+" : ""}${Math.round(c.deltaPct)}%`;
+  return `近 ${PERIOD_DAYS} 天花费 ${periodAmountText(c.costThis, c.currency)} · 环比 ${delta}`;
+}
+
+export default function AnalysisView({ records, statuses, accounts, today, errorNote, hintNote, onRefresh }: Props) {
+  const [open, toggleOpen] = useSectionOpen("analysis");
 
   const enabled = useMemo(() => accounts.filter((a) => a.enabled), [accounts]);
   const names = useMemo(() => {
@@ -121,24 +146,53 @@ export default function AnalysisView({ records, statuses, accounts, today, error
   const modelRows = models.byCurrency[0]?.entries ?? [];
   const modelCurrency = models.byCurrency[0]?.currency ?? "";
 
+  const summary = useMemo(() => collapsedSummary(report), [report]);
+
   return (
-    <section className="global-stats analysis-panel" aria-label="深度分析">
-      <button type="button" className="global-stats-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-        <span className="global-stats-title">深度分析</span>
-        <span className="muted small">周对比 · 模型成本 · 账号效率 · 异常日</span>
+    <section className="global-stats analysis-panel" aria-label="用量花费分析">
+      <button
+        type="button"
+        className="global-stats-head"
+        onClick={toggleOpen}
+        aria-expanded={open}
+        aria-controls="analysis-panel-body"
+      >
+        <span className="global-stats-title">用量花费分析</span>
+        {open ? (
+          <span className="muted small">周对比 · 模型成本 · 账号效率 · 异常日</span>
+        ) : (
+          <span className="muted small section-summary" title={summary}>
+            {summary}
+          </span>
+        )}
         <svg className="chevron" width="12" height="12" viewBox="0 0 10 10" aria-hidden="true">
           <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </button>
 
+      {/* 读取/写入失败提示常驻（非区块内容，收起时也不藏错误） */}
+      {errorNote && (
+        <p className="analysis-note err analysis-note-outer" role="status">
+          {errorNote}
+        </p>
+      )}
+
       {open && (
-        <div className="analysis-body">
-          {errorNote && <p className="analysis-note err">{errorNote}</p>}
+        <div id="analysis-panel-body" className="analysis-body">
           {!report.hasUsageHistory ? (
-            <div className="insights-empty">
-              暂无本地用量历史 —— 本地历史从本版本开始积累，刷新几次后即可看到周对比、模型成本与异常日分析。
-              {hintNote ? `（${hintNote}）` : ""}
-            </div>
+            <>
+              <div className="insights-empty">
+                暂无本地用量历史 —— 本地历史从本版本开始积累，刷新几次后即可看到周对比、模型成本与异常日分析。
+                {hintNote ? `（${hintNote}）` : ""}
+              </div>
+              {onRefresh && (
+                <div className="insights-panel-actions">
+                  <button type="button" className="btn ghost" onClick={onRefresh} title="立即刷新一次，开始积累本地用量历史">
+                    刷新一次
+                  </button>
+                </div>
+              )}
+            </>
           ) : (
             <>
               {/* ① 周期对比（近 7 天 vs 前 7 天） */}

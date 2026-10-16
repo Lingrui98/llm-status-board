@@ -70,12 +70,40 @@ pub fn tooltip_text(total: usize, failed: usize, paused: bool) -> String {
     }
 }
 
-/// 显示并聚焦主窗口（左键单击托盘 / 菜单「显示看板」/ 点击账号项共用）
+/// 显示并聚焦主窗口（菜单「显示看板」/ 点击账号项 / 左键切换的「显示」分支共用）
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+/// 托盘左键单击的判定（纯函数，可单测）：**仅当窗口「可见且未最小化」时才隐藏**。
+/// 隐藏中或最小化（任务栏里点了最小化）都视为「用户想让窗口回来」→ 显示 + 还原 + 聚焦。
+/// Windows 与 macOS 共用这一份判定，不做平台分支。
+pub fn should_hide_on_tray_click(is_visible: bool, is_minimized: bool) -> bool {
+    is_visible && !is_minimized
+}
+
+/// 结合「窗口状态是否读取成功」的最终决策（纯函数，可单测）：
+/// `None`（读取失败）→ 不隐藏，即降级为显示 + 聚焦。
+fn resolve_tray_click_hide(state: Option<(bool, bool)>) -> bool {
+    state.is_some_and(|(visible, minimized)| should_hide_on_tray_click(visible, minimized))
+}
+
+/// 托盘左键单击：切换显示/隐藏。
+/// 与「✕ 隐藏到托盘」开关（`close_to_tray`）**完全解耦**——那个开关只管关闭按钮。
+/// 取窗口状态失败（平台不支持等）时**降级为显示 + 聚焦**：宁可多显示一次，也不能点了没反应。
+fn toggle_main_window(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let state = window.is_visible().ok().zip(window.is_minimized().ok());
+    if resolve_tray_click_hide(state) {
+        let _ = window.hide();
+    } else {
+        show_main_window(app);
     }
 }
 
@@ -367,7 +395,8 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 ..
             } = event
             {
-                show_main_window(tray.app_handle());
+                // R17：左键单击 = 切换显示/隐藏（Windows 与 macOS 同逻辑）
+                toggle_main_window(tray.app_handle());
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -541,5 +570,38 @@ mod tests {
     fn r16_menu_ids_match_spec() {
         assert_eq!(MENU_TOGGLE_PAUSE, "tray-toggle-pause");
         assert_eq!(MENU_OPEN_SETTINGS, "tray-open-settings");
+    }
+
+    // ---------- R17 左键切换显示/隐藏 ----------
+
+    /// 4 种组合：只有「可见且未最小化」才隐藏；隐藏/最小化都走显示+还原+聚焦
+    #[test]
+    fn should_hide_on_tray_click_covers_all_states() {
+        assert!(
+            should_hide_on_tray_click(true, false),
+            "可见且未最小化 → 隐藏"
+        );
+        assert!(
+            !should_hide_on_tray_click(true, true),
+            "可见但已最小化 → 还原显示（不是隐藏）"
+        );
+        assert!(!should_hide_on_tray_click(false, false), "已隐藏 → 显示");
+        assert!(
+            !should_hide_on_tray_click(false, true),
+            "隐藏且最小化 → 显示"
+        );
+    }
+
+    /// 状态读取失败（None）→ 降级为「显示 + 聚焦」；正常状态按判定表走
+    #[test]
+    fn tray_click_degrades_to_show_when_state_unknown() {
+        assert!(
+            !resolve_tray_click_hide(None),
+            "取窗口状态失败时必须降级为显示，不能隐藏"
+        );
+        assert!(resolve_tray_click_hide(Some((true, false))));
+        assert!(!resolve_tray_click_hide(Some((true, true))));
+        assert!(!resolve_tray_click_hide(Some((false, false))));
+        assert!(!resolve_tray_click_hide(Some((false, true))));
     }
 }

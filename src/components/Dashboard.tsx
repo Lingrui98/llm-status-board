@@ -206,23 +206,6 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         </div>
       </div>
 
-      {/* R14 洞察区：可折叠。内部计算完全来自 history 快照，与本区块的 hasStats 判据解耦 */}
-      <InsightsPanel
-        accounts={config.accounts}
-        statuses={statuses}
-        snapshots={snapshots}
-        settings={config.settings}
-      />
-
-      {/* R15 深度分析区：数据源是本地用量历史（usage-history.json）+ results.json 的 modelUsage */}
-      <AnalysisView
-        records={usageRecords ?? []}
-        statuses={statuses}
-        accounts={config.accounts}
-        today={todayKey ?? toLocalDateKey()}
-        errorNote={usageError ?? undefined}
-      />
-
       {hasStats && (
         <section className="global-stats">
           <button
@@ -278,6 +261,26 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
               />
             ))}
       </div>
+
+      {/* R17 版位：洞察 / 深度分析移到账号卡片下方（默认收起，用户选择在 localStorage 记忆） */}
+      {/* R14 洞察区：内部计算完全来自 history 快照，与上方全局统计的 hasStats 判据解耦 */}
+      <InsightsPanel
+        accounts={config.accounts}
+        statuses={statuses}
+        snapshots={snapshots}
+        settings={config.settings}
+        onRefresh={onRefresh}
+      />
+
+      {/* R15 深度分析区：数据源是本地用量历史（usage-history.json）+ results.json 的 modelUsage */}
+      <AnalysisView
+        records={usageRecords ?? []}
+        statuses={statuses}
+        accounts={config.accounts}
+        today={todayKey ?? toLocalDateKey()}
+        errorNote={usageError ?? undefined}
+        onRefresh={onRefresh}
+      />
     </main>
   );
 }

@@ -1,5 +1,7 @@
 // R14 洞察区组件测试：在组件层验证 UI（无 App 全局统计图表，jsdom 下确定性好）。
 // 计算口径的完整覆盖在 src/insights.test.ts；导出编排在 src/exportReport.test.ts。
+// R17：默认收起（localStorage 记忆用户选择）。涉及内容的用例一律「先展开再断言」，
+// 数据/口径断言保持不变；折叠行为本身由「折叠与记忆」describe 覆盖。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -20,6 +22,8 @@ afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
   mockInvoke.mockReset();
+  // 折叠状态走 localStorage（lsb-bottom-sections）：每个用例从「无记录」开始
+  window.localStorage.clear();
 });
 
 const SETTINGS: Settings = { autoRefreshSec: 0, refreshOnStart: false };
@@ -84,10 +88,75 @@ function renderPanel(props: {
   );
 }
 
+/** R17：默认收起——内容断言前先展开（幂等：已展开时不重复点击） */
+function expandPanel(): HTMLElement {
+  const head = screen.getByRole("button", { name: /余额消耗预测/ });
+  if (head.getAttribute("aria-expanded") !== "true") fireEvent.click(head);
+  return head;
+}
+
+describe("InsightsPanel：折叠与记忆（R17）", () => {
+  it("默认收起：aria-expanded=false、内容未挂载，且挂载时不写 localStorage", () => {
+    renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    const head = screen.getByRole("button", { name: /余额消耗预测/ });
+    expect(head.getAttribute("aria-expanded")).toBe("false");
+    expect(head.getAttribute("aria-controls")).toBe("insights-panel-body");
+    expect(document.querySelector(".insights-grid")).toBeNull();
+    // 默认收起是缺省行为，不是用户选择 → 不写盘
+    expect(window.localStorage.getItem("lsb-bottom-sections")).toBeNull();
+  });
+
+  it("收起态头部给一行摘要，且与展开后的提醒条同源（同一段 fastestSummaryText）", () => {
+    renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    const summary = document.querySelector(".section-summary") as HTMLElement;
+    expect(summary).toBeTruthy();
+    const summaryText = summary.textContent ?? ""; // 展开后 React 会复用该节点显示副标题，先取快照
+    expect(summaryText).toContain("1 条余额提醒");
+    expect(summaryText).toContain("甲账号");
+    expect(summaryText).toContain("消耗最快");
+    // 展开后提醒条与收起摘要共享同一段 fastestSummaryText 原文（同一 useMemo 数据源）
+    expandPanel();
+    const notice = document.querySelector(".insights-notice") as HTMLElement;
+    const shared = "消耗最快：15.00 USD/天，余额约可支撑 4.7 天";
+    expect(notice.textContent).toContain(shared);
+    expect(summaryText).toContain(shared);
+  });
+
+  it("记住展开：用户展开后重挂载仍展开；洞察的记忆不影响分析区块", () => {
+    const view = renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    expandPanel();
+    view.unmount();
+    renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    const head = screen.getByRole("button", { name: /余额消耗预测/ });
+    expect(head.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".insights-grid")).toBeTruthy();
+    // 只记了 insights 一项（analysis 的选择独立）
+    const stored = JSON.parse(window.localStorage.getItem("lsb-bottom-sections") ?? "{}");
+    expect(stored).toEqual({ insights: true });
+  });
+
+  it("记住收起：展开后手动收起，重挂载仍收起", () => {
+    const view = renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    const head1 = expandPanel();
+    fireEvent.click(head1);
+    expect(head1.getAttribute("aria-expanded")).toBe("false");
+    view.unmount();
+    renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    const head2 = screen.getByRole("button", { name: /余额消耗预测/ });
+    expect(head2.getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector(".insights-grid")).toBeNull();
+    // 折叠时导出入口一并收起
+    expect(screen.queryByRole("button", { name: "导出 CSV" })).toBeNull();
+  });
+});
+
 describe("InsightsPanel：空态与降级", () => {
   it("无任何快照：显示明确占位文案，不渲染磁贴网格，导出入口仍可用", () => {
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [] });
-    expect(screen.getByText("洞察")).toBeTruthy();
+    expect(screen.getByText("余额消耗预测")).toBeTruthy();
+    // 收起态摘要解释「为什么是空的 + 怎么让它有内容」
+    expect(screen.getByText(/暂无历史数据 · 刷新几次后可见预测/)).toBeTruthy();
+    expandPanel();
     expect(screen.getByText(/暂无历史数据/)).toBeTruthy();
     expect(document.querySelector(".insights-grid")).toBeNull();
     expect(screen.getByRole("button", { name: "导出 CSV" })).toBeTruthy();
@@ -95,6 +164,7 @@ describe("InsightsPanel：空态与降级", () => {
 
   it("单条快照：磁贴降级显示占位与原因，不出现「可支撑」单位，无 NaN/Infinity", () => {
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S2, 70)] });
+    expandPanel();
     const tile = document.querySelector(".stat-tile") as HTMLElement;
     expect(tile).toBeTruthy();
     expect(tile.textContent).toContain("历史快照不足 2 条");
@@ -108,6 +178,7 @@ describe("InsightsPanel：空态与降级", () => {
       accounts: [account("kimi", "Kimi 订阅", "moonshot")],
       snapshots: [snap("kimi", S1, 1000, "credits"), snap("kimi", S2, 400, "credits")],
     });
+    expandPanel();
     expect(document.querySelector(".stat-tile")).toBeNull();
     expect(screen.getByText(/点数\/订阅单位/)).toBeTruthy();
     expect(screen.getByText(/Kimi 订阅（CREDITS）/)).toBeTruthy();
@@ -119,6 +190,7 @@ describe("InsightsPanel：空态与降级", () => {
       snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)],
       statuses: { a2: { accountId: "a2", ok: false, info: null, error: "HTTP 500" } },
     });
+    expandPanel();
     // 账号磁贴 + 一个「本月预计支出」磁贴；失败账号（无快照）不产生磁贴
     const labels = [...document.querySelectorAll(".stat-tile-label")].map((e) => e.textContent ?? "");
     expect(labels.filter((l) => l.includes("正常账号"))).toHaveLength(1);
@@ -136,6 +208,7 @@ describe("InsightsPanel：空态与降级", () => {
       snapshots: [snap("bad", S1, 100), snap("bad", S2, 10)], // 若被统计会是 45/天的最快账号
       statuses: { bad: { accountId: "bad", ok: false, info: null, error: "HTTP 500" } },
     });
+    expandPanel();
     expect(document.querySelector(".stat-tile")).toBeNull();
     expect(screen.queryByText(/消耗最快/)).toBeNull();
     expect(screen.queryByText("失败但有快照")).toBeNull();
@@ -151,6 +224,7 @@ describe("InsightsPanel：空态与降级", () => {
         settings={SETTINGS}
       />,
     );
+    expandPanel();
     expect(document.querySelector(".stat-tile")).toBeTruthy();
     expect(screen.getByText("4.7 天")).toBeTruthy();
   });
@@ -159,6 +233,7 @@ describe("InsightsPanel：空态与降级", () => {
 describe("InsightsPanel：磁贴与风险色", () => {
   it("余额下降：显示可支撑天数、日均消耗与风险提示条", () => {
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    expandPanel();
     expect(screen.getByText("4.7 天")).toBeTruthy();
     expect(screen.getByText("可支撑")).toBeTruthy();
     expect(screen.getByText(/日均 15\.00 USD\/天/)).toBeTruthy();
@@ -172,12 +247,14 @@ describe("InsightsPanel：磁贴与风险色", () => {
   it("可支撑 ≤ 3 天时提示条升级为 err 语义色", () => {
     // 100 → 20，跨度 2 天 → 40/天，余额 20 → 0.5 天
     renderPanel({ accounts: [account("a1", "濒危账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 20)] });
+    expandPanel();
     expect(screen.getByText("< 1 天")).toBeTruthy();
     expect(document.querySelector(".insights-notice")?.className).toContain("err");
   });
 
   it("余额未下降（零消耗）：显示占位与原因，不做除零", () => {
     renderPanel({ accounts: [account("a1", "静止账号")], snapshots: [snap("a1", S1, 50), snap("a1", S2, 50)] });
+    expandPanel();
     const tile = document.querySelector(".stat-tile") as HTMLElement;
     expect(tile.textContent).toContain("窗口内无消耗");
     expect(document.body.textContent).not.toContain("Infinity");
@@ -193,6 +270,7 @@ describe("InsightsPanel：磁贴与风险色", () => {
         snap("a2", S2, 600, "CNY"),
       ],
     });
+    expandPanel();
     const labels = [...document.querySelectorAll(".stat-tile-label")].map((e) => e.textContent ?? "");
     expect(labels.some((l) => l.includes("美元账号") && l.includes("USD"))).toBe(true);
     expect(labels.some((l) => l.includes("人民币账号") && l.includes("CNY"))).toBe(true);
@@ -211,22 +289,11 @@ describe("InsightsPanel：磁贴与风险色", () => {
         snap("a2", S2, 600, "CNY"),
       ],
     });
+    expandPanel();
     fireEvent.click(screen.getByText("CNY"));
     const labels = [...document.querySelectorAll(".stat-tile-label")].map((e) => e.textContent ?? "");
     expect(labels.some((l) => l.includes("人民币账号"))).toBe(true);
     expect(labels.some((l) => l.includes("美元账号"))).toBe(false);
-  });
-
-  it("折叠后内容整体收起，aria-expanded 同步", () => {
-    renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
-    const head = screen.getByRole("button", { name: /洞察/ });
-    expect(head.getAttribute("aria-expanded")).toBe("true");
-    expect(document.querySelector(".insights-grid")).toBeTruthy();
-    fireEvent.click(head);
-    expect(head.getAttribute("aria-expanded")).toBe("false");
-    expect(document.querySelector(".insights-grid")).toBeNull();
-    // 折叠时导出入口一并收起（面板头部由调用方保证可见）
-    expect(screen.queryByRole("button", { name: "导出 CSV" })).toBeNull();
   });
 
   it("窗口天数取设置值并显示在副标题", () => {
@@ -235,6 +302,7 @@ describe("InsightsPanel：磁贴与风险色", () => {
       snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)],
       settings: { ...SETTINGS, insightWindowDays: 30 },
     });
+    expandPanel();
     expect(screen.getByText(/近 30 天窗口/)).toBeTruthy();
   });
 });
@@ -245,6 +313,7 @@ describe("InsightsPanel：导出入口", () => {
     mockSave.mockResolvedValue("C:/tmp/llm-usage.csv");
 
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    expandPanel();
     fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
 
     await waitFor(() => {
@@ -252,7 +321,7 @@ describe("InsightsPanel：导出入口", () => {
     });
     const call = mockInvoke.mock.calls.find((c) => c[0] === "export_csv");
     const content = (call?.[1] as { content: string }).content;
-    expect(content.startsWith("\uFEFF")).toBe(true);
+    expect(content.startsWith(String.fromCharCode(0xfeff))).toBe(true);
     expect(content).toContain("账号名称,账号类型,币种,日期,当日花费,当日请求数,当日Token,当日余额快照");
     expect(content).toContain("甲账号");
     await waitFor(() => {
@@ -268,6 +337,7 @@ describe("InsightsPanel：导出入口", () => {
     mockSave.mockResolvedValue("C:/tmp/x.csv");
 
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    expandPanel();
     fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
     await waitFor(() => {
       expect(screen.getByText(/导出失败：磁盘已满/)).toBeTruthy();
@@ -277,6 +347,7 @@ describe("InsightsPanel：导出入口", () => {
   it("用户取消：不调 export_csv，也不显示错误", async () => {
     mockSave.mockResolvedValue(null);
     renderPanel({ accounts: [account("a1", "甲账号")], snapshots: [snap("a1", S1, 100), snap("a1", S2, 70)] });
+    expandPanel();
     fireEvent.click(screen.getByRole("button", { name: "导出 CSV" }));
     await waitFor(() => {
       expect(mockSave).toHaveBeenCalled();
@@ -293,6 +364,7 @@ describe("InsightsPanel：与其他数据组合", () => {
       accounts: [account("a1", "启用账号"), disabled],
       snapshots: [snap("a1", S1, 100), snap("a1", S2, 70), snap("a2", S1, 100), snap("a2", S2, 10)],
     });
+    expandPanel();
     const labels = [...document.querySelectorAll(".stat-tile-label")].map((e) => e.textContent ?? "");
     expect(labels.some((l) => l.includes("启用账号"))).toBe(true);
     expect(labels.some((l) => l.includes("禁用账号"))).toBe(false);
@@ -304,6 +376,7 @@ describe("InsightsPanel：与其他数据组合", () => {
       snapshots: [snap("a1", "2026-04-01T12:00:00.000Z", 100), snap("a1", "2026-04-02T12:00:00.000Z", 50)],
       settings: { ...SETTINGS, insightWindowDays: 14 },
     });
+    expandPanel();
     const tile = document.querySelector(".stat-tile") as HTMLElement;
     expect(tile.textContent).toContain("历史快照不足 2 条");
   });
@@ -314,6 +387,7 @@ describe("InsightsPanel：与其他数据组合", () => {
       snapshots: [],
       statuses: { a1: okOutcome("a1") },
     });
+    expandPanel();
     expect(screen.getByText(/暂无历史数据/)).toBeTruthy();
   });
 });

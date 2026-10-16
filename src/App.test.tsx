@@ -804,11 +804,17 @@ describe("R15 用量历史接线", () => {
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("get_usage_history");
     });
-    // 分析区存在且渲染了周期对比小节
-    await waitFor(() => {
-      expect(screen.getByText("深度分析")).toBeTruthy();
-    });
+    // 分析区存在（R17：默认收起，先展开再断言小节）
+    const analysisHead = await screen.findByRole("button", { name: /用量花费分析/ });
+    if (analysisHead.getAttribute("aria-expanded") !== "true") fireEvent.click(analysisHead);
     expect(screen.getByText(/周期对比/)).toBeTruthy();
+    // R17 AC-1 行序：洞察 / 分析都在账号卡片网格之后，且洞察在分析之前
+    const grid = document.querySelector(".card-grid");
+    const insights = document.querySelector(".insights-panel");
+    const analysis = document.querySelector(".analysis-panel");
+    expect(grid && insights && analysis).toBeTruthy();
+    expect(grid!.compareDocumentPosition(insights!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(insights!.compareDocumentPosition(analysis!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // 不应显示「暂无本地用量历史」占位
     expect(screen.queryByText(/暂无本地用量历史/)).toBeNull();
   });
@@ -821,6 +827,9 @@ describe("R15 用量历史接线", () => {
     });
 
     render(<App />);
+    // R17：分析区默认收起，先展开再断言占位
+    const analysisHead = await screen.findByRole("button", { name: /用量花费分析/ });
+    if (analysisHead.getAttribute("aria-expanded") !== "true") fireEvent.click(analysisHead);
     await waitFor(() => {
       expect(screen.getByText(/暂无本地用量历史/)).toBeTruthy();
     });
