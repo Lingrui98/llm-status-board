@@ -232,6 +232,39 @@ pub async fn set_auto_refresh_paused(app: AppHandle, paused: bool) -> Result<(),
     Ok(())
 }
 
+/// R18：立即显示用量总结浮层（兜底入口，不依赖悬停；按最近一次悬停几何定位）
+#[tauri::command]
+pub async fn show_summary_popup(app: AppHandle) -> Result<(), String> {
+    crate::summary::show_now(&app);
+    Ok(())
+}
+
+/// R18：立即隐藏浮层（Escape / 失焦 / 左键 / 点击账号行都走它）
+#[tauri::command]
+pub async fn hide_summary_popup(app: AppHandle) -> Result<(), String> {
+    crate::summary::hide_now(&app);
+    Ok(())
+}
+
+/// R18：浮层内指针进入/离开 —— `true` 取消待隐藏，`false` 重新起 250ms 隐藏
+#[tauri::command]
+pub async fn set_summary_pointer_inside(app: AppHandle, inside: bool) -> Result<(), String> {
+    crate::summary::set_pointer_inside(&app, inside);
+    Ok(())
+}
+
+/// R18：点击浮层里的账号行 → 显示并聚焦主窗口 + 切到该账号详情，随后隐藏浮层。
+/// 复用既有 `tray-open-account` 事件（主界面 App.tsx 已在监听，无需改动）。
+#[tauri::command]
+pub async fn summary_open_account(app: AppHandle, account_id: String) -> Result<(), String> {
+    if account_id.trim().is_empty() {
+        return Err("账号 id 为空".into());
+    }
+    crate::tray::open_account_detail(&app, &account_id);
+    crate::summary::on_row_click(&app);
+    Ok(())
+}
+
 /// 报表导出（R14）：CSV 内容由前端纯函数 `buildUsageCsv` 组好（含 UTF-8 BOM、
 /// RFC 4180 转义、CRLF），Rust 只做**原子字节写入**，不加工、不裁剪 content。
 #[tauri::command]

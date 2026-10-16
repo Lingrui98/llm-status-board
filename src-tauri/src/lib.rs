@@ -3,11 +3,14 @@ mod config;
 mod http;
 mod jsonpath;
 mod providers;
+mod summary;
 mod tray;
 mod types;
 
 #[cfg(test)]
 mod net_tests;
+
+use tauri::Manager;
 
 /// 默认窗口尺寸（R16 §3 越界降级时复位用；与 `tauri.conf.json` 保持一致）
 const DEFAULT_WINDOW_WIDTH: f64 = 1180.0;
@@ -24,8 +27,12 @@ pub fn should_reset_window_geometry(
 }
 
 /// 拔掉外接屏后重启：保存的位置已不在任何显示器上 → 居中并把尺寸复位为默认 1180×780。
+/// 只作用于主窗口（R18 的 `summary` 浮层位置由悬停实时计算，不该被这里改写）。
 /// 失败静默降级（窗口几何调整不该影响启动）。
 fn guard_window_on_screen<R: tauri::Runtime>(window: &tauri::Window<R>) {
+    if window.label() != "main" {
+        return;
+    }
     let has_monitor = window.current_monitor().ok().flatten().is_some();
     let monitor_count = window
         .available_monitors()
@@ -60,7 +67,13 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // R18：summary 浮层位置每次悬停实时计算，**不参与** window-state 的保存/恢复
+            // （否则插件会把它当成普通窗口记忆位置，与定位逻辑打架）
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[summary::POPUP_LABEL])
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         // 必须排在 window-state 之后（见函数注释）
         .plugin(window_geometry_guard_plugin())
@@ -69,10 +82,21 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // 点 ✕ 默认隐藏到托盘（托盘菜单「退出」才是真退出）；
-            // 设置页「关闭窗口时」改为直接退出后，此处放行即可
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                tray::on_close_requested(window, api);
+            match event {
+                // 点 ✕ 默认隐藏到托盘（托盘菜单「退出」才是真退出）；
+                // 设置页「关闭窗口时」改为直接退出后，此处放行即可
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    tray::on_close_requested(window, api);
+                }
+                // R18 §1：主窗口获得焦点 → 立即隐藏用量总结浮层（浮层自身获焦不处理）
+                tauri::WindowEvent::Focused(true) if window.label() == "main" => {
+                    summary::on_main_focus(window.app_handle());
+                }
+                // R18 §1：浮层自身失焦 → 立即隐藏（Rust 侧比 JS blur 更可靠）
+                tauri::WindowEvent::Focused(false) if window.label() == summary::POPUP_LABEL => {
+                    summary::on_popup_blur(window.app_handle());
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -86,6 +110,10 @@ pub fn run() {
             commands::get_usage_history,
             commands::upsert_usage_history,
             commands::set_auto_refresh_paused,
+            commands::show_summary_popup,
+            commands::hide_summary_popup,
+            commands::set_summary_pointer_inside,
+            commands::summary_open_account,
             commands::export_csv,
             commands::export_config,
             commands::import_config,

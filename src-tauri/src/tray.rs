@@ -109,7 +109,8 @@ fn toggle_main_window(app: &AppHandle) {
 
 /// 点击账号状态项：显示主窗口并通知前端打开该账号详情抽屉
 /// （前端 App.tsx 监听 tray-open-account，切看板视图并复用 focusRequest 机制）
-fn open_account_detail(app: &AppHandle, account_id: &str) {
+/// R18：`pub(crate)` —— 浮层里的账号行点击（`summary_open_account`）复用同一条路径
+pub(crate) fn open_account_detail(app: &AppHandle, account_id: &str) {
     show_main_window(app);
     let _ = app.emit("tray-open-account", account_id.to_string());
 }
@@ -388,15 +389,41 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             }
         })
         .on_tray_icon_event(|tray, event| {
-            // 左键单击（抬起时触发一次，避免按下/抬起重复弹窗）
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                // R17：左键单击 = 切换显示/隐藏（Windows 与 macOS 同逻辑）
-                toggle_main_window(tray.app_handle());
+            // R18：悬停（Enter/Leave/Move）驱动用量总结浮层；`rect`/`position` 都是物理像素。
+            // 只在托盘区域记录几何，不做任何窗口操作（显示/隐藏由 summary 状态机定时决定）。
+            match event {
+                TrayIconEvent::Enter { position, rect, .. } => {
+                    crate::summary::on_tray_enter(
+                        tray.app_handle(),
+                        crate::summary::phys_rect_from_tauri(rect.position, rect.size),
+                        (position.x, position.y),
+                    );
+                }
+                TrayIconEvent::Leave { position, rect, .. } => {
+                    crate::summary::on_tray_leave(
+                        tray.app_handle(),
+                        crate::summary::phys_rect_from_tauri(rect.position, rect.size),
+                        (position.x, position.y),
+                    );
+                }
+                TrayIconEvent::Move { position, rect, .. } => {
+                    crate::summary::on_tray_move(
+                        tray.app_handle(),
+                        crate::summary::phys_rect_from_tauri(rect.position, rect.size),
+                        (position.x, position.y),
+                    );
+                }
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    // R17：左键单击 = 切换主窗口显示/隐藏（Windows 与 macOS 同逻辑）
+                    // R18：同时立即隐藏浮层，避免主窗口弹出后浮层残留
+                    crate::summary::on_tray_left_click(tray.app_handle());
+                    toggle_main_window(tray.app_handle());
+                }
+                _ => {}
             }
         });
     if let Some(icon) = app.default_window_icon() {

@@ -12,7 +12,8 @@ import {
 import { ChartSection } from "./charts/shared";
 import InsightsPanel from "./InsightsPanel";
 import AnalysisView from "./AnalysisView";
-import type { AppConfig, BalanceSnapshot, Money, ProviderKind, RefreshOutcome, UsageRecord } from "../types";
+import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome, UsageRecord } from "../types";
+import { aggregateBalances } from "../balances";
 import { formatDurationMs, formatTimeAgo } from "../format";
 import { toLocalDateKey } from "../usageHistory";
 
@@ -47,23 +48,12 @@ interface Props {
   onRefresh?: () => void;
 }
 
-function aggregate(statuses: Record<string, RefreshOutcome>): { usd: number; cny: number } {
-  let usd = 0;
-  let cny = 0;
-  for (const o of Object.values(statuses)) {
-    const b: Money | null | undefined = o.info?.balance;
-    if (!b) continue;
-    if (b.currency === "USD") usd += b.amount;
-    else if (b.currency === "CNY") cny += b.amount;
-  }
-  return { usd, cny };
-}
-
 export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, usageRecords, usageError, todayKey, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
   const okCount = Object.values(statuses).filter((s) => s.ok).length;
   const failCount = Object.values(statuses).filter((s) => !s.ok).length;
-  const totals = aggregate(statuses);
+  // 余额合计口径与悬停浮层共用（src/balances.ts），按币种分开、绝不跨币种相加
+  const totals = useMemo(() => aggregateBalances(Object.values(statuses)), [statuses]);
 
   // 跳转请求投递：匹配卡片的抽屉在子组件副作用中打开（子 effect 先于父 effect 执行），
   // 随后这里通知 App 清除请求，避免视图切换导致卡片重挂载时抽屉意外复开

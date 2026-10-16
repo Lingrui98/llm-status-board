@@ -19,6 +19,14 @@ export default defineConfig({
     // 压缩用 terser：在 rollup 进程内运行，不经过 esbuild 服务
     minify: "terser",
     sourcemap: false,
+    // R18 多页：main = 主窗口，summary = 托盘悬停「用量总结」浮层（summary.html）。
+    // 两页各有独立入口；浮层入口不引 recharts（首屏秒开）。
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        summary: "summary.html",
+      },
+    },
   },
   test: {
     environment: "jsdom",

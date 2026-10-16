@@ -1,0 +1,228 @@
+/* ============================================================
+   R18 托盘悬停「用量总结」浮层（summary.html 专属布局）
+   - 颜色全部来自 styles.css 的变量（明暗两套随 prefers-color-scheme 自动切换），零硬编码色值；
+   - 浮层本身：唯一一层边框 + 唯一一个阴影 + 10px 圆角（规格 §5.1）；
+   - 数字 tabular-nums；字号层级 12 / 13 / 15 / 20；
+   - 入场动画 120ms（透明度 + 2px 位移），prefers-reduced-motion 下无动画；
+   - 焦点环沿用全局 :focus-visible（styles.css 已提供）。
+   ============================================================ */
+
+/* 无边框透明窗口：底色交给卡片，自带光晕/页面底不再出现 */
+html {
+  background: transparent;
+}
+
+body {
+  background: transparent;
+  font-size: 13px;
+}
+
+body::before {
+  display: none; /* 主界面的顶部光晕不适用于透明浮层 */
+}
+
+.summary-shell {
+  height: 100%;
+  padding: 6px; /* 给圆角阴影留出绘制空间（窗口 transparent） */
+  user-select: none;
+}
+
+.summary-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border); /* 唯一一层边框 */
+  border-radius: 10px;
+  box-shadow: var(--shadow-pop); /* 唯一一个阴影 */
+  overflow: hidden;
+  animation: summary-in 0.12s var(--ease-out);
+}
+
+@keyframes summary-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-card {
+    animation: none;
+  }
+}
+
+/* ---------- 头部：标题 + 最后刷新 ---------- */
+.summary-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 8px;
+}
+
+.summary-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.summary-refresh {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 总览 2×2：复用 StatTile，去掉第二层边框/阴影 ---------- */
+.summary-overview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 0 8px 8px;
+}
+
+.summary-card .stat-tile {
+  border: none;
+  box-shadow: none;
+  background: var(--bg-1);
+  border-radius: var(--radius-s);
+  padding: 7px 9px;
+  gap: 2px;
+}
+
+.summary-card .stat-tile:hover {
+  border: none;
+  box-shadow: none;
+  transform: none;
+}
+
+.summary-card .stat-tile-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.summary-card .stat-tile-value {
+  font-size: 20px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-card .stat-tile-unit,
+.summary-card .stat-tile-hint {
+  font-size: 12px;
+}
+
+/* ---------- 账号行（数量多时本区段内滚动） ---------- */
+.summary-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.summary-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border); /* 分隔线（非嵌套边框） */
+  border-radius: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.summary-rows li:first-child .summary-row {
+  border-top: none;
+}
+
+.summary-row:hover {
+  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+}
+
+.summary-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.summary-dot.ok {
+  background: var(--ok);
+}
+
+.summary-dot.err {
+  background: var(--err);
+}
+
+.summary-row-main {
+  min-width: 0;
+}
+
+.summary-row-name {
+  display: block;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summary-row-detail {
+  display: block;
+  font-size: 12px;
+  color: var(--err);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summary-row-value {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 底部：本地历史天数 ---------- */
+.summary-foot {
+  padding: 7px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 加载 / 空 / 失败三态 ---------- */
+.summary-loading {
+  padding: 4px 12px 10px;
+}
+
+.summary-skeleton-row {
+  height: 30px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-s);
+  background: var(--bg-3);
+}
+
+.summary-state {
+  margin: 0;
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
