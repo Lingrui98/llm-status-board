@@ -115,18 +115,6 @@ pub(crate) fn open_account_detail(app: &AppHandle, account_id: &str) {
     let _ = app.emit("tray-open-account", account_id.to_string());
 }
 
-/// 与前端 formatDecimal 同款的小数位规则：|v|≥1 保留 2 位，0.01≤|v|<1 保留 4 位，0<|v|<0.01 保留 6 位
-fn format_decimal(v: f64) -> String {
-    let abs = v.abs();
-    if abs > 0.0 && abs < 0.01 {
-        format!("{v:.6}")
-    } else if abs < 1.0 {
-        format!("{v:.4}")
-    } else {
-        format!("{v:.2}")
-    }
-}
-
 /// 按字符数截断（托盘菜单宽度有限）：超长时截到 max-1 个字符并补「…」，总长不超过 max
 fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -138,7 +126,10 @@ fn truncate_chars(s: &str, max: usize) -> String {
 }
 
 /// 单个账号在托盘菜单里的状态文本（纯函数，可单测）。
-/// 优先级：刷新失败（✗ + 截断原因）> 余额（金额+币种）> 已用百分比最高的配额窗口（如「5h 36%」）> 「—」
+///
+/// R20：判定口径统一到 [`crate::primary_metric`]（与主卡片 R19、悬停浮层同一套）：
+/// 失败（`✗ 原因`，12 字符截断）→ 订阅优先（`剩余 X%（窗口名）`）→ 余额（`金额 币种`）→ `—`。
+/// 本函数只保留**失败分支**，其余交给单一事实来源，避免在托盘里再抄一份判定。
 pub fn tray_status_text(outcome: Option<&RefreshOutcome>) -> String {
     let Some(o) = outcome else {
         return "—".into();
@@ -152,27 +143,13 @@ pub fn tray_status_text(outcome: Option<&RefreshOutcome>) -> String {
         };
         return format!("✗ {}", truncate_chars(reason, MAX_ERROR_CHARS));
     }
-    if let Some(info) = &o.info {
-        if let Some(b) = &info.balance {
-            return format!("{} {}", format_decimal(b.amount), b.currency);
-        }
-        // 无余额（订阅/窗口类账号）：取已用百分比最高的窗口作为代表，忽略无数据/NaN 窗口
-        let worst = info
-            .quota_windows
-            .iter()
-            .filter(|w| w.used_percent.is_some_and(|p| !p.is_nan()))
-            .max_by(|a, b| {
-                a.used_percent
-                    .partial_cmp(&b.used_percent)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        if let Some(w) = worst {
-            let label = w.window.as_deref().unwrap_or("窗口");
-            let pct = w.used_percent.unwrap_or(0.0).round();
-            return format!("{label} {pct}%");
-        }
+    match &o.info {
+        Some(info) => crate::primary_metric::format_primary_metric_line(
+            &crate::primary_metric::pick_primary_metric(info),
+        ),
+        // 刷新成功但没有 info：与「无数据」同口径
+        None => "—".into(),
     }
-    "—".into()
 }
 
 /// 账号菜单项 id：account:{账号id}。每次重建保持稳定，on_menu_event 按前缀反解
@@ -500,9 +477,12 @@ mod tests {
         assert_eq!(tray_status_text(Some(&ok_outcome(small))), "0.5000 USD");
     }
 
-    /// 无余额的订阅/窗口类账号：取已用百分比最高的窗口（四舍五入），无数据窗口忽略
+    /// R20 口径修正（AC-9，**有意变更**）：原来的「已用百分比最高的窗口」改为
+    /// 「**剩余**百分比 + 窗口名」（与主卡片 R19 一致）。
+    /// 旧断言 `7d 36%`（已用）→ 新断言 `剩余 64.4%（7d）`。
+    /// 取最紧窗口 = 已用最大者（7d 35.6）→ 剩余 = 100 − 35.6 = 64.4；无数据窗口忽略。
     #[test]
-    fn quota_window_picks_highest_used_percent() {
+    fn quota_window_uses_tightest_remaining_percent() {
         let info = AccountInfo {
             quota_windows: vec![
                 QuotaWindow {
@@ -523,7 +503,10 @@ mod tests {
             ],
             ..Default::default()
         };
-        assert_eq!(tray_status_text(Some(&ok_outcome(info))), "7d 36%");
+        assert_eq!(
+            tray_status_text(Some(&ok_outcome(info))),
+            "剩余 64.4%（7d）"
+        );
     }
 
     /// 空情形：成功但无余额也无窗口 → 「—」；该账号尚无刷新结果（None）→ 「—」
@@ -630,5 +613,160 @@ mod tests {
         assert!(!resolve_tray_click_hide(Some((true, true))));
         assert!(!resolve_tray_click_hide(Some((false, false))));
         assert!(!resolve_tray_click_hide(Some((false, true))));
+    }
+
+    // ---------- R20：规格 §3 黄金表（跨语言一致性证据） ----------
+
+    /// 黄金表输入（覆盖「结果态 / 未刷新 / 有 info」三类）
+    enum GoldenInput {
+        /// `ok=false` + 原因
+        Failure(&'static str),
+        /// 尚未刷新（`outcome = None`）
+        NotRefreshed,
+        /// 有 info：`(余额, 窗口列表)`；窗口 = `(窗口名, 已用百分比)`
+        Info {
+            balance: Option<(f64, &'static str)>,
+            windows: Vec<(Option<&'static str>, Option<f64>)>,
+        },
+    }
+
+    /// **规格 `docs/round-20-plan.md` §3 黄金表（逐字嵌入，勿改措辞/顺序）**。
+    /// 前端 `primaryMetric`/`formatPrimaryMetricLine` 会嵌入同一张表；
+    /// 终审会机械 diff「本表 ↔ §3」，任一侧漂移即红灯。
+    ///
+    /// `#[rustfmt::skip]`：每行期望串必须独占一行，机械 diff 才能稳定抽取
+    /// （rustfmt 会把短行折叠回单行，破坏可机械比对性）。
+    #[rustfmt::skip]
+    fn golden_table() -> Vec<(&'static str, GoldenInput, &'static str)> {
+        use GoldenInput::{Failure, Info, NotRefreshed};
+        vec![
+            (
+                "G1",
+                Info {
+                    balance: Some((0.0, "USD")),
+                    windows: vec![(Some("7d"), Some(0.0))],
+                },
+                "剩余 100%（7d）",
+            ),
+            (
+                "G2",
+                Info {
+                    balance: None,
+                    windows: vec![(Some("5h"), Some(26.86)), (Some("7d"), Some(12.36))],
+                },
+                "剩余 73.14%（5h）",
+            ),
+            (
+                "G3",
+                Info {
+                    balance: Some((12.5, "USD")),
+                    windows: vec![(Some("7d"), Some(90.0))],
+                },
+                "12.50 USD",
+            ),
+            (
+                "G4",
+                Info {
+                    balance: Some((0.0, "USD")),
+                    windows: vec![],
+                },
+                "0.00 USD",
+            ),
+            (
+                "G5",
+                Info {
+                    balance: None,
+                    windows: vec![],
+                },
+                "—",
+            ),
+            (
+                "G6",
+                Info {
+                    balance: Some((0.0, "USD")),
+                    windows: vec![(Some("7d"), None), (Some("5h"), Some(f64::NAN))],
+                },
+                "0.00 USD",
+            ),
+            (
+                "G7",
+                Info {
+                    balance: None,
+                    windows: vec![(Some(""), Some(20.0))],
+                },
+                "剩余 80%（当前窗口）",
+            ),
+            (
+                "G8",
+                Info {
+                    balance: None,
+                    windows: vec![(Some("7d"), Some(-5.0))],
+                },
+                "剩余 100%（7d）",
+            ),
+            (
+                "G9",
+                Info {
+                    balance: None,
+                    windows: vec![(Some("7d"), Some(150.0))],
+                },
+                "剩余 0%（7d）",
+            ),
+            (
+                "G10",
+                Failure("连接超时：无法访问上游中转站（TLS 握手失败）"),
+                "✗ 连接超时：无法访问上游…",
+            ),
+            (
+                "G11",
+                NotRefreshed,
+                "—",
+            ),
+            (
+                "G12",
+                Info {
+                    balance: Some((0.5, "USD")),
+                    windows: vec![],
+                },
+                "0.5000 USD",
+            ),
+        ]
+    }
+
+    /// AC-1..AC-7：黄金表 12 条**逐条**断言输出与规格 §3 逐字一致
+    #[test]
+    fn golden_table_matches_spec_verbatim() {
+        let table = golden_table();
+        assert!(table.len() >= 8, "黄金表至少 8 条：{}", table.len());
+        for (id, input, expect) in table {
+            let got = match input {
+                GoldenInput::Failure(err) => tray_status_text(Some(&RefreshOutcome {
+                    account_id: "a1".into(),
+                    ok: false,
+                    info: None,
+                    error: Some(err.to_string()),
+                })),
+                GoldenInput::NotRefreshed => tray_status_text(None),
+                GoldenInput::Info { balance, windows } => {
+                    let info = AccountInfo {
+                        balance: balance.map(|(amount, currency)| Money {
+                            amount,
+                            currency: currency.into(),
+                        }),
+                        quota_windows: windows
+                            .into_iter()
+                            .map(|(window, used_percent)| QuotaWindow {
+                                window: window.map(String::from),
+                                used_percent,
+                                resets_at: None,
+                            })
+                            .collect(),
+                        ..Default::default()
+                    };
+                    tray_status_text(Some(&ok_outcome(info)))
+                }
+            };
+            assert_eq!(got, expect, "黄金表 {id} 输出必须与规格 §3 逐字一致");
+        }
     }
 }

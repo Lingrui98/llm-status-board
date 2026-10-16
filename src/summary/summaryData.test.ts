@@ -10,6 +10,7 @@ import {
   tightestQuotaPercent,
   truncateText,
 } from "./summaryData";
+import { formatFailureLine } from "../primaryMetric";
 import type { AccountConfig, RefreshOutcome, UsageRecord } from "../types";
 
 function account(id: string, name: string, enabled = true): AccountConfig {
@@ -132,23 +133,23 @@ describe("summaryData：视图模型", () => {
     const view = buildSummary({ accounts: [account("a1", "甲账号")], outcomes: [], historyRecords: [], now: NOW });
     expect(view.rows[0].status).toBe("idle");
     expect(view.rows[0].valueText).toBe("—");
-    expect(view.rows[0].detailText).toBeNull();
     expect(view.idleCount).toBe(1);
     expect(view.lastRefreshText).toBe("—");
   });
 
-  it("异常行带截断原因；成功行无原因", () => {
+  it("异常行 → 规范串 `✗ 原因`（12 字符截断）；成功行不带前缀", () => {
     const view = buildSummary({ accounts, outcomes, historyRecords: [], now: NOW });
     const longErr = "HTTP 500: 服务端返回了非常长的错误说明文字用于验证截断";
     const errRow = view.rows.find((r) => r.accountId === "a2");
     expect(errRow?.status).toBe("err");
-    expect(errRow?.detailText).toBe(truncateText(longErr));
-    expect(errRow?.detailText).toBe(`${longErr.slice(0, REASON_MAX_CHARS)}…`);
-    expect((errRow?.detailText ?? "").length).toBe(REASON_MAX_CHARS + 1);
-    expect(view.rows.find((r) => r.accountId === "a1")?.detailText).toBeNull();
+    // R20 §1：失败态 = `✗ ` + 11 字符 + `…`（码点计数）
+    expect(errRow?.valueText).toBe(formatFailureLine(longErr));
+    expect(errRow?.valueText.startsWith("✗ ")).toBe(true);
+    expect(Array.from(errRow?.valueText ?? "").length).toBe(14); // ✗ + 空格 + 11 字符 + …
+    expect(view.rows.find((r) => r.accountId === "a1")?.valueText).toBe("12.50 USD");
   });
 
-  it("无余额时退化为最紧配额窗口百分比", () => {
+  it("无余额 + 最紧窗口 → 订阅剩余百分比规范串（R20 口径，非已用百分比）", () => {
     const view = buildSummary({
       accounts: [account("a1", "配额账号")],
       outcomes: [
@@ -161,7 +162,7 @@ describe("summaryData：视图模型", () => {
       historyRecords: [],
       now: NOW,
     });
-    expect(view.rows[0].valueText).toBe("88%");
+    expect(view.rows[0].valueText).toBe("剩余 11.6%（5h）");
   });
 
   it("最后刷新取启用账号里最新的 fetchedAt；历史天数来自记录去重", () => {

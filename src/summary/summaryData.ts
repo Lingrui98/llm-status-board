@@ -4,6 +4,12 @@
 
 import { aggregateBalances } from "../balances";
 import { formatMoneyParts } from "../format";
+import {
+  NO_DATA_TEXT,
+  formatFailureLine,
+  formatPrimaryMetricLine,
+  pickPrimaryMetric,
+} from "../primaryMetric";
 import type { AccountConfig, Money, QuotaWindow, RefreshOutcome, UsageRecord } from "../types";
 
 /** 行状态：正常 / 异常 / 未刷新（后端确认本轮只渲染启用账号，含「停用」状态） */
@@ -12,11 +18,9 @@ export type SummaryRowStatus = "ok" | "err" | "idle";
 export interface SummaryRow {
   accountId: string;
   name: string;
-  /** 余额文本（带币种前缀）或最紧配额窗口百分比；两者皆无 → "—" */
+  /** 单行规范串（R20 §1，与托盘逐字一致）：失败 `✗ 原因` / 订阅 `剩余 X%（窗口）` / 余额 `金额 币种` / 无数据 `—` */
   valueText: string;
   status: SummaryRowStatus;
-  /** 异常原因（按 §4 截断 24 字符）；非异常 → null */
-  detailText: string | null;
 }
 
 export interface SummaryData {
@@ -96,6 +100,19 @@ export function countHistoryDays(records: readonly UsageRecord[]): number {
 }
 
 /**
+ * 浮层账号行的单行规范串（R20 §2 唯一出口，与托盘共用同一套语义）：
+ * 1. 失败（结果层，优先级最高）→ `✗ {原因}`（12 字符截断）；
+ * 2. 否则复用 `pickPrimaryMetric` → 订阅 `剩余 X%（窗口）` / 余额 `金额 币种`；
+ * 3. 无结果（未刷新）或 info 为 null → `—`。
+ * **禁止**在本文件另写一份判定逻辑（判定顺序唯一在 src/primaryMetric.ts）。
+ */
+export function summaryRowText(outcome?: RefreshOutcome | null): string {
+  if (!outcome) return NO_DATA_TEXT;
+  if (!outcome.ok) return formatFailureLine(outcome.error);
+  return formatPrimaryMetricLine(pickPrimaryMetric(outcome.info));
+}
+
+/**
  * 组装浮层视图模型。
  * - 行 = 启用账号（AC-11）；禁用账号不出行；
  * - 合计只统计这些启用账号的刷新结果（与「监控账号数」同口径）；
@@ -137,13 +154,10 @@ export function buildSummary(input: {
       failCount += 1;
     }
 
-    const info = o?.info ?? null;
-    const pct = tightestQuotaPercent(info?.quotaWindows);
-    const valueText = balanceText(info?.balance) ?? (pct === null ? "—" : `${Math.round(pct)}%`);
+    // R20：行文本统一走规范串出口（失败 → 订阅/余额 → 无数据），不再用「余额优先 + 已用百分比」
+    const valueText = summaryRowText(o);
 
-    const detailText = status === "err" ? truncateText(o?.error ?? "刷新失败") : null;
-
-    const fetched = info?.fetchedAt;
+    const fetched = o?.info?.fetchedAt;
     if (fetched) {
       const t = new Date(fetched).getTime();
       if (!Number.isNaN(t) && t > latest) {
@@ -152,7 +166,7 @@ export function buildSummary(input: {
       }
     }
 
-    return { accountId: acc.id, name: acc.name, valueText, status, detailText };
+    return { accountId: acc.id, name: acc.name, valueText, status };
   });
 
   const totals = aggregateBalances(byId.values());

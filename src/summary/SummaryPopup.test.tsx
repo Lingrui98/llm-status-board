@@ -123,8 +123,38 @@ describe("SummaryPopup：数据与总览", () => {
     const rows = document.querySelectorAll(".summary-row");
     expect(rows.length).toBe(2);
     expect(document.body.textContent).not.toContain("停用账号");
-    expect(screen.getByText("HTTP 500：上游错误")).toBeTruthy();
+    // R20：成功行 = 余额规范串 `金额 币种`；失败行 = `✗ 原因`（12 字符截断）
+    expect(screen.getByText("12.50 USD")).toBeTruthy();
+    expect(screen.getByText("✗ HTTP 500：上游…")).toBeTruthy();
     expect(screen.getByText("本地历史 2 天")).toBeTruthy();
+  });
+
+  it("订阅账号（余额 0 USD + 7d 0%）行显示「剩余 100%（7d）」，不再显示 $0.00（R20）", async () => {
+    mockData(
+      { ...CONFIG, accounts: [account("ms", "etochat")] },
+      [
+        {
+          accountId: "ms",
+          ok: true,
+          info: {
+            balance: { amount: 0, currency: "USD" },
+            quotaWindows: [{ window: "7d", usedPercent: 0 }],
+            extras: [],
+            fetchedAt: new Date().toISOString(),
+          },
+        },
+      ],
+      HISTORY,
+    );
+    render(<SummaryPopup />);
+    await waitFor(() => {
+      expect(screen.getByText("剩余 100%（7d）")).toBeTruthy();
+    });
+    const row = document.querySelector(".summary-row") as HTMLElement;
+    expect(row.textContent).toContain("剩余 100%（7d）");
+    expect(row.textContent).not.toContain("$0.00");
+    // 总览合计仍是人民币/美元分栏口径（不受行文本影响）
+    expect(tileValue("余额合计 · USD")).toBe("$0.00");
   });
 
   it("空配置：渲染「尚未添加账号」，不发其它命令、不崩", async () => {
@@ -268,9 +298,9 @@ describe("summaryData 与展示卡接线", () => {
       now: Date.now(),
     });
     render(<SummaryCard status="ready" data={view} />);
-    // 同一数字出现在总览合计与账号行两处（口径一致）
+    // R20：总览合计仍用 $ 前缀；账号行改为统一规范串 `金额 币种`
     expect(tileValue("余额合计 · USD")).toBe("$5.00");
-    expect(screen.getAllByText("$5.00").length).toBe(2);
+    expect(screen.getByText("5.00 USD")).toBeTruthy();
     expect(screen.getByText("刚刚")).toBeTruthy();
     expect(screen.getByText("本地历史随刷新自动积累")).toBeTruthy();
   });

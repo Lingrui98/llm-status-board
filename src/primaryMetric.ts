@@ -32,6 +32,18 @@ export type PrimaryMetric =
 /** 窗口名缺失/空白时的兜底文案（规格 §1.5） */
 export const DEFAULT_WINDOW_LABEL = "当前窗口";
 
+/** 无数据（info 为 null，或余额 null 且无有效窗口）的规范串（R20 §1） */
+export const NO_DATA_TEXT = "—";
+
+/** 失败态前缀（R20 §1：优先级最高，独立于 info 层） */
+export const FAILURE_LINE_PREFIX = "✗";
+
+/** 失败原因截断：12 字符规则 = 取 11 字符 + 「…」（与托盘现状一致，R20 §1） */
+export const FAILURE_REASON_MAX_CHARS = 12;
+
+/** 失败原因缺失时的兜底文案（规格未定义；保持可读且短） */
+export const FAILURE_REASON_FALLBACK = "刷新失败";
+
 /** 钳制到 [0,100] */
 export function clampPercent(pct: number): number {
   if (!Number.isFinite(pct)) return 0;
@@ -121,4 +133,58 @@ export function pickPrimaryMetric(info?: AccountInfo | null): PrimaryMetric {
 
   if (balance !== null) return { kind: "balance", money: balance };
   return { kind: "none" };
+}
+
+/* ============================ R20：单行规范串（唯一出口） ============================ */
+
+/**
+ * 金额小数位（R20 §1，与 Rust format_decimal 规则逐字对齐）：
+ * |v| ≥ 1 → 2 位；0.01 ≤ |v| < 1 → 4 位；0 < |v| < 0.01 → 6 位；0 → 2 位（`0.00`）。
+ * 刻意**不用** toLocaleString：避免千分位分隔符破坏跨语言逐字一致。
+ */
+export function formatMoneyAmountPlain(value: number | null | undefined): string {
+  const v = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  const abs = Math.abs(v);
+  let digits = 2;
+  if (abs > 0 && abs < 0.01) digits = 6;
+  else if (abs > 0 && abs < 1) digits = 4;
+  return v.toFixed(digits);
+}
+
+/**
+ * 失败原因截断（12 字符规则，按 Unicode 码点计数以对齐 Rust `chars().take(11)`）。
+ * 对齐 Rust `tray.rs`：`error.unwrap_or("刷新失败").trim()` 后空判 —— 因此**先去首尾空白**，
+ * 空白串与缺失一律回落 `FAILURE_REASON_FALLBACK`（R20 §3 附注，已与 PM/Rust 双侧核对）。
+ */
+export function truncateFailureReason(reason?: string | null): string {
+  const raw = (typeof reason === "string" ? reason : "").trim();
+  const chars = Array.from(raw);
+  if (chars.length === 0) return FAILURE_REASON_FALLBACK;
+  if (chars.length <= FAILURE_REASON_MAX_CHARS) return raw;
+  return `${chars.slice(0, FAILURE_REASON_MAX_CHARS - 1).join("")}…`;
+}
+
+/** 失败态规范串：`✗ {原因}`（原因 12 字符截断；缺失 → `刷新失败`） */
+export function formatFailureLine(reason?: string | null): string {
+  return `${FAILURE_LINE_PREFIX} ${truncateFailureReason(reason)}`;
+}
+
+/**
+ * 主指标规范串（R20 §1/§2，浮层与托盘逐字一致）：
+ * - quota   → `剩余 {剩余}%（{窗口名}）`
+ * - balance → `{金额} {币种}`（金额小数位见 formatMoneyAmountPlain）
+ * - none    → `—`
+ * 失败态**不在**本函数（它属于结果层，见 formatFailureLine），调用方按
+ * 「失败 → 订阅/余额 → 无数据」的优先级组合。
+ */
+export function formatPrimaryMetricLine(metric: PrimaryMetric): string {
+  if (metric.kind === "quota") {
+    return `剩余 ${metric.remainingText}%（${metric.windowLabel}）`;
+  }
+  if (metric.kind === "balance") {
+    const money = metric.money;
+    if (!money || !Number.isFinite(money.amount)) return NO_DATA_TEXT;
+    return `${formatMoneyAmountPlain(money.amount)} ${money.currency}`;
+  }
+  return NO_DATA_TEXT;
 }

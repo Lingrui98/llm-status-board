@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod http;
 mod jsonpath;
+mod primary_metric;
 mod providers;
 mod summary;
 mod tray;

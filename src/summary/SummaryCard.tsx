@@ -79,11 +79,6 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
                       <span className="summary-row-name" title={row.name}>
                         {row.name}
                       </span>
-                      {row.detailText && (
-                        <span className="summary-row-detail" title={row.detailText}>
-                          {row.detailText}
-                        </span>
-                      )}
                     </span>
                     <span className="summary-row-value">{row.valueText}</span>
                   </button>
