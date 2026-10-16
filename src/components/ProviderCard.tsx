@@ -10,8 +10,10 @@ import {
   LazyTokenSplitChart as TokenSplitChart,
 } from "./charts/lazy";
 import QuotaWindowBars from "./charts/QuotaWindowBars";
-import { ChartSection } from "./charts/shared";
 import DetailDrawer from "./DetailDrawer";
+import DrawerSection from "./DrawerSection";
+import { pickPrimaryMetric, readBalanceCredits } from "../primaryMetric";
+import { balanceSnapshotCount, drawerDataFlags } from "../drawerSections";
 
 /** 外部「跳转到账号」请求（命令面板 / 数字键 1-9），由 App 经 Dashboard 透传 */
 export interface FocusRequest {
@@ -132,11 +134,22 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const balanceParts = formatMoneyParts(balance);
   const lowBalance = balance !== null && balance.amount >= 0 && balance.amount < 1 && (balance.currency === "USD" || balance.currency === "CNY");
 
+  // R19 主指标：订阅制（有窗口且余额为 0/null）以「订阅剩余百分比」为主；否则余额为主（§1）
+  const metric = useMemo(() => pickPrimaryMetric(info), [info]);
+  // R19 次级：钱包充值额度（raw.balance_credits，>0 才显示；口径裁定不用「加油包」）
+  const credits = useMemo(() => readBalanceCredits(info?.raw), [info?.raw]);
+
+  // R19 详情抽屉：各维度独立判定是否有数据（无数据区块默认折叠）
+  const flags = useMemo(() => drawerDataFlags(info, snapshots, account.id), [info, snapshots, account.id]);
+  const snapshotCount = useMemo(() => balanceSnapshotCount(snapshots, account.id), [snapshots, account.id]);
+
   // 附加信息：配额类靠前；行数多时默认折叠（与图表「详情」展开互不影响）
   const sortedExtras = useMemo(() => sortExtras(info?.extras ?? []), [info?.extras]);
   const extrasCollapsible = sortedExtras.length > EXTRAS_COLLAPSE_AT;
   const visibleExtras =
     extrasCollapsible && !showAllExtras ? sortedExtras.slice(0, EXTRAS_PREVIEW) : sortedExtras;
+  // R19：后端已把 ModelServer 的充值额度作为 extras「充值余额」下发时，避免与次级行重复展示同一口径
+  const extrasHasCreditsRow = /充值余额|钱包\s*credits/i.test(sortedExtras.map((kv) => kv.key).join("|"));
 
   const ago = info ? formatTimeAgo(info.fetchedAt, now ?? Date.now()) : null;
 
@@ -170,23 +183,45 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       </div>
 
       <div className="card-balance">
-        <span className="balance-label">余额</span>
-        <span className={`balance-value${lowBalance ? " low" : ""}`}>
-          {balanceParts ? (
-            <>
-              {/* 完整字符串给读屏与测试定位用；视觉层拆成「大数字 + 小号上标货币」 */}
-              <span className="sr-only">{formatMoney(balance)}</span>
+        {metric.kind === "quota" ? (
+          <>
+            <span className="balance-label">订阅剩余</span>
+            <span className={`balance-value ${usageLevel(metric.usedPercent)}`}>
+              {/* 读屏播报完整口径（窗口名 + 已用/剩余 + 重置倒计时） */}
+              <span className="sr-only">{metric.summary}</span>
               <span className="balance-num" aria-hidden="true">
-                {balanceParts.num}
+                {metric.remainingText}
               </span>
               <span className="balance-currency" aria-hidden="true">
-                {balanceParts.currency}
+                %
               </span>
-            </>
-          ) : (
-            "—"
-          )}
-        </span>
+            </span>
+            <span className="balance-sub">
+              {metric.windowLabel}
+              {metric.resetsText ? ` · ${metric.resetsText}` : ""}
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="balance-label">余额</span>
+            <span className={`balance-value${lowBalance ? " low" : ""}`}>
+              {balanceParts ? (
+                <>
+                  {/* 完整字符串给读屏与测试定位用；视觉层拆成「大数字 + 小号上标货币」 */}
+                  <span className="sr-only">{formatMoney(balance)}</span>
+                  <span className="balance-num" aria-hidden="true">
+                    {balanceParts.num}
+                  </span>
+                  <span className="balance-currency" aria-hidden="true">
+                    {balanceParts.currency}
+                  </span>
+                </>
+              ) : (
+                "—"
+              )}
+            </span>
+          </>
+        )}
       </div>
 
       {pct !== null && (
@@ -206,6 +241,20 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       )}
 
       <div className="card-rows">
+        {/* R19 次级口径：订阅主指标时，余额 >0 才显示钱包余额；raw.balance_credits >0 显示充值余额
+            （若 extras 里已有后端下发的「充值余额」，则不重复渲染同一口径） */}
+        {metric.kind === "quota" && balance !== null && balance.amount > 0 && (
+          <div className="card-row">
+            <span className="row-label">钱包余额</span>
+            <span className="row-value">{formatMoney(balance)}</span>
+          </div>
+        )}
+        {metric.kind === "quota" && credits !== null && !extrasHasCreditsRow && (
+          <div className="card-row" title={`充值余额 ${formatNumber(credits)}（credits，钱包充值口径）`}>
+            <span className="row-label">充值余额</span>
+            <span className="row-value">{formatNumber(credits)}</span>
+          </div>
+        )}
         <div className="card-row">
           <span className="row-label">已用</span>
           <span className="row-value">{formatMoney(info?.used)}</span>
@@ -309,25 +358,29 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           onClose={() => setDetailOpen(false)}
         >
           <div className="drawer-charts">
-            <ChartSection title="额度构成">
+            <DrawerSection title="额度构成" hasData={flags.breakdown} emptyNote={chartEmptyNote("breakdown")}>
               <BalanceBreakdownChart info={info} emptyNote={chartEmptyNote("breakdown")} />
-            </ChartSection>
-            <ChartSection title="近 14 天用量">
+            </DrawerSection>
+            <DrawerSection title="近 14 天用量" hasData={flags.daily} emptyNote={chartEmptyNote("daily")}>
               <DailyUsageChart data={info?.dailyUsage} emptyNote={chartEmptyNote("daily")} />
-            </ChartSection>
-            <ChartSection title="模型用量 TOP 8">
+            </DrawerSection>
+            <DrawerSection title="模型用量 TOP 8" hasData={flags.model} emptyNote={chartEmptyNote("model")}>
               <ModelUsageChart data={info?.modelUsage} emptyNote={chartEmptyNote("model")} />
-            </ChartSection>
-            <ChartSection title="Token 输入 / 输出构成">
+            </DrawerSection>
+            <DrawerSection title="Token 输入 / 输出构成" hasData={flags.token} emptyNote={chartEmptyNote("token")}>
               <TokenSplitChart data={info?.modelUsage} emptyNote={chartEmptyNote("token")} />
-            </ChartSection>
-            <ChartSection title="余额趋势">
+            </DrawerSection>
+            <DrawerSection
+              title="余额趋势"
+              hasData={flags.balance}
+              emptyNote={snapshotCount === 1 ? "已有 1 个快照，再刷新一次即可成趋势" : chartEmptyNote("balance")}
+            >
               <BalanceTrendChart
                 snapshots={snapshots}
                 accountId={account.id}
                 emptyNote={chartEmptyNote("balance")}
               />
-            </ChartSection>
+            </DrawerSection>
           </div>
           {info?.raw !== undefined && info?.raw !== null && (
             <div className="drawer-raw">

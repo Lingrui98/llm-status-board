@@ -4000,6 +4000,85 @@ button.notif-jump:focus-visible .notif-jump-hint {
 }
 
 /* ============================================================
+   R19 主指标「订阅优先」+ 详情抽屉空数据区块折叠
+   - 订阅剩余百分比复用 .balance-value 层级（27px/tabular-nums），语义色沿用 ok/warn/err 变量；
+   - 折叠头与既有 .global-stats-head 同族（整行可点 + chevron 旋转），焦点环沿用全局 :focus-visible；
+   - 颜色零硬编码，明暗两套随变量自动切换；动效只有过渡，reduced-motion 由全局规则降级。
+   ============================================================ */
+
+/* 订阅剩余百分比的语义色（用量越高越差：>80 err / ≥60 warn / 其余 ok） */
+.balance-value.ok {
+  color: var(--ok);
+}
+
+.balance-value.warn {
+  color: var(--warn);
+}
+
+.balance-value.err {
+  color: var(--err);
+}
+
+/* 主指标下方的窗口名 + 重置倒计时（订阅态） */
+.balance-sub {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 详情抽屉：可折叠区块头 ---------- */
+.chart-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chart-section-toggle:hover .chart-title {
+  color: var(--text-2);
+}
+
+.chart-section-toggle .chevron {
+  margin-left: auto;
+  color: var(--text-3);
+  transition: transform 0.18s var(--ease-out);
+}
+
+.chart-section-toggle[aria-expanded="false"] .chevron {
+  transform: rotate(-90deg);
+}
+
+/* 折叠态一行说明（复用图表现有 emptyNote 文案） */
+.chart-section-note {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 无数据区块：标题提亮一档，与有数据区块区分 */
+.chart-section-empty .chart-title {
+  color: var(--text-2);
+}
+
+/* 展开后的内容容器：与 ChartSection 内容同节奏 */
+.chart-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ============================================================
    R17 底部报告区块（余额消耗预测 / 用量花费分析）观感重做
    - 区块头与「全局统计」同族（.global-stats-head），收起态给一行摘要（单行截断）；
    - 数字优先：StatTile 磁贴在区块内「去卡片化」（区块本身已有一层边框+阴影，
