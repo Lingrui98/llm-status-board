@@ -12,7 +12,7 @@ import type { AccountConfig, AccountInfo, BalanceSnapshot, RefreshOutcome } from
 vi.mock("./charts/lazy", () => ({
   LazyDailyUsageChart: () => <div data-testid="daily-chart" />,
   LazyModelUsageChart: () => <div data-testid="model-chart" />,
-  LazyBalanceTrendChart: () => <div data-testid="balance-chart" />,
+  LazyBalanceTrendChart: ({ metric = "balance" }: { metric?: "balance" | "total" }) => <div data-testid={`${metric}-chart`} />,
   LazyBalanceBreakdownChart: () => <div data-testid="breakdown-chart" />,
   LazyTokenSplitChart: () => <div data-testid="token-chart" />,
 }));
@@ -208,11 +208,11 @@ describe("ProviderCard：详情抽屉空数据默认折叠（AC-7/8/9/10）", ()
     return head;
   }
 
-  it("无数据：五个区块默认折叠（aria-expanded=false），标题与一行说明可读，内容未挂载", () => {
+  it("无数据：六个区块默认折叠（aria-expanded=false），标题与一行说明可读，内容未挂载", () => {
     renderCard({ info: info({ balance: { amount: 0, currency: "USD" } }) });
     openDrawer();
 
-    expect(sectionHeads().length).toBe(5);
+    expect(sectionHeads().length).toBe(6);
     for (const head of sectionHeads()) {
       expect(head.getAttribute("aria-expanded")).toBe("false");
       expect(head.getAttribute("aria-controls")).toBeTruthy();
@@ -243,6 +243,7 @@ describe("ProviderCard：详情抽屉空数据默认折叠（AC-7/8/9/10）", ()
     expect(headByTitle("近 14 天用量").getAttribute("aria-expanded")).toBe("true");
     expect(headByTitle("模型用量 TOP 8").getAttribute("aria-expanded")).toBe("true");
     expect(headByTitle("余额趋势").getAttribute("aria-expanded")).toBe("true");
+    expect(headByTitle("总额度趋势").getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByTestId("daily-chart")).toBeTruthy();
     expect(screen.getByTestId("model-chart")).toBeTruthy();
     expect(screen.getByTestId("balance-chart")).toBeTruthy();
@@ -288,6 +289,36 @@ describe("ProviderCard：详情抽屉空数据默认折叠（AC-7/8/9/10）", ()
     });
     openDrawer();
     expect(headByTitle("余额趋势").textContent).toContain("已有 1 个快照，再刷新一次即可成趋势");
+  });
+
+  it("AiHubMix 总额度趋势：两次真实额度记录默认展开，与余额趋势并列", () => {
+    renderCard({
+      account: account("aihubmix", "aiHubMix"),
+      info: info({ total: { amount: 200, currency: "USD" }, balance: { amount: 10, currency: "USD" } }),
+      snapshots: [
+        { accountId: "aihubmix", ts: "2026-10-19T10:00:00Z", balance: 10, currency: "USD", total: 100 },
+        { accountId: "aihubmix", ts: "2026-10-19T11:00:00Z", balance: 10, currency: "USD", total: 200 },
+      ],
+    });
+    openDrawer();
+    expect(headByTitle("总额度趋势").getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("total-chart")).toBeTruthy();
+    expect(screen.getByTestId("balance-chart")).toBeTruthy();
+  });
+
+  it("旧余额快照不计入总额度趋势，1 个新额度快照显示专属提示", () => {
+    renderCard({
+      info: info({ total: { amount: 100, currency: "USD" } }),
+      snapshots: [
+        { accountId: "ms", ts: "2026-10-19T09:00:00Z", balance: 10, currency: "USD" },
+        { accountId: "ms", ts: "2026-10-19T10:00:00Z", balance: 10, currency: "USD", total: 100 },
+      ],
+    });
+    openDrawer();
+    expect(headByTitle("余额趋势").getAttribute("aria-expanded")).toBe("true");
+    expect(headByTitle("总额度趋势").getAttribute("aria-expanded")).toBe("false");
+    expect(headByTitle("总额度趋势").textContent).toContain("已有 1 个总额度快照，再成功刷新一次即可成趋势");
+    expect(screen.queryByTestId("total-chart")).toBeNull();
   });
 
   it("不记忆：展开空区块后关闭并重开抽屉 → 仍默认折叠；localStorage 无新键", () => {

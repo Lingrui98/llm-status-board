@@ -120,12 +120,13 @@ export interface QuotaWindow {
   resetsAt?: string | null;
 }
 
-/** 余额历史快照（趋势图数据源） */
+/** 余额与总额度历史快照（旧记录没有 total） */
 export interface BalanceSnapshot {
   ts: string;
   accountId: string;
   balance: number;
   currency: string;
+  total?: number | null;
 }
 
 /* ---------- R15：本地用量历史（usage-history.json，与 Rust 侧 serde camelCase 对应） ---------- */

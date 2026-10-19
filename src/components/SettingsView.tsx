@@ -429,7 +429,7 @@ export default function SettingsView({
           <input
             value={config.settings.proxy ?? ""}
             onChange={(e) => updateSettings({ proxy: e.target.value || null })}
-            placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空则不走代理"
+            placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空使用环境代理（如有）"
           />
         </label>
         <p className="muted small">

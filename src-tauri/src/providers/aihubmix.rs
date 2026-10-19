@@ -11,7 +11,10 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
     }
     let base = acc.base();
     let (header, value) = http::bearer(key);
-    let headers = [(header.as_str(), value)];
+    let headers = [
+        (header.as_str(), value),
+        ("Accept", "application/json".to_string()),
+    ];
     let subscription = http::send_json(
         client,
         "GET",
@@ -235,6 +238,9 @@ mod tests {
             assert!(request
                 .to_ascii_lowercase()
                 .contains("\r\nauthorization: bearer test-aihubmix-key\r\n"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("\r\naccept: application/json\r\n"));
         }
         assert!((info.balance.unwrap().amount - 150.520778).abs() < 1e-8);
     }

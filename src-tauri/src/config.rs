@@ -56,14 +56,19 @@ pub fn load_results(path: &Path) -> Result<Vec<RefreshOutcome>, String> {
     serde_json::from_str(&text).map_err(|e| format!("结果文件格式错误: {e}"))
 }
 
-/// 追加余额快照（滚动保留最近 MAX_HISTORY 条；同账号余额与最近一条相同时不追加，避免平线刷屏）
+/// 滚动保留最近 MAX_HISTORY 条。带总额度的快照按刷新时间记录，保留额度不变的平线；
+/// 只有余额的旧式快照仍跳过连续重复值。
 pub fn append_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
     let mut all = load_history(path)?;
     for s in snapshots {
         let dup = all
             .last()
             .map(|last| {
-                last.account_id == s.account_id && (last.balance - s.balance).abs() < f64::EPSILON
+                last.account_id == s.account_id
+                    && last.currency == s.currency
+                    && (last.balance - s.balance).abs() < f64::EPSILON
+                    && last.total == s.total
+                    && (s.total.is_none() || last.ts == s.ts)
             })
             .unwrap_or(false);
         if !dup {
@@ -420,6 +425,75 @@ mod tests {
             .join(format!("{tag}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir.join("config.json")
+    }
+
+    #[test]
+    fn history_keeps_flat_totals_and_total_only_changes() {
+        let path = temp_config_path("total-history").with_file_name("history.json");
+        let _ = fs::remove_file(&path);
+        // 从旧的四字段历史开始，升级后不能补造该时间点的总额度。
+        fs::write(
+            &path,
+            r#"[{"ts":"2026-10-19T09:00:00Z","accountId":"a1","balance":10.0,"currency":"USD"}]"#,
+        )
+        .unwrap();
+        for (ts, total) in [
+            ("2026-10-19T10:00:00Z", 100.0),
+            ("2026-10-19T11:00:00Z", 100.0),
+            ("2026-10-19T12:00:00Z", 150.0),
+        ] {
+            let snapshot = BalanceSnapshot {
+                ts: ts.into(),
+                account_id: "a1".into(),
+                balance: 10.0,
+                currency: "USD".into(),
+                total: Some(total),
+            };
+            append_history(&path, std::slice::from_ref(&snapshot)).unwrap();
+            // 重复提交同一时间点不重复写入。
+            append_history(&path, &[snapshot]).unwrap();
+        }
+        let history = load_history(&path).unwrap();
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].total, None);
+        assert_eq!(history[1].total, Some(100.0));
+        assert_eq!(history[2].total, Some(100.0));
+        assert_eq!(history[3].total, Some(150.0));
+        assert!(history.iter().all(|s| s.balance == 10.0));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_preserves_legacy_deduplication_and_retention_limit() {
+        let path = temp_config_path("history-retention").with_file_name("history.json");
+        let _ = fs::remove_file(&path);
+        let mut snapshot = BalanceSnapshot {
+            ts: "old".into(),
+            account_id: "a1".into(),
+            balance: 10.0,
+            currency: "USD".into(),
+            total: None,
+        };
+        append_history(&path, std::slice::from_ref(&snapshot)).unwrap();
+        snapshot.ts = "later".into();
+        append_history(&path, &[snapshot]).unwrap();
+        assert_eq!(load_history(&path).unwrap().len(), 1);
+
+        let snapshots: Vec<_> = (0..=MAX_HISTORY)
+            .map(|i| BalanceSnapshot {
+                ts: i.to_string(),
+                account_id: "a1".into(),
+                balance: 10.0,
+                currency: "USD".into(),
+                total: Some(100.0),
+            })
+            .collect();
+        append_history(&path, &snapshots).unwrap();
+        let history = load_history(&path).unwrap();
+        assert_eq!(history.len(), MAX_HISTORY);
+        assert_eq!(history[0].ts, "1");
+        assert_eq!(history.last().unwrap().ts, MAX_HISTORY.to_string());
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

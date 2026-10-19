@@ -4,6 +4,7 @@
 //   model   ：modelUsage 中存在 ≥1 个有效点（同上）
 //   token   ：modelUsage 中存在 ≥1 个点的 token 字段非 null
 //   balance ：该账号快照数 ≥ 2（1 个快照成不了趋势）
+//   total   ：该账号含有效总额度的快照数 ≥ 2，旧余额记录不计入
 //   breakdown（扩展）：额度构成有可画数据（总额度 > 0 且(已用或余额可得)，或有有效配额窗口）
 //                       —— 规格 §3 只列了前四维；额度构成的空态同样是「无数据项」，
 //                       这里按同一语义一并折叠（纯扩展，不改任何数据口径）。
@@ -60,6 +61,11 @@ export function balanceSnapshotCount(snapshots: readonly BalanceSnapshot[], acco
   return count;
 }
 
+/** 只统计实际记录过总额度的快照，0 也有效。 */
+export function totalSnapshotCount(snapshots: readonly BalanceSnapshot[], accountId: string): number {
+  return snapshots.filter((s) => s.accountId === accountId && typeof s.total === "number" && Number.isFinite(s.total)).length;
+}
+
 /** breakdown（扩展）：额度构成是否有可画数据 */
 export function hasBreakdownData(info?: AccountInfo | null): boolean {
   if (!info) return false;
@@ -75,9 +81,10 @@ export interface DrawerDataFlags {
   model: boolean;
   token: boolean;
   balance: boolean;
+  total: boolean;
 }
 
-/** 一次算出五个维度的 hasData（判定互相独立） */
+/** 一次算出各维度的 hasData（判定互相独立） */
 export function drawerDataFlags(
   info: AccountInfo | null | undefined,
   snapshots: readonly BalanceSnapshot[],
@@ -89,5 +96,6 @@ export function drawerDataFlags(
     model: hasModelUsageData(info?.modelUsage),
     token: hasTokenSplitData(info?.modelUsage),
     balance: hasBalanceTrendData(snapshots, accountId),
+    total: totalSnapshotCount(snapshots, accountId) >= 2,
   };
 }
