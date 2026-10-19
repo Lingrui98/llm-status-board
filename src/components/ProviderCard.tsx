@@ -408,6 +408,9 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   /** 按账号类型与图表维度生成「无数据」说明（区分"不支持"与"暂无记录"） */
   function chartEmptyNote(dimension: "daily" | "model" | "balance" | "breakdown" | "token"): string | undefined {
     const kind = account.kind;
+    if (kind === "aiHubMix" && dimension !== "balance" && dimension !== "breakdown") {
+      return "AiHubMix 计费接口仅提供累计用量，无按日、按模型或 Token 明细";
+    }
     // 官方按量计费接口只提供余额快照，无历史用量
     if (kind === "deepSeek" && dimension !== "balance" && dimension !== "breakdown") {
       return "DeepSeek 官方接口不提供历史用量，只返回当前余额";

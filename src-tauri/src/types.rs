@@ -25,6 +25,7 @@ pub enum ProviderKind {
     NewApi,
     Sub2Api,
     ModelServer,
+    AiHubMix,
     DeepSeek,
     OpenAi,
     SiliconFlow,

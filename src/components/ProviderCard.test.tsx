@@ -67,6 +67,26 @@ function tileText(selector: string): string {
   return document.querySelector(selector)?.textContent ?? "";
 }
 
+describe("ProviderCard：AiHubMix", () => {
+  it("shows the USD balance, cumulative usage, and total allowance", () => {
+    renderCard({
+      account: account("aihubmix", "aiHubMix", "AiHubMix 账号"),
+      info: info({
+        balance: { amount: 150.520778, currency: "USD" },
+        used: { amount: 29370.458762, currency: "USD" },
+        total: { amount: 29520.97954, currency: "USD" },
+      }),
+    });
+    expect(tileText(".kind-badge")).toBe("AiHubMix");
+    expect(tileText(".balance-num")).toBe("150.52");
+    expect(tileText(".balance-currency")).toBe("USD");
+    expect(screen.getByText("29,370.46 USD")).toBeTruthy();
+    expect(screen.getByText("29,520.98 USD")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /详情/ }));
+    expect(screen.getAllByText("AiHubMix 计费接口仅提供累计用量，无按日、按模型或 Token 明细").length).toBeGreaterThan(0);
+  });
+});
+
 describe("ProviderCard：订阅主指标（AC-4）", () => {
   it("ModelServer 真实数据（余额 0 + 7d 0%）→ 订阅剩余 100%，卡片内不出现 $0", () => {
     renderCard({
