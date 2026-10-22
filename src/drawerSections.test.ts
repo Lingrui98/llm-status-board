@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   balanceSnapshotCount,
+  totalSnapshotCount,
   drawerDataFlags,
   hasBreakdownData,
   hasBalanceTrendData,
@@ -64,6 +65,22 @@ describe("drawerSections：各维度 hasData", () => {
     expect(hasBreakdownData(info({ quotaWindows: [{ window: "7d", usedPercent: null }] }))).toBe(false);
   });
 
+  it("total：只统计本账号有效总额度，兼容缺失字段，零额度有效", () => {
+    const snapshots: BalanceSnapshot[] = [
+      snap("a1", "t1"),
+      { ...snap("a1", "t2"), total: null },
+      { ...snap("a1", "t3"), total: NaN },
+      { ...snap("a1", "t4"), total: Infinity },
+      { ...snap("a2", "t5"), total: 100 },
+      { ...snap("a1", "t6"), total: 0 },
+    ];
+    expect(totalSnapshotCount(snapshots, "a1")).toBe(1);
+    expect(drawerDataFlags(null, snapshots, "a1").total).toBe(false);
+    snapshots.push({ ...snap("a1", "t7"), total: 200 });
+    expect(totalSnapshotCount(snapshots, "a1")).toBe(2);
+    expect(drawerDataFlags(null, snapshots, "a1").total).toBe(true);
+  });
+
   it("drawerDataFlags：维度互相独立，不因某一维有数据而全部为真", () => {
     const flags = drawerDataFlags(
       info({ dailyUsage: [{ date: "2026-10-01", cost: 1 }], modelUsage: null }),
@@ -86,7 +103,7 @@ describe("drawerSections：各维度 hasData", () => {
       [snap("a1", "t1"), snap("a1", "t2")],
       "a1",
     );
-    expect(all).toEqual({ breakdown: true, daily: true, model: true, token: true, balance: true });
+    expect(all).toEqual({ breakdown: true, daily: true, model: true, token: true, balance: true, total: false });
   });
 
   it("info 为 null 时不崩：四维全 false", () => {
@@ -96,6 +113,7 @@ describe("drawerSections：各维度 hasData", () => {
       model: false,
       token: false,
       balance: false,
+      total: false,
     });
   });
 });

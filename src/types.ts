@@ -5,6 +5,7 @@ export type ProviderKind =
   | "newApi"
   | "sub2Api"
   | "modelServer"
+  | "aiHubMix"
   | "deepSeek"
   | "openAi"
   | "siliconFlow"
@@ -18,6 +19,7 @@ export const PROVIDER_KINDS: { value: ProviderKind; label: string; group: string
   { value: "newApi", label: "new-api 系中转", group: "中转站" },
   { value: "sub2Api", label: "sub2api 系中转", group: "中转站" },
   { value: "modelServer", label: "ModelServer（ETOChat/自建面板）", group: "中转站" },
+  { value: "aiHubMix", label: "AiHubMix", group: "中转站" },
   { value: "custom", label: "自定义 HTTP 查询", group: "中转站" },
   { value: "deepSeek", label: "DeepSeek 官方", group: "官方" },
   { value: "openAi", label: "OpenAI 官方", group: "官方" },
@@ -118,12 +120,13 @@ export interface QuotaWindow {
   resetsAt?: string | null;
 }
 
-/** 余额历史快照（趋势图数据源） */
+/** 余额与总额度历史快照（旧记录没有 total） */
 export interface BalanceSnapshot {
   ts: string;
   accountId: string;
   balance: number;
   currency: string;
+  total?: number | null;
 }
 
 /* ---------- R15：本地用量历史（usage-history.json，与 Rust 侧 serde camelCase 对应） ---------- */
@@ -192,6 +195,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   newApi: "https://your-newapi-site.com",
   sub2Api: "https://your-sub2api-site.com",
   modelServer: "https://codeapi.cs.ac.cn",
+  aiHubMix: "https://aihubmix.com",
   custom: "https://your-relay-site.com",
   deepSeek: "https://api.deepseek.com",
   openAi: "https://api.openai.com",

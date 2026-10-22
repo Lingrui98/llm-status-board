@@ -67,6 +67,16 @@ export const CREDENTIAL_GUIDES: Record<ProviderKind, CredentialGuide> = {
     copyables: [{ label: "API 后端地址", value: "https://codeapi.cs.ac.cn" }],
     note: "refresh_token 是一次性轮换的：每次查询后应用会自动保存新 token，无需手动更新。",
   },
+  aiHubMix: {
+    need: "AiHubMix 的 API Key，无需访问令牌或用户 ID。",
+    steps: [
+      "打开 aihubmix.com 并登录，在控制台的 API Key 页面创建或复制密钥",
+      "把密钥填入「API Key」；站点地址保持 https://aihubmix.com，无需添加 /v1",
+      "点击「测试连接」，确认余额与累计用量后保存账号",
+    ],
+    copyables: [{ label: "Base URL", value: "https://aihubmix.com" }],
+    note: "以美元展示总额度、累计已用额度与余额；接口用量单位为美分，应用自动换算为美元。计费接口不提供按日、按模型或 Token 明细。",
+  },
   custom: {
     need: "无固定凭证要求 —— 取决于你自己配置的查询接口。",
     steps: [

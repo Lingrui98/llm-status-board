@@ -13,7 +13,7 @@ import QuotaWindowBars from "./charts/QuotaWindowBars";
 import DetailDrawer from "./DetailDrawer";
 import DrawerSection from "./DrawerSection";
 import { pickPrimaryMetric, readBalanceCredits } from "../primaryMetric";
-import { balanceSnapshotCount, drawerDataFlags } from "../drawerSections";
+import { balanceSnapshotCount, drawerDataFlags, totalSnapshotCount } from "../drawerSections";
 
 /** 外部「跳转到账号」请求（命令面板 / 数字键 1-9），由 App 经 Dashboard 透传 */
 export interface FocusRequest {
@@ -142,6 +142,12 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   // R19 详情抽屉：各维度独立判定是否有数据（无数据区块默认折叠）
   const flags = useMemo(() => drawerDataFlags(info, snapshots, account.id), [info, snapshots, account.id]);
   const snapshotCount = useMemo(() => balanceSnapshotCount(snapshots, account.id), [snapshots, account.id]);
+  const totalCount = useMemo(() => totalSnapshotCount(snapshots, account.id), [snapshots, account.id]);
+  const totalEmptyNote = totalCount === 1
+    ? "已有 1 个总额度快照，再成功刷新一次即可成趋势"
+    : info && info.total == null
+      ? "该接口未提供总额度，暂无总额度历史"
+      : "总额度从成功刷新后开始记录，已有余额历史不补填总额度";
 
   // 附加信息：配额类靠前；行数多时默认折叠（与图表「详情」展开互不影响）
   const sortedExtras = useMemo(() => sortExtras(info?.extras ?? []), [info?.extras]);
@@ -381,6 +387,14 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
                 emptyNote={chartEmptyNote("balance")}
               />
             </DrawerSection>
+            <DrawerSection title="总额度趋势" hasData={flags.total} emptyNote={totalEmptyNote}>
+              <BalanceTrendChart
+                snapshots={snapshots}
+                accountId={account.id}
+                metric="total"
+                emptyNote={totalEmptyNote}
+              />
+            </DrawerSection>
           </div>
           {info?.raw !== undefined && info?.raw !== null && (
             <div className="drawer-raw">
@@ -408,6 +422,9 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   /** 按账号类型与图表维度生成「无数据」说明（区分"不支持"与"暂无记录"） */
   function chartEmptyNote(dimension: "daily" | "model" | "balance" | "breakdown" | "token"): string | undefined {
     const kind = account.kind;
+    if (kind === "aiHubMix" && dimension !== "balance" && dimension !== "breakdown") {
+      return "AiHubMix 计费接口仅提供累计用量，无按日、按模型或 Token 明细";
+    }
     // 官方按量计费接口只提供余额快照，无历史用量
     if (kind === "deepSeek" && dimension !== "balance" && dimension !== "breakdown") {
       return "DeepSeek 官方接口不提供历史用量，只返回当前余额";

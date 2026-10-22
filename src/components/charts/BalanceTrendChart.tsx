@@ -15,6 +15,7 @@ import { ChartEmpty, tsLabel, usePrefersReducedMotion } from "./shared";
 interface Props {
   snapshots: BalanceSnapshot[];
   accountId: string;
+  metric?: "balance" | "total";
   /** 空数据时的具体原因说明 */
   emptyNote?: string;
 }
@@ -22,38 +23,39 @@ interface Props {
 interface Row {
   label: string;
   fullTs: string;
-  balance: number;
+  amount: number;
   currency: string;
 }
 
 interface TipProps {
   active?: boolean;
   payload?: ReadonlyArray<{ payload: Row }>;
+  metric: "balance" | "total";
 }
 
-function TrendTip({ active, payload }: TipProps) {
+function TrendTip({ active, payload, metric }: TipProps) {
   if (!active || !payload || payload.length === 0) return null;
   const r = payload[0].payload;
   return (
     <div className="chart-tooltip">
       <div className="tt-title">{r.fullTs}</div>
       <div className="tt-row">
-        <span>余额</span>
+        <span>{metric === "total" ? "总额度" : "余额"}</span>
         <b>
-          {formatDecimal(r.balance)} {r.currency}
+          {formatDecimal(r.amount)} {r.currency}
         </b>
       </div>
     </div>
   );
 }
 
-/** 单账号余额趋势折线图（数据点 <2 时降级为占位） */
-export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: Props) {
+/** 单账号余额或总额度趋势（数据点 <2 时降级为占位） */
+export default function BalanceTrendChart({ snapshots, accountId, metric = "balance", emptyNote }: Props) {
   const reducedMotion = usePrefersReducedMotion();
   const rows = useMemo<Row[]>(
     () =>
       snapshots
-        .filter((s) => s.accountId === accountId)
+        .filter((s) => s.accountId === accountId && typeof s[metric] === "number" && Number.isFinite(s[metric]))
         .slice()
         .sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime())
         .map((s) => {
@@ -61,11 +63,11 @@ export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: P
           return {
             label: tsLabel(s.ts),
             fullTs: isNaN(d.getTime()) ? s.ts : d.toLocaleString("zh-CN", { hour12: false }),
-            balance: s.balance,
+            amount: s[metric] as number,
             currency: s.currency,
           };
         }),
-    [snapshots, accountId],
+    [snapshots, accountId, metric],
   );
 
   if (rows.length < 2) return <ChartEmpty text={emptyNote} />;
@@ -91,12 +93,12 @@ export default function BalanceTrendChart({ snapshots, accountId, emptyNote }: P
           tickFormatter={(v: number) => formatCompact(v)}
         />
         <Tooltip
-          content={<TrendTip />}
+          content={<TrendTip metric={metric} />}
           cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
         />
         <Line
-          type="monotone"
-          dataKey="balance"
+          type={metric === "total" ? "stepAfter" : "monotone"}
+          dataKey="amount"
           stroke="var(--accent)"
           strokeWidth={2}
           dot={{ r: 2, strokeWidth: 0, fill: "var(--accent)" }}

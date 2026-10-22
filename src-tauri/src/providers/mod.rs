@@ -1,3 +1,4 @@
+pub mod aihubmix;
 pub mod custom;
 pub mod modelserver;
 pub mod official;
@@ -14,6 +15,7 @@ pub async fn fetch_account(
         ProviderKind::OneApi | ProviderKind::NewApi => oneapi::fetch(client, acc).await,
         ProviderKind::Sub2Api => sub2api::fetch(client, acc).await,
         ProviderKind::ModelServer => modelserver::fetch(client, acc).await,
+        ProviderKind::AiHubMix => aihubmix::fetch(client, acc).await,
         ProviderKind::Custom => custom::fetch(client, acc).await,
         _ => official::fetch(client, acc).await,
     }

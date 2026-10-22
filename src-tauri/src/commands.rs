@@ -1,7 +1,7 @@
 use crate::config;
 use crate::http;
 use crate::providers;
-use crate::types::{AccountConfig, AccountInfo, AppConfig, RefreshOutcome};
+use crate::types::{AccountConfig, AccountInfo, AppConfig, BalanceSnapshot, RefreshOutcome};
 use futures::future::join_all;
 use tauri::AppHandle;
 
@@ -168,24 +168,9 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save_results(&path, &outcomes);
     }
 
-    // 余额历史追加（趋势图数据源 / R14 洞察指标差分推导的数据基础）；
-    // R14 规格 §2：快照结构不动
+    // 保存本次成功刷新的余额与总额度，供趋势图和余额差分指标使用。
     let now = crate::types::now_iso();
-    let snapshots: Vec<crate::types::BalanceSnapshot> = outcomes
-        .iter()
-        .filter_map(|o| {
-            o.info
-                .as_ref()?
-                .balance
-                .as_ref()
-                .map(|b| crate::types::BalanceSnapshot {
-                    ts: now.clone(),
-                    account_id: o.account_id.clone(),
-                    balance: b.amount,
-                    currency: b.currency.clone(),
-                })
-        })
-        .collect();
+    let snapshots = balance_snapshots(&outcomes, &now);
     if !snapshots.is_empty() {
         if let Ok(path) = config::history_file_path(&app) {
             let _ = config::append_history(&path, &snapshots);
@@ -193,6 +178,29 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
     }
 
     Ok(outcomes)
+}
+
+fn balance_snapshots(outcomes: &[RefreshOutcome], ts: &str) -> Vec<BalanceSnapshot> {
+    outcomes
+        .iter()
+        .filter(|o| o.ok)
+        .filter_map(|o| {
+            let info = o.info.as_ref()?;
+            let balance = info.balance.as_ref().filter(|b| b.amount.is_finite())?;
+            let total = info
+                .total
+                .as_ref()
+                .filter(|t| t.currency == balance.currency && t.amount.is_finite())
+                .map(|t| t.amount);
+            Some(BalanceSnapshot {
+                ts: ts.to_owned(),
+                account_id: o.account_id.clone(),
+                balance: balance.amount,
+                currency: balance.currency.clone(),
+                total,
+            })
+        })
+        .collect()
 }
 
 /// 上次刷新结果（启动时加载展示；无记录返回空数组）
@@ -263,4 +271,74 @@ pub async fn summary_open_account(app: AppHandle, account_id: String) -> Result<
 pub async fn export_csv(_app: AppHandle, path: String, content: String) -> Result<(), String> {
     // 原样字节落盘（BOM/换行/转义都由前端 content 决定），成功时只回 ()
     config::write_bytes_atomic(std::path::Path::new(&path), content.as_bytes()).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::Money;
+
+    fn outcome(total: Option<Money>) -> RefreshOutcome {
+        RefreshOutcome {
+            account_id: "aihubmix".into(),
+            ok: true,
+            info: Some(AccountInfo {
+                balance: Some(Money {
+                    amount: 10.0,
+                    currency: "USD".into(),
+                }),
+                total,
+                ..Default::default()
+            }),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn snapshots_record_real_totals_including_zero_without_guessing() {
+        for (total, currency, expected) in [
+            (Some(100.0), "USD", Some(100.0)),
+            (Some(0.0), "USD", Some(0.0)),
+            (None, "USD", None),
+            (Some(100.0), "CNY", None),
+            (Some(f64::NAN), "USD", None),
+            (Some(f64::INFINITY), "USD", None),
+        ] {
+            let result = outcome(total.map(|amount| Money {
+                amount,
+                currency: currency.into(),
+            }));
+            let snapshots = balance_snapshots(&[result], "2026-10-19T10:00:00Z");
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0].total, expected);
+            assert_eq!(snapshots[0].balance, 10.0);
+            assert_eq!(snapshots[0].currency, "USD");
+            assert_eq!(snapshots[0].ts, "2026-10-19T10:00:00Z");
+        }
+    }
+
+    #[test]
+    fn failed_or_missing_balance_results_do_not_add_snapshots() {
+        let mut failed = outcome(None);
+        failed.ok = false;
+        let mut no_balance = outcome(Some(Money {
+            amount: 100.0,
+            currency: "USD".into(),
+        }));
+        no_balance.info.as_mut().unwrap().balance = None;
+        let mut no_info = outcome(None);
+        no_info.info = None;
+        let mut invalid_balance = outcome(None);
+        invalid_balance
+            .info
+            .as_mut()
+            .unwrap()
+            .balance
+            .as_mut()
+            .unwrap()
+            .amount = f64::NAN;
+        assert!(
+            balance_snapshots(&[failed, no_balance, no_info, invalid_balance], "now").is_empty()
+        );
+    }
 }

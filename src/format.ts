@@ -95,6 +95,7 @@ export function kindLabel(kind: string): string {
     newApi: "new-api",
     sub2Api: "sub2api",
     modelServer: "ModelServer",
+    aiHubMix: "AiHubMix",
     deepSeek: "DeepSeek",
     openAi: "OpenAI",
     siliconFlow: "SiliconFlow",

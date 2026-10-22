@@ -25,6 +25,7 @@ pub enum ProviderKind {
     NewApi,
     Sub2Api,
     ModelServer,
+    AiHubMix,
     DeepSeek,
     OpenAi,
     SiliconFlow,
@@ -335,11 +336,7 @@ pub struct RefreshOutcome {
     pub error: Option<String>,
 }
 
-/// 余额历史快照（跨刷新记录，用于余额趋势图）
-///
-/// R14 规格 §2：**结构不变**——洞察指标（burn rate / 可支撑天数 / 本月预计支出）
-/// 全部由现有 ts/accountId/balance/currency 差分推导；history.json 格式、
-/// 去重逻辑与 MAX_HISTORY 均不动。
+/// 余额与总额度历史快照；旧记录缺少 total 时仍可直接读取。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BalanceSnapshot {
@@ -348,6 +345,9 @@ pub struct BalanceSnapshot {
     pub account_id: String,
     pub balance: f64,
     pub currency: String,
+    /// 与余额同币种的总额度；不从余额推算或补填旧记录。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<f64>,
 }
 
 // ---------- 本地用量历史（R15 usage-history.json） ----------
@@ -622,20 +622,21 @@ mod tests {
         assert_eq!(INSIGHT_WINDOW_DAYS_RANGE, (3, 90));
     }
 
-    /// R14 不动 BalanceSnapshot：仍是 4 字段，旧 history.json 直接可读
+    /// 旧 history.json 直接可读，缺失的总额度不能补成零。
     #[test]
-    fn balance_snapshot_shape_is_unchanged() {
+    fn balance_snapshot_preserves_legacy_records() {
         let legacy = r#"[{"ts":"2026-10-14T09:00:00+08:00","accountId":"a1","balance":18.0,"currency":"USD"}]"#;
         let list: Vec<BalanceSnapshot> = serde_json::from_str(legacy).expect("旧 history 必须可读");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].account_id, "a1");
         assert_eq!(list[0].balance, 18.0);
+        assert_eq!(list[0].total, None);
 
         let back = serde_json::to_string(&list[0]).unwrap();
         assert_eq!(
             back,
             r#"{"ts":"2026-10-14T09:00:00+08:00","accountId":"a1","balance":18.0,"currency":"USD"}"#,
-            "快照序列化必须保持 4 字段不变"
+            "旧快照序列化时不应补造 total 字段"
         );
     }
 
