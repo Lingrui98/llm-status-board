@@ -247,23 +247,45 @@ fn parse_unrestricted(v: &Value) -> (Option<Money>, Vec<KeyValue>) {
     (balance, extras)
 }
 
-/// R23：把 `subscription.{daily,weekly,monthly}_{usage,limit}_usd` 数字限额转成结构化配额窗口。
+/// R23/R24：把 `subscription.{daily,weekly,monthly}_{usage,limit}_usd` 数字限额转成结构化配额窗口。
 ///
-/// 规则（纯函数，便于单测）：
+/// 规则（纯逻辑在 `subscription_quota_windows_at`，注入 now 便于单测）：
 /// - usage 与 limit **成对存在**且 limit > 0 才产出（usage 为 0 合法 → 已用 0%）；
 /// - `used_percent` 保留**真实比值**（超限 >100 不钳制——超限是重要事实；钳制是显示层职责）；
-/// - `resets_at` 为 None：站点时区/重置规则未知，不编造倒计时；
+/// - 重置时间（R24）：
+///   - 1d：次日**本地 0 点**（kxyai.top 实测：自然日 0 点重置；注意站点是 lazy compute——
+///     当天首次真实请求才触发重算，此前接口返回昨日旧值。若某 fork 用滚动窗口，倒计时仅供参考）；
+///   - 7d：响应自带 `weekly_window_start`（RFC3339 锚点）+7 天；缺字段/解析失败 → None；
+///   - 1m：无起始时间字段 → None（不编造）；
 /// - 窗口标签用 1d / 7d / 1m（与 Kimi 的 5h/7d 同一语言）。
 pub fn subscription_quota_windows(v: &Value) -> Vec<QuotaWindow> {
+    subscription_quota_windows_at(v, chrono::Local::now())
+}
+
+/// 纯逻辑版本（注入 now 便于单测）。
+fn subscription_quota_windows_at(
+    v: &Value,
+    now: chrono::DateTime<chrono::Local>,
+) -> Vec<QuotaWindow> {
     let Some(sub) = v.get("subscription") else {
         return Vec::new();
     };
     let usd = || "USD".to_string();
     let mut out = Vec::new();
-    for (label, usage_key, limit_key) in [
-        ("1d", "daily_usage_usd", "daily_limit_usd"),
-        ("7d", "weekly_usage_usd", "weekly_limit_usd"),
-        ("1m", "monthly_usage_usd", "monthly_limit_usd"),
+    for (label, usage_key, limit_key, resets_at) in [
+        (
+            "1d",
+            "daily_usage_usd",
+            "daily_limit_usd",
+            next_local_midnight(now),
+        ),
+        (
+            "7d",
+            "weekly_usage_usd",
+            "weekly_limit_usd",
+            weekly_window_reset(sub),
+        ),
+        ("1m", "monthly_usage_usd", "monthly_limit_usd", None),
     ] {
         let (Some(usage), Some(limit)) = (
             lookup_number(sub, usage_key),
@@ -274,7 +296,7 @@ pub fn subscription_quota_windows(v: &Value) -> Vec<QuotaWindow> {
         out.push(QuotaWindow {
             window: Some(label.into()),
             used_percent: Some(usage / limit * 100.0),
-            resets_at: None,
+            resets_at,
             used_amount: Some(Money {
                 amount: usage,
                 currency: usd(),
@@ -286,6 +308,23 @@ pub fn subscription_quota_windows(v: &Value) -> Vec<QuotaWindow> {
         });
     }
     out
+}
+
+/// 次日本地 0 点（RFC3339；DST 歧义等异常 → None，不编造）
+fn next_local_midnight(now: chrono::DateTime<chrono::Local>) -> Option<String> {
+    let tomorrow = now.date_naive().checked_add_days(chrono::Days::new(1))?;
+    let naive = tomorrow.and_hms_opt(0, 0, 0)?;
+    chrono::Local
+        .from_local_datetime(&naive)
+        .single()
+        .map(|d| d.to_rfc3339())
+}
+
+/// 周窗口重置 = 响应自带 `weekly_window_start`（RFC3339 锚点）+7 天；缺字段/解析失败 → None
+fn weekly_window_reset(sub: &Value) -> Option<String> {
+    let start = lookup_string(sub, "weekly_window_start")?;
+    let start = chrono::DateTime::parse_from_rfc3339(&start).ok()?;
+    Some((start + chrono::Duration::days(7)).to_rfc3339())
 }
 
 /// 邮箱+密码登录（信封 {code:0, data}），成功后回写轮转的 token
@@ -599,6 +638,13 @@ mod tests {
 
     // ---------- R23：数字限额 → 结构化配额窗口 ----------
 
+    /// 固定参照时间（本地 2026-10-24 15:30，周四）——单测注入用
+    fn fixed_now() -> chrono::DateTime<chrono::Local> {
+        chrono::DateTime::parse_from_rfc3339("2026-10-24T15:30:00+08:00")
+            .unwrap()
+            .into()
+    }
+
     /// 完整三对（bosc 真实形态）：1d/7d/1m 全产出，百分比 = 用量/上限 真实比值
     #[test]
     fn test_subscription_quota_windows_full_set() {
@@ -609,7 +655,7 @@ mod tests {
                 "monthly_usage_usd": 21.0, "monthly_limit_usd": 100.0
             }
         });
-        let ws = subscription_quota_windows(&v);
+        let ws = subscription_quota_windows_at(&v, fixed_now());
         assert_eq!(ws.len(), 3, "三对齐全应产出三个窗口");
         assert_eq!(ws[0].window.as_deref(), Some("1d"));
         assert_eq!(ws[1].window.as_deref(), Some("7d"));
@@ -621,8 +667,51 @@ mod tests {
         assert_eq!(ws[0].used_amount.as_ref().unwrap().amount, 1.5);
         assert_eq!(ws[0].limit_amount.as_ref().unwrap().amount, 10.0);
         assert_eq!(ws[0].limit_amount.as_ref().unwrap().currency, "USD");
-        // 站点时区未知：不编造重置时间
-        assert!(ws.iter().all(|w| w.resets_at.is_none()));
+    }
+
+    /// R24 重置时间：1d = 次日本地 0 点；7d 有锚点 = +7 天；7d 无锚点 → None；1m 始终 None
+    #[test]
+    fn test_subscription_quota_windows_reset_times() {
+        // 带周锚点（kxyai.top 真实字段）
+        let v = json!({
+            "subscription": {
+                "daily_usage_usd": 1.5, "daily_limit_usd": 10.0,
+                "weekly_usage_usd": 5.25, "weekly_limit_usd": 40.0,
+                "monthly_usage_usd": 21.0, "monthly_limit_usd": 100.0,
+                "weekly_window_start": "2026-10-20T16:05:05.781515+08:00"
+            }
+        });
+        let ws = subscription_quota_windows_at(&v, fixed_now());
+        // 1d：fixed_now=2026-10-24 → 次日 0 点（本地时区，断言到日期段，不受跑测试机器的时区影响）
+        let daily_reset = ws[0].resets_at.as_deref().unwrap();
+        assert!(
+            daily_reset.starts_with("2026-10-25T00:00:00"),
+            "1d 重置 = 次日本地 0 点: {daily_reset}"
+        );
+        // 7d：锚点 +7 天（精确到秒）
+        assert_eq!(
+            ws[1].resets_at.as_deref(),
+            Some("2026-10-27T16:05:05.781515+08:00")
+        );
+        // 1m：无起始时间字段 → 不编造
+        assert!(ws[2].resets_at.is_none());
+
+        // 无周锚点 → 7d 为 None
+        let v2 = json!({
+            "subscription": { "weekly_usage_usd": 5.25, "weekly_limit_usd": 40.0 }
+        });
+        let ws2 = subscription_quota_windows_at(&v2, fixed_now());
+        assert!(ws2[0].resets_at.is_none());
+
+        // 锚点不可解析 → None（不崩）
+        let v3 = json!({
+            "subscription": {
+                "weekly_usage_usd": 5.25, "weekly_limit_usd": 40.0,
+                "weekly_window_start": "not-a-date"
+            }
+        });
+        let ws3 = subscription_quota_windows_at(&v3, fixed_now());
+        assert!(ws3[0].resets_at.is_none());
     }
 
     /// 超限保留真实值（bosc 日用量 201.79 / 上限 200 → 100.895%，**不得**钳制吃掉超限事实）

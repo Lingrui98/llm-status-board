@@ -22,6 +22,7 @@ body::before {
 }
 
 .summary-shell {
+  position: relative; /* R24：承载右下角尺寸拖拽手柄 */
   height: 100%;
   padding: 6px; /* 给圆角阴影留出绘制空间（窗口 transparent） */
   user-select: none;
@@ -270,6 +271,25 @@ body::before {
   flex: 0 0 auto;
   color: var(--text-3);
   white-space: nowrap;
+}
+
+/* ---------- R24：右下角尺寸拖拽手柄 ---------- */
+.summary-resize-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  /* 斜纹手柄（悬停加深），不干扰卡片内容（压在 shell 的 6px padding 区） */
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--text-3) 55% 65%, transparent 65% 75%, var(--text-3) 75% 85%, transparent 85%);
+  opacity: 0.35;
+  border-radius: 0 0 8px 0;
+}
+
+.summary-resize-grip:hover {
+  opacity: 0.8;
 }
 
 /* ---------- 加载 / 空 / 失败三态 ---------- */

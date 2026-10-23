@@ -1,7 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "summary",
-  "description": "用量总结浮层窗口能力（最小权限：只用应用自定义命令与 core 事件）",
+  "description": "用量总结浮层窗口能力（最小权限：应用自定义命令 + core 事件 + R24 尺寸调整两项）",
   "windows": ["summary"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-size",
+    "core:window:allow-start-resize-dragging"
+  ]
 }

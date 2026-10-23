@@ -478,13 +478,23 @@ fn position_window(app: &AppHandle) {
         size.width as f64,
         size.height as f64,
     );
+    // R24：浮层尺寸可被用户拖拽调整——定位按当前实际尺寸（物理 → 逻辑），不再是固定常量
+    let logical_size = window
+        .inner_size()
+        .map(|s| {
+            (
+                s.width as f64 / monitor.scale_factor(),
+                s.height as f64 / monitor.scale_factor(),
+            )
+        })
+        .unwrap_or((POPUP_WIDTH, POPUP_HEIGHT));
     let (x, y) = popup_position(
         icon,
         cursor,
         bounds,
         work,
         monitor.scale_factor(),
-        (POPUP_WIDTH, POPUP_HEIGHT),
+        logical_size,
     );
     let _ = window.set_position(LogicalPosition::new(x, y));
 }

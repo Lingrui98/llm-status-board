@@ -28,6 +28,8 @@ interface Props {
   /** 指针进入/离开浮层（用于取消/重建后端的待隐藏定时器） */
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
+  /** R24：按下右下角拖拽手柄 → 开始原生尺寸拖拽（无边框窗口的常规做法） */
+  onStartResize?: () => void;
 }
 
 const STATUS_LABEL: Record<SummaryRowStatus, string> = {
@@ -67,7 +69,7 @@ function WindowDetail({ w, mode }: { w: QuotaWindow & { usedPercent: number }; m
   );
 }
 
-export default function SummaryCard({ status, data, onSelectAccount, onPointerEnter, onPointerLeave }: Props) {
+export default function SummaryCard({ status, data, onSelectAccount, onPointerEnter, onPointerLeave, onStartResize }: Props) {
   const refreshText = status === "ready" ? (data?.lastRefreshText ?? "—") : status === "loading" ? "读取中…" : "—";
   const historyText =
     status === "ready" ? (data && data.historyDays > 0 ? `本地历史 ${data.historyDays} 天` : "本地历史随刷新自动积累") : "";
@@ -141,6 +143,16 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
           </>
         )}
       </section>
+      {/* R24：右下角尺寸拖拽手柄（按下即进入原生尺寸拖拽；尺寸由 SummaryPopup 持久化） */}
+      <span
+        className="summary-resize-grip"
+        role="presentation"
+        title="拖拽调整浮层大小"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onStartResize?.();
+        }}
+      />
     </div>
   );
 }
