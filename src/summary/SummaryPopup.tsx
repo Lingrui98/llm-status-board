@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getConfig, getLastResults, getUsageHistory } from "../api";
+import { resolveQuotaDetailDisplay } from "../residentSettings";
 import SummaryCard, { type SummaryStatus } from "./SummaryCard";
 import { buildSummary, type SummaryData } from "./summaryData";
 import { hideSummaryPopup, setSummaryPointerInside, summaryOpenAccount } from "./ipc";
@@ -33,6 +34,8 @@ export default function SummaryPopup() {
           accounts: config.accounts,
           outcomes: outcomes ?? [],
           historyRecords: history?.records ?? [],
+          // R23：限额窗口明细显示方式（缺省 percent；浮层每次显示/轮询都重新读取，开关即时生效）
+          quotaDisplay: resolveQuotaDetailDisplay(config.settings),
         }),
       );
       setStatus("ready");

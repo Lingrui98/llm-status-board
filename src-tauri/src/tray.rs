@@ -1,8 +1,8 @@
 use crate::config;
-use crate::types::{AccountConfig, RefreshOutcome};
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::types::{AccountConfig, QuotaWindow, RefreshOutcome};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
@@ -41,10 +41,14 @@ const MENU_EMPTY: &str = "tray-empty";
 const MENU_MORE: &str = "tray-more";
 /// 账号状态区菜单项 id 前缀：完整 id 为 account:{账号id}，点击后按前缀反解账号 id
 const MENU_ACCOUNT_PREFIX: &str = "account:";
+/// R23：子菜单里「窗口明细行」的 id 前缀（禁用项不产生事件；与账号项前缀区分开，保持契约干净）
+const MENU_WINDOW_PREFIX: &str = "account-window:";
 /// 账号区最多直接展示的账号数，超出折叠为「…其余 N 个」（菜单过高在 Windows 上会出滚动条，体验差）
 const MAX_ACCOUNTS_IN_MENU: usize = 8;
 /// 失败原因在菜单里的最大字符数（超出截断并补省略号）
 const MAX_ERROR_CHARS: usize = 12;
+/// R23：文本配额条格数（已用 `█` / 剩余 `░`）
+const QUOTA_BAR_CELLS: usize = 8;
 
 /// 托盘 tooltip 文案 —— 纯函数，便于单测。
 /// R21：只由「账号数 / 异常数」决定（原「暂停」态随暂停开关一并移除）。
@@ -138,21 +142,142 @@ pub fn tray_status_text(outcome: Option<&RefreshOutcome>) -> String {
     }
 }
 
+/* ---------- R23：额度条与多窗口明细（docs/round-23-plan.md） ---------- */
+
+/// R23：文本配额条（8 格；已用 `█` / 剩余 `░`，按钳制后已用百分比四舍五入到整格）。
+/// 纯函数，便于单测；非有限输入按 0 格处理（正常路径上游已过滤无效窗口，这里是兜底）。
+pub fn quota_bar_text(used_percent: f64) -> String {
+    let clamped = if used_percent.is_finite() {
+        used_percent.clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
+    let used_cells = ((clamped / 100.0) * QUOTA_BAR_CELLS as f64).round() as usize;
+    let mut s = String::with_capacity(QUOTA_BAR_CELLS * 3);
+    for _ in 0..used_cells {
+        s.push('█');
+    }
+    for _ in used_cells..QUOTA_BAR_CELLS {
+        s.push('░');
+    }
+    s
+}
+
+/// R23：限额窗口明细显示方式（设置 `quota_detail_display`；缺省/未知值一律回落 percent）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaDetailMode {
+    /// 百分比条（默认）
+    Percent,
+    /// 原始数字（已用 / 上限，USD）
+    Raw,
+}
+
+/// 解析设置值 → 显示模式（纯函数）：只有精确 "raw" 才进数字模式，其余（含 None/空串/未知）回落 percent
+pub fn quota_detail_mode(raw: Option<&str>) -> QuotaDetailMode {
+    match raw.map(str::trim) {
+        Some("raw") => QuotaDetailMode::Raw,
+        _ => QuotaDetailMode::Percent,
+    }
+}
+
+/// R23：单个窗口的明细行文本（纯函数）。
+/// - percent：`{窗口}  {条} 已用 {N}%`——N 用**真实值**（超限窗口显示 >100，如「已用 100.9%」；
+///   条宽按钳制值渲染满格，事实与图形各司其职）；
+/// - raw：`{窗口}  已用 {A} / 上限 {L} {币种}`；
+/// - raw 但窗口缺金额字段（如 Kimi 的百分比窗口）→ 诚实回落 percent，不留空白。
+pub fn window_detail_line(w: &QuotaWindow, mode: QuotaDetailMode) -> String {
+    let label = w
+        .window
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(crate::primary_metric::DEFAULT_WINDOW_LABEL);
+    let pct = w.used_percent.unwrap_or(0.0);
+    if mode == QuotaDetailMode::Raw {
+        if let (Some(u), Some(l)) = (&w.used_amount, &w.limit_amount) {
+            return format!(
+                "{label}  已用 {} / 上限 {} {}",
+                crate::primary_metric::format_decimal(u.amount),
+                crate::primary_metric::format_decimal(l.amount),
+                u.currency
+            );
+        }
+    }
+    format!(
+        "{label}  {} 已用 {}%",
+        quota_bar_text(pct),
+        crate::primary_metric::trim_number_text(pct)
+    )
+}
+
+/// R23：账号主行文本（纯函数，可单测）。
+/// - 无有效窗口 / 失败 / 未刷新：`名称    {主指标}`（R20 规范串，原样）；
+/// - 有窗口 + percent + 配额主指标：`名称    {条} {主指标}`（条 = 最紧窗口已用程度）；
+/// - 有窗口 + percent + 余额主指标（窗口未成为主指标）：主行不加条，避免「条 + 金额」无标注混排；
+/// - raw 且最紧窗口带金额字段：`名称    {窗口明细数字行}`；raw 无金额 → 回落 percent 形态。
+pub fn account_line_text(name: &str, outcome: Option<&RefreshOutcome>, mode: QuotaDetailMode) -> String {
+    let status = tray_status_text(outcome);
+    let Some(info) = outcome.and_then(|o| o.info.as_ref()) else {
+        return format!("{name}    {status}");
+    };
+    let Some(tightest) = crate::primary_metric::tightest_window(&info.quota_windows) else {
+        return format!("{name}    {status}");
+    };
+    if mode == QuotaDetailMode::Raw && tightest.used_amount.is_some() && tightest.limit_amount.is_some() {
+        return format!("{name}    {}", window_detail_line(tightest, mode));
+    }
+    let is_quota_primary = matches!(
+        crate::primary_metric::pick_primary_metric(info),
+        crate::primary_metric::PrimaryMetric::Quota { .. }
+    );
+    if is_quota_primary {
+        format!(
+            "{name}    {} {}",
+            quota_bar_text(tightest.used_percent.unwrap_or(0.0)),
+            status
+        )
+    } else {
+        format!("{name}    {status}")
+    }
+}
+
 /// 账号菜单项 id：account:{账号id}。每次重建保持稳定，on_menu_event 按前缀反解
 fn account_menu_id(account_id: &str) -> String {
     format!("{MENU_ACCOUNT_PREFIX}{account_id}")
 }
 
-/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）。
-/// 读取失败均降级为空——托盘必须总能建出来，不能因文件问题拖垮启动
-fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>) {
-    let enabled = config::load(app)
-        .map(|cfg| cfg.accounts.into_iter().filter(|a| a.enabled).collect())
+/// R23：账号区条目 —— 单行项（0/1 个有效窗口）或带明细的子菜单（≥2 个有效窗口）
+enum AccountEntry {
+    Item(MenuItem<tauri::Wry>),
+    Sub(Submenu<tauri::Wry>),
+}
+
+impl AccountEntry {
+    fn as_menu_item(&self) -> &dyn IsMenuItem<tauri::Wry> {
+        match self {
+            AccountEntry::Item(i) => i,
+            AccountEntry::Sub(s) => s,
+        }
+    }
+}
+
+/// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）
+/// + R23 限额明细显示模式（config.json settings）。
+/// 读取失败均降级为空/默认——托盘必须总能建出来，不能因文件问题拖垮启动
+fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>, QuotaDetailMode) {
+    let cfg = config::load(app).ok();
+    let enabled: Vec<AccountConfig> = cfg
+        .as_ref()
+        .map(|c| c.accounts.iter().filter(|a| a.enabled).cloned().collect())
         .unwrap_or_default();
+    let mode = quota_detail_mode(
+        cfg.as_ref()
+            .and_then(|c| c.settings.quota_detail_display.as_deref()),
+    );
     let outcomes = config::results_file_path(app)
         .and_then(|p| config::load_results(&p))
         .unwrap_or_default();
-    (enabled, outcomes)
+    (enabled, outcomes, mode)
 }
 
 /// 构建托盘菜单：常规操作区（显示看板/立即刷新/打开设置）/ 账号状态区 / 退出。
@@ -170,48 +295,86 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
     )?;
 
     // 账号状态区：按 config 的启用账号顺序，逐个配上 results.json 里的状态文本
-    let (enabled, outcomes) = load_tray_data(app);
+    let (enabled, outcomes, detail_mode) = load_tray_data(app);
 
     let settings_item = MenuItem::with_id(app, MENU_OPEN_SETTINGS, "打开设置", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
 
-    let mut account_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
+    let mut account_entries: Vec<AccountEntry> = Vec::new();
     if !enabled.is_empty() {
         if outcomes.is_empty() {
             // 从未刷新过：单行占位提示（不可点击）
-            account_items.push(MenuItem::with_id(
+            account_entries.push(AccountEntry::Item(MenuItem::with_id(
                 app,
                 MENU_EMPTY,
                 "暂无数据，点击立即刷新",
                 false,
                 None::<&str>,
-            )?);
+            )?));
         } else {
             for acc in enabled.iter().take(MAX_ACCOUNTS_IN_MENU) {
-                let status = tray_status_text(outcomes.iter().find(|o| o.account_id == acc.id));
-                account_items.push(MenuItem::with_id(
-                    app,
-                    account_menu_id(&acc.id),
-                    format!("{}    {}", acc.name, status),
-                    true,
-                    None::<&str>,
-                )?);
+                let outcome = outcomes.iter().find(|o| o.account_id == acc.id);
+                let main_text = account_line_text(&acc.name, outcome, detail_mode);
+                let windows: Vec<&QuotaWindow> = outcome
+                    .and_then(|o| o.info.as_ref())
+                    .map(|i| crate::primary_metric::valid_windows(&i.quota_windows))
+                    .unwrap_or_default();
+
+                if windows.len() >= 2 {
+                    // R23：多窗口账号 → 子菜单（主行 = 最紧窗口摘要；子项 = 每窗口一行明细（禁用）
+                    // + 分隔 + 「打开详情」），不占主菜单高度
+                    let mut child_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
+                    for (idx, w) in windows.iter().enumerate() {
+                        child_items.push(MenuItem::with_id(
+                            app,
+                            format!("{MENU_WINDOW_PREFIX}{}:{idx}", acc.id),
+                            window_detail_line(w, detail_mode),
+                            false,
+                            None::<&str>,
+                        )?);
+                    }
+                    let sep = PredefinedMenuItem::separator(app)?;
+                    let open_item =
+                        MenuItem::with_id(app, account_menu_id(&acc.id), "打开详情", true, None::<&str>)?;
+                    let mut refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
+                    for item in &child_items {
+                        refs.push(item);
+                    }
+                    refs.push(&sep);
+                    refs.push(&open_item);
+                    let sub = Submenu::with_id_and_items(
+                        app,
+                        format!("{MENU_ACCOUNT_PREFIX}{}:sub", acc.id),
+                        main_text,
+                        true,
+                        &refs,
+                    )?;
+                    account_entries.push(AccountEntry::Sub(sub));
+                } else {
+                    account_entries.push(AccountEntry::Item(MenuItem::with_id(
+                        app,
+                        account_menu_id(&acc.id),
+                        main_text,
+                        true,
+                        None::<&str>,
+                    )?));
+                }
             }
             if enabled.len() > MAX_ACCOUNTS_IN_MENU {
-                account_items.push(MenuItem::with_id(
+                account_entries.push(AccountEntry::Item(MenuItem::with_id(
                     app,
                     MENU_MORE,
                     format!("…其余 {} 个", enabled.len() - MAX_ACCOUNTS_IN_MENU),
                     false,
                     None::<&str>,
-                )?);
+                )?));
             }
         }
     }
 
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    if account_items.is_empty() {
+    if account_entries.is_empty() {
         // 无启用账号：不显示账号区
         Menu::with_items(
             app,
@@ -220,8 +383,8 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
     } else {
         let mut items: Vec<&dyn IsMenuItem<tauri::Wry>> =
             vec![&show_item, &refresh_item, &settings_item, &sep1];
-        for item in &account_items {
-            items.push(item);
+        for entry in &account_entries {
+            items.push(entry.as_menu_item());
         }
         items.push(&sep2);
         items.push(&quit_item);
@@ -232,12 +395,23 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
 /// 重建托盘菜单并替换到托盘图标上（启动 / 刷新开始 / 刷新结束时调用）。
 /// 菜单项 id 保持稳定（account:{账号id}），旧菜单随 set_menu 整体替换、由 Tauri 释放，不会泄漏
 fn rebuild_menu(app: &AppHandle, refreshing: bool) {
+    MENU_REFRESHING.store(refreshing, Ordering::SeqCst);
     if let Ok(menu) = build_menu(app, refreshing) {
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
             // 替换失败不致命：保留旧菜单（对齐代码库「非关键失败静默降级」的风格）
             let _ = tray.set_menu(Some(menu));
         }
     }
+}
+
+/// R23：菜单的「刷新中」置灰态记录。原重建入口（点击/收尾）自带参数不存在漂移；
+/// 新增的 save_config 钩子需要读到当前真实态，避免设置保存把「刷新中…」提前恢复成可点
+static MENU_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+/// R23：设置保存后立即重建菜单（配额显示模式等托盘相关设置即时生效），
+/// 并保持「刷新中」置灰态（由 `MENU_REFRESHING` 供值）
+pub(crate) fn rebuild_menu_now(app: &AppHandle) {
+    rebuild_menu(app, MENU_REFRESHING.load(Ordering::SeqCst));
 }
 
 /// 「立即刷新」菜单项的（文案, 是否可点击）——纯函数，便于单测（R21：刷新中置灰）
@@ -263,7 +437,7 @@ fn update_tooltip(app: &AppHandle, outcomes: &[RefreshOutcome]) {
 /// 刷新账号状态区与 tooltip。**不推进代次**（由调用方负责）。
 fn restore_tray_after_refresh(app: &AppHandle) {
     rebuild_menu(app, false);
-    let (_, outcomes) = load_tray_data(app);
+    let (_, outcomes, _) = load_tray_data(app);
     update_tooltip(app, &outcomes);
 }
 
@@ -477,16 +651,19 @@ mod tests {
                     window: Some("5h".into()),
                     used_percent: Some(20.0),
                     resets_at: None,
+                    ..Default::default()
                 },
                 QuotaWindow {
                     window: Some("7d".into()),
                     used_percent: Some(35.6),
                     resets_at: None,
+                    ..Default::default()
                 },
                 QuotaWindow {
                     window: Some("月配额".into()),
                     used_percent: None,
                     resets_at: None,
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -739,6 +916,7 @@ mod tests {
                                 window: window.map(String::from),
                                 used_percent,
                                 resets_at: None,
+                                ..Default::default()
                             })
                             .collect(),
                         ..Default::default()
@@ -844,5 +1022,130 @@ mod tests {
         }
         assert_eq!(restores, 1, "恢复必须恰好一次（幂等）");
         assert_eq!(epoch, 2, "恢复即认领，代次前进");
+    }
+
+    // ---------- R23：额度条与多窗口明细（docs/round-23-plan.md） ----------
+
+    /// 文本配额条：8 格、已用 █ / 剩余 ░、四舍五入到整格；越界钳制（>100 满格、<0 空格、NaN 空格）
+    #[test]
+    fn quota_bar_text_cells_and_clamping() {
+        assert_eq!(quota_bar_text(0.0), "░░░░░░░░");
+        assert_eq!(quota_bar_text(50.0), "████░░░░");
+        assert_eq!(quota_bar_text(100.0), "████████");
+        // 四舍五入：12.5% = 1 格；6%（0.48 格）→ 0 格；7%（0.56 格）→ 1 格
+        assert_eq!(quota_bar_text(12.5), "█░░░░░░░");
+        assert_eq!(quota_bar_text(6.0), "░░░░░░░░");
+        assert_eq!(quota_bar_text(7.0), "█░░░░░░░");
+        // 钳制：超限满格、负值/NaN 空格
+        assert_eq!(quota_bar_text(150.0), "████████");
+        assert_eq!(quota_bar_text(-5.0), "░░░░░░░░");
+        assert_eq!(quota_bar_text(f64::NAN), "░░░░░░░░");
+    }
+
+    /// 显示模式解析：仅精确 "raw" 进数字模式；None/空串/未知值一律回落 percent
+    #[test]
+    fn quota_detail_mode_parse_with_fallback() {
+        assert_eq!(quota_detail_mode(Some("raw")), QuotaDetailMode::Raw);
+        assert_eq!(quota_detail_mode(None), QuotaDetailMode::Percent);
+        assert_eq!(quota_detail_mode(Some("percent")), QuotaDetailMode::Percent);
+        assert_eq!(quota_detail_mode(Some(" raw ")), QuotaDetailMode::Raw);
+        assert_eq!(quota_detail_mode(Some("RAW")), QuotaDetailMode::Percent, "大小写不敏感刻意不做（与设置白名单一致）");
+        assert_eq!(quota_detail_mode(Some("")), QuotaDetailMode::Percent);
+        assert_eq!(quota_detail_mode(Some("bogus")), QuotaDetailMode::Percent);
+    }
+
+    fn window(window: &str, used_percent: Option<f64>, amounts: Option<(f64, f64)>) -> QuotaWindow {
+        let (used_amount, limit_amount) = match amounts {
+            Some((u, l)) => (
+                Some(Money { amount: u, currency: "USD".into() }),
+                Some(Money { amount: l, currency: "USD".into() }),
+            ),
+            None => (None, None),
+        };
+        QuotaWindow {
+            window: Some(window.into()),
+            used_percent,
+            resets_at: None,
+            used_amount,
+            limit_amount,
+        }
+    }
+
+    /// 窗口明细行：percent 带条 + 真实已用值（超限 >100 可见）；raw 数字行；raw 无金额回落 percent
+    #[test]
+    fn window_detail_line_both_modes_and_fallback() {
+        let kimi = window("5h", Some(26.86), None);
+        assert_eq!(
+            window_detail_line(&kimi, QuotaDetailMode::Percent),
+            "5h  ██░░░░░░ 已用 26.86%"
+        );
+        // raw 但无金额 → 回落 percent（不留空白）
+        assert_eq!(
+            window_detail_line(&kimi, QuotaDetailMode::Raw),
+            "5h  ██░░░░░░ 已用 26.86%"
+        );
+
+        // 超限：202/200 = 101%（取整十避免浮点 ±1 ulp 影响逐字断言；超限事实必须可见）
+        let bosc_day = window("1d", Some(101.0), Some((202.0, 200.0)));
+        assert_eq!(
+            window_detail_line(&bosc_day, QuotaDetailMode::Percent),
+            "1d  ████████ 已用 101%",
+            "超限显示真实值，条满格"
+        );
+        assert_eq!(
+            window_detail_line(&bosc_day, QuotaDetailMode::Raw),
+            "1d  已用 202.00 / 上限 200.00 USD"
+        );
+
+        // 窗口名缺失 → 主指标同款兜底
+        let anon = window("", Some(50.0), None);
+        assert_eq!(
+            window_detail_line(&anon, QuotaDetailMode::Percent),
+            "当前窗口  ████░░░░ 已用 50%"
+        );
+    }
+
+    /// 账号主行：无窗口原样；配额主指标带条；余额主指标不加条；raw 有金额换数字行、无金额回落
+    #[test]
+    fn account_line_text_rules() {
+        // 无窗口 / 未刷新：原样
+        assert_eq!(account_line_text("A", None, QuotaDetailMode::Percent), "A    —");
+
+        // 配额主指标（余额 null + 窗口）→ 带条
+        let quota = ok_outcome(AccountInfo {
+            quota_windows: vec![window("7d", Some(35.6), None)],
+            ..Default::default()
+        });
+        assert_eq!(
+            account_line_text("Model", Some(&quota), QuotaDetailMode::Percent),
+            "Model    ███░░░░░ 剩余 64.4%（7d）"
+        );
+
+        // 余额主指标（余额非 0 + 窗口）→ 主行不加条
+        let paid = ok_outcome(AccountInfo {
+            balance: Some(Money { amount: 12.5, currency: "USD".into() }),
+            quota_windows: vec![window("7d", Some(90.0), None)],
+            ..Default::default()
+        });
+        assert_eq!(
+            account_line_text("Paid", Some(&paid), QuotaDetailMode::Percent),
+            "Paid    12.50 USD"
+        );
+
+        // raw + 数字限额窗口 → 数字行
+        let bosc = ok_outcome(AccountInfo {
+            balance: Some(Money { amount: 0.0, currency: "USD".into() }),
+            quota_windows: vec![window("1d", Some(101.0), Some((202.0, 200.0)))],
+            ..Default::default()
+        });
+        assert_eq!(
+            account_line_text("bosc", Some(&bosc), QuotaDetailMode::Raw),
+            "bosc    1d  已用 202.00 / 上限 200.00 USD"
+        );
+        // raw + 纯百分比窗口（无金额）→ 回落 percent 带条形态
+        assert_eq!(
+            account_line_text("Model", Some(&quota), QuotaDetailMode::Raw),
+            "Model    ███░░░░░ 剩余 64.4%（7d）"
+        );
     }
 }

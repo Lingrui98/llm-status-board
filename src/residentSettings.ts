@@ -26,3 +26,8 @@ export function isSystemNotifyEnabled(settings?: Settings | null): boolean {
 export function isCloseToTrayEnabled(settings?: Settings | null): boolean {
   return settings?.closeToTray ?? true;
 }
+
+/** R23：限额窗口明细显示方式（缺省 percent；非 "raw" 一律回落 percent，与 Rust `quota_detail_mode` 一致） */
+export function resolveQuotaDetailDisplay(settings?: Settings | null): "percent" | "raw" {
+  return settings?.quotaDetailDisplay === "raw" ? "raw" : "percent";
+}

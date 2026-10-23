@@ -14,7 +14,10 @@ pub async fn get_config(app: AppHandle) -> Result<AppConfig, String> {
 pub async fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
     // R14 AC-9 的服务端保障：越界阈值拒绝落盘（前端也有同样的即时校验，这里是兜底）
     crate::types::validate_settings(&config.settings)?;
-    config::save(&app, &config)
+    config::save(&app, &config)?;
+    // R23：配额显示模式等托盘相关设置变更后即时重建菜单（重建失败不阻塞保存结果）
+    crate::tray::rebuild_menu_now(&app);
+    Ok(())
 }
 
 #[tauri::command]

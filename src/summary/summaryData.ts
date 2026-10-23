@@ -9,6 +9,8 @@ import {
   formatFailureLine,
   formatPrimaryMetricLine,
   pickPrimaryMetric,
+  validQuotaWindows,
+  type QuotaDetailDisplay,
 } from "../primaryMetric";
 import type { AccountConfig, Money, QuotaWindow, RefreshOutcome, UsageRecord } from "../types";
 
@@ -21,6 +23,8 @@ export interface SummaryRow {
   /** 单行规范串（R20 §1，与托盘逐字一致）：失败 `✗ 原因` / 订阅 `剩余 X%（窗口）` / 余额 `金额 币种` / 无数据 `—` */
   valueText: string;
   status: SummaryRowStatus;
+  /** R23：该账号全部有效配额窗口（usedPercent 为有限数字者），用于明细条；无窗口 → 空数组 */
+  windows: (QuotaWindow & { usedPercent: number })[];
 }
 
 export interface SummaryData {
@@ -37,6 +41,8 @@ export interface SummaryData {
   lastRefreshText: string;
   /** 本地用量历史天数（日期去重） */
   historyDays: number;
+  /** R23：限额窗口明细显示方式（百分比条 / 原始数字；缺省 percent） */
+  quotaDisplay: QuotaDetailDisplay;
 }
 
 /** 异常原因截断长度（规格 §4：截断 24 字符） */
@@ -117,12 +123,15 @@ export function summaryRowText(outcome?: RefreshOutcome | null): string {
  * - 行 = 启用账号（AC-11）；禁用账号不出行；
  * - 合计只统计这些启用账号的刷新结果（与「监控账号数」同口径）；
  * - 最后刷新时间取这些结果里最新的 fetchedAt。
+ * - R23：行携带全部有效配额窗口（明细条数据）；quotaDisplay 缺省 percent。
  */
 export function buildSummary(input: {
   accounts: readonly AccountConfig[];
   outcomes: readonly RefreshOutcome[];
   historyRecords: readonly UsageRecord[];
   now?: number;
+  /** R23：限额窗口明细显示方式（缺省 percent） */
+  quotaDisplay?: QuotaDetailDisplay;
 }): SummaryData {
   const { accounts, outcomes, historyRecords } = input;
   const now = input.now ?? Date.now();
@@ -157,6 +166,9 @@ export function buildSummary(input: {
     // R20：行文本统一走规范串出口（失败 → 订阅/余额 → 无数据），不再用「余额优先 + 已用百分比」
     const valueText = summaryRowText(o);
 
+    // R23：透传全部有效窗口（明细条用；判定与过滤的唯一事实来源仍是 primaryMetric）
+    const windows = o?.ok && o.info ? validQuotaWindows(o.info.quotaWindows) : [];
+
     const fetched = o?.info?.fetchedAt;
     if (fetched) {
       const t = new Date(fetched).getTime();
@@ -166,7 +178,7 @@ export function buildSummary(input: {
       }
     }
 
-    return { accountId: acc.id, name: acc.name, valueText, status };
+    return { accountId: acc.id, name: acc.name, valueText, status, windows };
   });
 
   const totals = aggregateBalances(byId.values());
@@ -181,5 +193,6 @@ export function buildSummary(input: {
     rows,
     lastRefreshText: formatLastRefresh(latestIso, now),
     historyDays: countHistoryDays(historyRecords),
+    quotaDisplay: input.quotaDisplay ?? "percent",
   };
 }

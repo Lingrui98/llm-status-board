@@ -32,6 +32,12 @@ export type PrimaryMetric =
 /** 窗口名缺失/空白时的兜底文案（规格 §1.5） */
 export const DEFAULT_WINDOW_LABEL = "当前窗口";
 
+/** 窗口名解析（R23 提取为共享出口）：缺失/空白 → 「当前窗口」；前后端同一规则 */
+export function windowLabel(w?: Pick<QuotaWindow, "window"> | null): string {
+  const raw = typeof w?.window === "string" ? w.window.trim() : "";
+  return raw !== "" ? raw : DEFAULT_WINDOW_LABEL;
+}
+
 /** 无数据（info 为 null，或余额 null 且无有效窗口）的规范串（R20 §1） */
 export const NO_DATA_TEXT = "—";
 
@@ -122,12 +128,12 @@ export function pickPrimaryMetric(info?: AccountInfo | null): PrimaryMetric {
       const usedPercent = clampPercent(tightest.usedPercent);
       const remainingPercent = Number((100 - usedPercent).toFixed(2));
       const remainingText = trimNumberText(remainingPercent);
-      const windowLabel = typeof tightest.window === "string" && tightest.window.trim() !== "" ? tightest.window.trim() : DEFAULT_WINDOW_LABEL;
+      const windowLabelText = windowLabel(tightest);
       const resetsText = resetCountdownText(tightest.resetsAt);
-      const summary = `${windowLabel} 已用 ${trimNumberText(usedPercent)}%，剩余 ${remainingText}%${
+      const summary = `${windowLabelText} 已用 ${trimNumberText(usedPercent)}%，剩余 ${remainingText}%${
         resetsText ? `（${resetsText}）` : ""
       }`;
-      return { kind: "quota", usedPercent, remainingPercent, remainingText, windowLabel, resetsText, summary };
+      return { kind: "quota", usedPercent, remainingPercent, remainingText, windowLabel: windowLabelText, resetsText, summary };
     }
   }
 
@@ -136,6 +142,34 @@ export function pickPrimaryMetric(info?: AccountInfo | null): PrimaryMetric {
 }
 
 /* ============================ R20：单行规范串（唯一出口） ============================ */
+
+/* ---- R23：限额窗口明细（浮层/菜单共用口径；与 Rust tray.rs window_detail_line 同源） ---- */
+
+/** 限额窗口明细显示方式（设置项 quotaDetailDisplay；缺省 percent） */
+export type QuotaDetailDisplay = "percent" | "raw";
+
+/** 配额已用百分比 → 语义色级（与 QuotaWindowBars 既有阈值一致：>80 红 / 60–80 琥珀 / 其余绿） */
+export function quotaLevel(usedPercent: number): "ok" | "warn" | "err" {
+  if (usedPercent > 80) return "err";
+  if (usedPercent >= 60) return "warn";
+  return "ok";
+}
+
+/**
+ * 窗口用量文本（不含窗口名与重置倒计时；纯函数）：
+ * - percent：`已用 {N}%`——N 为**真实值**（超限可 >100；钳制只作用于图形宽度，不吃事实）；
+ * - raw 且窗口带金额字段：`已用 {A} / 上限 {L} {币种}`；
+ * - raw 但无金额字段（如 Kimi 的纯百分比窗口）→ 诚实回落 percent，不留空白。
+ */
+export function windowUsageText(
+  w: QuotaWindow & { usedPercent: number },
+  mode: QuotaDetailDisplay,
+): string {
+  if (mode === "raw" && w.usedAmount && w.limitAmount) {
+    return `已用 ${formatMoneyAmountPlain(w.usedAmount.amount)} / 上限 ${formatMoneyAmountPlain(w.limitAmount.amount)} ${w.usedAmount.currency}`;
+  }
+  return `已用 ${trimNumberText(w.usedPercent)}%`;
+}
 
 /**
  * 金额小数位（R20 §1，与 Rust format_decimal 规则逐字对齐）：

@@ -166,6 +166,77 @@ describe("SummaryPopup：数据与总览", () => {
     expect(callsOf("hide_summary_popup")).toEqual([]);
   });
 
+  // ---------- R23：配额窗口明细渲染 ----------
+
+  it("多窗口账号渲染全部窗口条（fill=已用）；单窗口账号同样出明细", async () => {
+    mockData(
+      { ...CONFIG, accounts: [account("kimi", "Kimi 订阅")] },
+      [
+        {
+          accountId: "kimi",
+          ok: true,
+          info: {
+            balance: null,
+            quotaWindows: [
+              { window: "5h", usedPercent: 1, resetsAt: null },
+              { window: "7d", usedPercent: 18.5, resetsAt: null },
+            ],
+            extras: [],
+            fetchedAt: new Date().toISOString(),
+          },
+        },
+      ],
+      HISTORY,
+    );
+    render(<SummaryPopup />);
+    await waitFor(() => {
+      // 最紧窗口 = 已用最大的 7d（18.5 > 1）→ 剩余 81.5%
+      expect(screen.getByText("剩余 81.5%（7d）")).toBeTruthy();
+    });
+    const rows = document.querySelectorAll(".summary-window");
+    expect(rows.length).toBe(2);
+    const fills = document.querySelectorAll(".summary-window-fill");
+    expect((fills[0] as HTMLElement).style.width).toBe("1%");
+    expect((fills[1] as HTMLElement).style.width).toBe("18.5%");
+    expect(document.body.textContent).toContain("已用 1%");
+    expect(document.body.textContent).toContain("已用 18.5%");
+  });
+
+  it("raw 模式：数字限额显示「已用 A / 上限 L」，不渲染条；超限真实值可见", async () => {
+    mockData(
+      {
+        ...CONFIG,
+        settings: { autoRefreshSec: 0, refreshOnStart: false, quotaDetailDisplay: "raw" },
+        accounts: [account("bosc", "bosc 基础档")],
+      },
+      [
+        {
+          accountId: "bosc",
+          ok: true,
+          info: {
+            balance: { amount: 0, currency: "USD" },
+            quotaWindows: [
+              {
+                window: "1d",
+                usedPercent: 101,
+                usedAmount: { amount: 202, currency: "USD" },
+                limitAmount: { amount: 200, currency: "USD" },
+              },
+            ],
+            extras: [],
+            fetchedAt: new Date().toISOString(),
+          },
+        },
+      ],
+      HISTORY,
+    );
+    render(<SummaryPopup />);
+    await waitFor(() => {
+      expect(screen.getByText("已用 202.00 / 上限 200.00 USD")).toBeTruthy();
+    });
+    expect(document.querySelectorAll(".summary-window-track").length).toBe(0);
+  });
+
   it("IPC 失败：渲染失败文案，不抛错", async () => {
     mockInvoke.mockImplementation((cmd: string) => (cmd === "get_config" ? Promise.reject("boom") : Promise.resolve(undefined as never)));
     render(<SummaryPopup />);

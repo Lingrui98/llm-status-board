@@ -90,6 +90,9 @@ export interface Settings {
   /* ---- R22 一键更新 ---- */
   /** R22：启动时自动检查更新（静默，只提示不下载）；缺省（undefined/null）视为 true */
   autoCheckUpdate?: boolean | null;
+  /* ---- R23 托盘额度可视化 ---- */
+  /** R23：限额窗口明细显示方式；缺省（undefined/null）视为 "percent"（原始数字 = "raw"） */
+  quotaDetailDisplay?: "percent" | "raw" | null;
 }
 
 export interface AppConfig {
@@ -116,11 +119,17 @@ export interface UsagePoint {
   latencyMs?: number | null;
 }
 
-/** 配额窗口（5h / 7d / 月度等） */
+/** 配额窗口（5h / 1d / 7d / 1m / 月度等） */
 export interface QuotaWindow {
   window?: string | null;
+  /** 已用百分比（0-100；R23 起数字限额转换保留真实值，可 >100 表示超限——钳制是显示层职责） */
   usedPercent?: number | null;
+  /** 重置时间（ISO8601；未知为 null，不编造） */
   resetsAt?: string | null;
+  /** R23：数字限额窗口的原始已用量（sub2api 1d/7d/1m；纯百分比窗口为 null） */
+  usedAmount?: Money | null;
+  /** R23：数字限额窗口的原始上限（limit>0 才产出窗口，故存在即正数） */
+  limitAmount?: Money | null;
 }
 
 /** 余额与总额度历史快照（旧记录没有 total） */

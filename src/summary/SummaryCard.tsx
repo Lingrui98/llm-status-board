@@ -1,9 +1,19 @@
 // R18 托盘悬停「用量总结」浮层 —— 纯展示卡。
 // 与数据获取解耦：三态（loading / error / empty / ready）由外部注入，便于注水单测。
 // 版式：头部（标题 + 最后刷新）→ 总览 2×2 数字（复用 StatTile，去第二层边框）→
-// 账号行（状态点 + 名称/异常摘要 + 数值，区段内滚动）→ 本地历史天数。
+// 账号行（状态点 + 名称/异常摘要 + 数值 + R23 配额窗口明细条，区段内滚动）→ 本地历史天数。
 
 import StatTile from "../components/ui/StatTile";
+import { formatTimeUntil } from "../format";
+import {
+  clampPercent,
+  quotaLevel,
+  trimNumberText,
+  windowLabel,
+  windowUsageText,
+  type QuotaDetailDisplay,
+} from "../primaryMetric";
+import type { QuotaWindow } from "../types";
 import type { SummaryData } from "./summaryData";
 import type { SummaryRowStatus } from "./summaryData";
 
@@ -25,6 +35,37 @@ const STATUS_LABEL: Record<SummaryRowStatus, string> = {
   err: "异常",
   idle: "未刷新",
 };
+
+/** R23：单个配额窗口的明细行 —— percent：直条（fill=已用，主卡同色系）+ 已用% + 重置倒计时；raw：纯数字文本 */
+function WindowDetail({ w, mode }: { w: QuotaWindow & { usedPercent: number }; mode: QuotaDetailDisplay }) {
+  const label = windowLabel(w);
+  // 重置倒计时：缺失/已过期不显示（数据层未知时不编造）
+  const reset = w.resetsAt ? formatTimeUntil(w.resetsAt) : null;
+  const resetText = reset && reset !== "已到期" && reset !== "—" ? `${reset}重置` : null;
+
+  if (mode === "raw" && w.usedAmount && w.limitAmount) {
+    return (
+      <span className="summary-window">
+        <span className="summary-window-label">{label}</span>
+        <span className="summary-window-text">{windowUsageText(w, mode)}</span>
+        {resetText && <span className="summary-window-reset">{resetText}</span>}
+      </span>
+    );
+  }
+
+  const pct = clampPercent(w.usedPercent);
+  const level = quotaLevel(pct);
+  return (
+    <span className="summary-window">
+      <span className="summary-window-label">{label}</span>
+      <span className="summary-window-track" aria-hidden="true">
+        <span className={`summary-window-fill ${level}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className={`summary-window-text ${level}`}>已用 {trimNumberText(w.usedPercent)}%</span>
+      {resetText && <span className="summary-window-reset">{resetText}</span>}
+    </span>
+  );
+}
 
 export default function SummaryCard({ status, data, onSelectAccount, onPointerEnter, onPointerLeave }: Props) {
   const refreshText = status === "ready" ? (data?.lastRefreshText ?? "—") : status === "loading" ? "读取中…" : "—";
@@ -69,18 +110,28 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
                 <li key={row.accountId}>
                   <button
                     type="button"
-                    className="summary-row"
+                    className={`summary-row${row.windows.length > 0 ? " with-windows" : ""}`}
                     onClick={() => onSelectAccount?.(row.accountId)}
                     title={`查看 ${row.name} 详情`}
                   >
-                    <span className={`summary-dot ${row.status}`} aria-hidden="true" />
-                    <span className="sr-only">{STATUS_LABEL[row.status]}</span>
-                    <span className="summary-row-main">
-                      <span className="summary-row-name" title={row.name}>
-                        {row.name}
+                    <span className="summary-row-line">
+                      <span className={`summary-dot ${row.status}`} aria-hidden="true" />
+                      <span className="sr-only">{STATUS_LABEL[row.status]}</span>
+                      <span className="summary-row-main">
+                        <span className="summary-row-name" title={row.name}>
+                          {row.name}
+                        </span>
                       </span>
+                      <span className="summary-row-value">{row.valueText}</span>
                     </span>
-                    <span className="summary-row-value">{row.valueText}</span>
+                    {/* R23：配额窗口明细（每个有效窗口一行）；高度随窗口数增长，行区已有滚动 */}
+                    {row.windows.length > 0 && (
+                      <span className="summary-windows">
+                        {row.windows.map((w, i) => (
+                          <WindowDetail key={`${windowLabel(w)}-${i}`} w={w} mode={data.quotaDisplay} />
+                        ))}
+                      </span>
+                    )}
                   </button>
                 </li>
               ))}

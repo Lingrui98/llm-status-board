@@ -31,7 +31,7 @@ pub enum PrimaryMetric {
 }
 
 /// 钳制到 `[0,100]`；非有限值按 `0`（与前端 `clampPercent` 一致）
-fn clamp_percent(pct: f64) -> f64 {
+pub(crate) fn clamp_percent(pct: f64) -> f64 {
     if pct.is_finite() {
         pct.clamp(0.0, 100.0)
     } else {
@@ -50,7 +50,7 @@ fn round2(v: f64) -> f64 {
 
 /// 去尾 0 的数字文本（最多 2 位）：`100`→`100`、`73.14`→`73.14`、`73.1`→`73.1`、`0`→`0`
 /// （与前端 `trimNumberText` 一致）
-fn trim_number_text(v: f64) -> String {
+pub(crate) fn trim_number_text(v: f64) -> String {
     if !v.is_finite() || v == 0.0 {
         return "0".to_string();
     }
@@ -68,7 +68,7 @@ fn trim_number_text(v: f64) -> String {
 
 /// 金额小数位（规格 §1）：`|v|≥1`→2 位、`0.01≤|v|<1`→4 位、`0<|v|<0.01`→6 位、**`0`→`0.00`**。
 /// 非有限值（JSON 不可能出现）用「—」，不产出 NaN。
-fn format_decimal(v: f64) -> String {
+pub(crate) fn format_decimal(v: f64) -> String {
     if !v.is_finite() {
         return "—".to_string();
     }
@@ -86,7 +86,7 @@ fn format_decimal(v: f64) -> String {
 }
 
 /// 有效窗口 = `used_percent` 为**有限**数字者（`null`/`NaN` 一律忽略该窗口）
-fn valid_windows(windows: &[QuotaWindow]) -> Vec<&QuotaWindow> {
+pub(crate) fn valid_windows(windows: &[QuotaWindow]) -> Vec<&QuotaWindow> {
     windows
         .iter()
         .filter(|w| w.used_percent.is_some_and(f64::is_finite))
@@ -94,7 +94,7 @@ fn valid_windows(windows: &[QuotaWindow]) -> Vec<&QuotaWindow> {
 }
 
 /// 最紧窗口 = 钳制后 `used_percent` 最大者；同值取**先出现**者（与前端 `tightestWindow` 一致）
-fn tightest_window(windows: &[QuotaWindow]) -> Option<&QuotaWindow> {
+pub(crate) fn tightest_window(windows: &[QuotaWindow]) -> Option<&QuotaWindow> {
     let mut best: Option<&QuotaWindow> = None;
     let mut best_pct = f64::NEG_INFINITY;
     for w in valid_windows(windows) {
@@ -173,6 +173,7 @@ mod tests {
                     window: window.map(String::from),
                     used_percent,
                     resets_at: None,
+                    ..Default::default()
                 })
                 .collect(),
             ..Default::default()

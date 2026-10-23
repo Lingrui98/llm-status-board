@@ -185,3 +185,49 @@ describe("summaryData：视图模型", () => {
     expect(view.historyDays).toBe(0);
   });
 });
+
+// ---------- R23：配额窗口明细透传与显示模式 ----------
+
+describe("R23：窗口明细透传", () => {
+  const quotaOutcome = (id: string, windows: { window: string; usedPercent: number | null }[]): RefreshOutcome => ({
+    accountId: id,
+    ok: true,
+    info: {
+      balance: null,
+      quotaWindows: windows.map((w) => ({ window: w.window, usedPercent: w.usedPercent })),
+      extras: [],
+      fetchedAt: "2026-06-15T11:58:00.000Z",
+    },
+  });
+
+  it("行携带全部有效窗口（不只最紧）；null 窗口被过滤；失败/未刷新行不带窗口", () => {
+    const view = buildSummary({
+      accounts: [account("a1", "Kimi"), account("a2", "失败账号"), account("a3", "未刷新")],
+      outcomes: [
+        quotaOutcome("a1", [
+          { window: "5h", usedPercent: 26.86 },
+          { window: "7d", usedPercent: 12.36 },
+          { window: "月度", usedPercent: null },
+        ]),
+        { accountId: "a2", ok: false, error: "boom", info: null },
+      ],
+      historyRecords: [],
+      now: NOW,
+    });
+    const kimi = view.rows.find((r) => r.accountId === "a1");
+    expect(kimi?.windows.map((w) => w.window)).toEqual(["5h", "7d"]);
+    expect(view.rows.find((r) => r.accountId === "a2")?.windows).toEqual([]);
+    expect(view.rows.find((r) => r.accountId === "a3")?.windows).toEqual([]);
+  });
+
+  it("quotaDisplay 缺省 percent；显式 raw 透传进视图模型", () => {
+    const base = {
+      accounts: [account("a1", "Kimi")],
+      outcomes: [quotaOutcome("a1", [{ window: "5h", usedPercent: 26.86 }])],
+      historyRecords: [],
+      now: NOW,
+    };
+    expect(buildSummary(base).quotaDisplay).toBe("percent");
+    expect(buildSummary({ ...base, quotaDisplay: "raw" }).quotaDisplay).toBe("raw");
+  });
+});

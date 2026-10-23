@@ -4,9 +4,9 @@ import { PROVIDER_KINDS, DEFAULT_BASE_URLS, newAccountId } from "../types";
 import { moveAccount } from "../configMerge";
 import AccountForm from "./AccountForm";
 import ThresholdSlider from "./ui/ThresholdSlider";
-import { InlineNotice, SettingRow } from "./ui";
+import { InlineNotice, SegmentedControl, SettingRow } from "./ui";
 import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notifications";
-import { isSystemNotifyEnabled } from "../residentSettings";
+import { isSystemNotifyEnabled, resolveQuotaDetailDisplay } from "../residentSettings";
 import { NOTIFY_PERMISSION_RETRY_LABEL, notificationManualPath } from "../pluginRuntime";
 import { exportUsageCsv } from "../exportReport";
 import { formatProgress, isUpdateBusy, shortUpdateDate, type UpdateState } from "../updater";
@@ -79,6 +79,10 @@ export function validateSettings(settings: Settings): { ok: true } | { ok: false
   const retryMax = settings.refreshRetryMax;
   if (retryMax != null && (!Number.isFinite(retryMax) || retryMax < 0 || retryMax > 3 || !Number.isInteger(retryMax)))
     return { ok: false, message: "自动重试次数需为 0–3 的整数" };
+  // R23：限额窗口明细显示方式白名单（Rust 侧 validate_settings 同步）
+  const qdd = settings.quotaDetailDisplay;
+  if (qdd != null && qdd !== "percent" && qdd !== "raw")
+    return { ok: false, message: "限额窗口明细显示方式只支持 percent / raw" };
   return { ok: true };
 }
 
@@ -478,6 +482,24 @@ export default function SettingsView({
             placeholder="http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空使用环境代理（如有）"
           />
         </label>
+        {/* R23：限额窗口明细显示方式（托盘菜单 + 悬停浮层共用；保存后托盘菜单即时重建） */}
+        <div className="set-rows">
+          <SettingRow
+            label="限额窗口明细显示"
+            hint="配额窗口（5h / 7d / 1d / 1m 等）在托盘菜单与悬停浮层里的呈现：百分比条 = 已用占比直条；原始数字 = 已用 / 上限金额（无金额数据的窗口仍显示百分比）"
+            control={
+              <SegmentedControl
+                options={[
+                  { value: "percent", label: "百分比条" },
+                  { value: "raw", label: "原始数字" },
+                ]}
+                value={resolveQuotaDetailDisplay(config.settings)}
+                onChange={(v) => updateSettings({ quotaDetailDisplay: v })}
+                ariaLabel="限额窗口明细显示方式"
+              />
+            }
+          />
+        </div>
         <p className="muted small">
           访问 OpenAI 等境外官方接口通常需要代理；中转站和国内厂商一般直连即可。
           API Key / Token 只保存在本机配置文件中，不会上传到任何服务器（查询请求直连各提供商）。

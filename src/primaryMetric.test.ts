@@ -6,11 +6,14 @@ import {
   DEFAULT_WINDOW_LABEL,
   clampPercent,
   pickPrimaryMetric,
+  quotaLevel,
   readBalanceCredits,
   resetCountdownText,
   tightestWindow,
   trimNumberText,
   validQuotaWindows,
+  windowLabel,
+  windowUsageText,
 } from "./primaryMetric";
 import type { AccountInfo } from "./types";
 
@@ -158,5 +161,49 @@ describe("primaryMetric：AC-3/AC-5 余额分支与降级边界", () => {
       info({ balance: null, quotaWindows: [{ window: "5h", usedPercent: 50 }, { window: "7d", usedPercent: 50 }] }),
     );
     if (metric.kind === "quota") expect(metric.windowLabel).toBe("5h");
+  });
+});
+
+// ---------- R23：限额窗口明细（浮层/菜单共用口径） ----------
+
+describe("R23：windowLabel / quotaLevel / windowUsageText", () => {
+  it("窗口名解析：缺失/空白 → 「当前窗口」", () => {
+    expect(windowLabel({ window: "5h" })).toBe("5h");
+    expect(windowLabel({ window: "  " })).toBe("当前窗口");
+    expect(windowLabel(null)).toBe("当前窗口");
+    expect(windowLabel(undefined)).toBe("当前窗口");
+  });
+
+  it("色级阈值与主卡一致：>80 红 / 60–80 琥珀 / 其余绿", () => {
+    expect(quotaLevel(100.9)).toBe("err"); // 超限也算红
+    expect(quotaLevel(81)).toBe("err");
+    expect(quotaLevel(80)).toBe("warn");
+    expect(quotaLevel(60)).toBe("warn");
+    expect(quotaLevel(59.9)).toBe("ok");
+  });
+
+  it("percent 模式：已用真实值（超限 >100 不被钳制吃掉）", () => {
+    const w = { window: "1d", usedPercent: 101 };
+    expect(windowUsageText(w, "percent")).toBe("已用 101%");
+    expect(windowUsageText({ window: "5h", usedPercent: 26.86 }, "percent")).toBe("已用 26.86%");
+  });
+
+  it("raw 模式：有金额 → 数字行；无金额 → 诚实回落 percent", () => {
+    const bosc = {
+      window: "1d",
+      usedPercent: 101,
+      usedAmount: { amount: 202, currency: "USD" },
+      limitAmount: { amount: 200, currency: "USD" },
+    };
+    expect(windowUsageText(bosc, "raw")).toBe("已用 202.00 / 上限 200.00 USD");
+    // 无金额字段（Kimi 纯百分比窗口）→ 回落
+    expect(windowUsageText({ window: "5h", usedPercent: 26.86 }, "raw")).toBe("已用 26.86%");
+    // 只有半个金额对 → 也回落（不产出残缺的数字行）
+    expect(
+      windowUsageText(
+        { window: "1d", usedPercent: 50, usedAmount: { amount: 5, currency: "USD" } },
+        "raw",
+      ),
+    ).toBe("已用 50%");
   });
 });

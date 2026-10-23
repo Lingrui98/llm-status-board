@@ -9,7 +9,7 @@ pub struct KeyValue {
     pub value: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Money {
     pub amount: f64,
@@ -164,6 +164,9 @@ pub struct Settings {
     // ---- R22 一键更新 ----
     /// 启动时是否静默检查更新（只提示不下载）；None 视为 true
     pub auto_check_update: Option<bool>,
+    // ---- R23 托盘额度可视化 ----
+    /// 限额窗口明细显示方式："percent"（默认，百分比条）/ "raw"（原始数字）；None 视为 percent
+    pub quota_detail_display: Option<String>,
 }
 
 impl Default for Settings {
@@ -182,6 +185,7 @@ impl Default for Settings {
             refresh_retry_enabled: None,
             refresh_retry_max: None,
             auto_check_update: None,
+            quota_detail_display: None,
         }
     }
 }
@@ -230,6 +234,14 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
         let (min, max) = REFRESH_RETRY_MAX_RANGE;
         if v < min || v > max {
             return Err(format!("刷新重试次数必须在 {min}–{max} 之间，当前为 {v}"));
+        }
+    }
+    // R23：限额窗口明细显示方式白名单（None = 默认 percent）
+    if let Some(v) = settings.quota_detail_display.as_deref() {
+        if v != "percent" && v != "raw" {
+            return Err(format!(
+                "限额窗口明细显示方式只支持 percent / raw，当前为 {v:?}"
+            ));
         }
     }
     Ok(())
@@ -299,10 +311,15 @@ pub struct UsagePoint {
 pub struct QuotaWindow {
     /// 窗口标识（five_hour / seven_day / 5h / 1d / 7d…）
     pub window: Option<String>,
-    /// 已用百分比（0-100）
+    /// 已用百分比（0-100；R23 起 sub2api 数字限额转换保留真实值，可 >100 表示超限——
+    /// 钳制是显示层职责，数据层不吞「已超限」这个事实）
     pub used_percent: Option<f64>,
     /// 重置时间（ISO8601）
     pub resets_at: Option<String>,
+    /// R23：数字限额窗口的原始已用量（sub2api 1d/7d/1m；百分比窗口为 None）
+    pub used_amount: Option<Money>,
+    /// R23：数字限额窗口的原始上限（limit>0 才产出窗口，故存在即正数）
+    pub limit_amount: Option<Money>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

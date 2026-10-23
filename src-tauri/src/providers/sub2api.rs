@@ -9,7 +9,7 @@
 
 use crate::http;
 use crate::jsonpath::{lookup_number, lookup_string};
-use crate::types::{AccountConfig, AccountInfo, KeyValue, Money};
+use crate::types::{AccountConfig, AccountInfo, KeyValue, Money, QuotaWindow};
 use serde_json::{json, Value};
 
 pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
@@ -53,6 +53,8 @@ async fn fetch_with_api_key(
             let (bal, extras) = parse_unrestricted(&v);
             info.balance = bal;
             info.extras.extend(extras);
+            // R23：订阅数字限额（日/周/月 上限+用量）→ 结构化配额窗口
+            info.quota_windows.extend(subscription_quota_windows(&v));
         }
         other => {
             // 兼容无 mode 字段的旧版本/fork：先按 quota 结构解析，拿不到再按钱包/订阅结构解析
@@ -66,6 +68,8 @@ async fn fetch_with_api_key(
                 let (bal2, extras2) = parse_unrestricted(&v);
                 info.balance = bal2;
                 info.extras.extend(extras2);
+                // R23：同上（legacy fork 也带 subscription 结构）
+                info.quota_windows.extend(subscription_quota_windows(&v));
                 if info.balance.is_none() && info.extras.is_empty() {
                     return Err(format!(
                         "无法解析 /v1/usage 响应（mode={other:?}），请确认站点是 sub2api；可在卡片里展开「原始数据」查看响应"
@@ -240,6 +244,47 @@ fn parse_unrestricted(v: &Value) -> (Option<Money>, Vec<KeyValue>) {
         }
     }
     (balance, extras)
+}
+
+/// R23：把 `subscription.{daily,weekly,monthly}_{usage,limit}_usd` 数字限额转成结构化配额窗口。
+///
+/// 规则（纯函数，便于单测）：
+/// - usage 与 limit **成对存在**且 limit > 0 才产出（usage 为 0 合法 → 已用 0%）；
+/// - `used_percent` 保留**真实比值**（超限 >100 不钳制——超限是重要事实；钳制是显示层职责）；
+/// - `resets_at` 为 None：站点时区/重置规则未知，不编造倒计时；
+/// - 窗口标签用 1d / 7d / 1m（与 Kimi 的 5h/7d 同一语言）。
+pub fn subscription_quota_windows(v: &Value) -> Vec<QuotaWindow> {
+    let Some(sub) = v.get("subscription") else {
+        return Vec::new();
+    };
+    let usd = || "USD".to_string();
+    let mut out = Vec::new();
+    for (label, usage_key, limit_key) in [
+        ("1d", "daily_usage_usd", "daily_limit_usd"),
+        ("7d", "weekly_usage_usd", "weekly_limit_usd"),
+        ("1m", "monthly_usage_usd", "monthly_limit_usd"),
+    ] {
+        let (Some(usage), Some(limit)) = (
+            lookup_number(sub, usage_key),
+            lookup_number(sub, limit_key).filter(|l| *l > 0.0),
+        ) else {
+            continue;
+        };
+        out.push(QuotaWindow {
+            window: Some(label.into()),
+            used_percent: Some(usage / limit * 100.0),
+            resets_at: None,
+            used_amount: Some(Money {
+                amount: usage,
+                currency: usd(),
+            }),
+            limit_amount: Some(Money {
+                amount: limit,
+                currency: usd(),
+            }),
+        });
+    }
+    out
 }
 
 /// 邮箱+密码登录（信封 {code:0, data}），成功后回写轮转的 token
@@ -549,5 +594,70 @@ mod tests {
         assert!(extras
             .iter()
             .any(|e| e.key == "周用量" && e.value == "5.25 USD"));
+    }
+
+    // ---------- R23：数字限额 → 结构化配额窗口 ----------
+
+    /// 完整三对（bosc 真实形态）：1d/7d/1m 全产出，百分比 = 用量/上限 真实比值
+    #[test]
+    fn test_subscription_quota_windows_full_set() {
+        let v = json!({
+            "subscription": {
+                "daily_usage_usd": 1.5, "daily_limit_usd": 10.0,
+                "weekly_usage_usd": 5.25, "weekly_limit_usd": 40.0,
+                "monthly_usage_usd": 21.0, "monthly_limit_usd": 100.0
+            }
+        });
+        let ws = subscription_quota_windows(&v);
+        assert_eq!(ws.len(), 3, "三对齐全应产出三个窗口");
+        assert_eq!(ws[0].window.as_deref(), Some("1d"));
+        assert_eq!(ws[1].window.as_deref(), Some("7d"));
+        assert_eq!(ws[2].window.as_deref(), Some("1m"));
+        assert!((ws[0].used_percent.unwrap() - 15.0).abs() < 1e-9);
+        assert!((ws[1].used_percent.unwrap() - 13.125).abs() < 1e-9);
+        assert!((ws[2].used_percent.unwrap() - 21.0).abs() < 1e-9);
+        // 原始金额随窗口携带（raw 显示模式的数据源）
+        assert_eq!(ws[0].used_amount.as_ref().unwrap().amount, 1.5);
+        assert_eq!(ws[0].limit_amount.as_ref().unwrap().amount, 10.0);
+        assert_eq!(ws[0].limit_amount.as_ref().unwrap().currency, "USD");
+        // 站点时区未知：不编造重置时间
+        assert!(ws.iter().all(|w| w.resets_at.is_none()));
+    }
+
+    /// 超限保留真实值（bosc 日用量 201.79 / 上限 200 → 100.895%，**不得**钳制吃掉超限事实）
+    #[test]
+    fn test_subscription_quota_windows_keeps_over_limit_ratio() {
+        let v = json!({
+            "subscription": { "daily_usage_usd": 201.79, "daily_limit_usd": 200.0 }
+        });
+        let ws = subscription_quota_windows(&v);
+        assert_eq!(ws.len(), 1);
+        let pct = ws[0].used_percent.unwrap();
+        assert!((pct - 100.895).abs() < 1e-9, "超限比值必须保留: {pct}");
+        assert!(pct > 100.0);
+    }
+
+    /// limit ≤ 0 / 缺 usage / 无 subscription：一律不产出（不编造窗口）
+    #[test]
+    fn test_subscription_quota_windows_skips_incomplete_pairs() {
+        // limit = 0（无上限 = 不限）
+        let v = json!({ "subscription": { "daily_usage_usd": 1.5, "daily_limit_usd": 0.0 } });
+        assert!(subscription_quota_windows(&v).is_empty());
+        // 缺 usage
+        let v = json!({ "subscription": { "daily_limit_usd": 10.0 } });
+        assert!(subscription_quota_windows(&v).is_empty());
+        // 只有 usage 没有 limit（无法算百分比）
+        let v = json!({ "subscription": { "daily_usage_usd": 1.5 } });
+        assert!(subscription_quota_windows(&v).is_empty());
+        // 无 subscription
+        let v = json!({ "balance": 1.0 });
+        assert!(subscription_quota_windows(&v).is_empty());
+        // 部分成对：只产出成对的窗口
+        let v = json!({
+            "subscription": { "daily_usage_usd": 1.5, "daily_limit_usd": 10.0, "weekly_usage_usd": 5.0 }
+        });
+        let ws = subscription_quota_windows(&v);
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].window.as_deref(), Some("1d"));
     }
 }
