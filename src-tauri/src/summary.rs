@@ -31,6 +31,10 @@ pub const POPUP_HEIGHT: f64 = 360.0;
 pub const POPUP_GAP: f64 = 8.0;
 /// 浮层窗口 label
 pub const POPUP_LABEL: &str = "summary";
+/// R25：光标驻留判定的外扩余量（物理像素）——覆盖图标→浮层的间隔与浮层透明边距
+pub const KEEPALIVE_MARGIN_PX: f64 = 6.0;
+/// R25：判定为「驻留」后下一次复查的间隔（只在「该隐藏但光标仍在范围内」时才存在这条链）
+pub const KEEPALIVE_RECHECK_MS: u64 = 200;
 
 // ---------- 悬停状态机（纯函数） ----------
 
@@ -251,6 +255,16 @@ impl PhysRect {
     pub fn contains_point(&self, px: f64, py: f64) -> bool {
         px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
     }
+
+    /// R25：向外扩 margin 后的新矩形（用于驻留判定的宽容命中）
+    pub fn inflated(&self, margin: f64) -> Self {
+        Self::new(
+            self.x - margin,
+            self.y - margin,
+            self.w + 2.0 * margin,
+            self.h + 2.0 * margin,
+        )
+    }
 }
 
 /// 把 tauri 的 `Position`/`Size`（可能是逻辑或物理）转成本模块的物理矩形。
@@ -406,8 +420,53 @@ pub fn popup_position(
     (rect.x / scale, rect.y / scale)
 }
 
-// ---------- 运行态（全局单例） ----------
+// ---------- R25：光标驻留保活（隐藏前的最后一道判定） ----------
 
+/// R25：隐藏定时器到点时的「光标驻留」判定（纯函数，全部为屏幕绝对物理像素）。
+/// 光标落在「托盘图标 ∪ 浮层」任一矩形内（各向外扩 `margin`）→ 允许驻留（不隐藏）。
+/// 任一矩形缺失（几何读不到）→ 该矩形不命中；两个都缺 → 回退到原本的隐藏行为。
+pub fn cursor_allows_stay(
+    cursor: (f64, f64),
+    icon: Option<PhysRect>,
+    popup: Option<PhysRect>,
+    margin: f64,
+) -> bool {
+    let hit = |r: PhysRect| r.inflated(margin).contains_point(cursor.0, cursor.1);
+    icon.is_some_and(hit) || popup.is_some_and(hit)
+}
+
+/// 读取光标当前屏幕绝对位置：浮层 outer_position（屏幕绝对）+ cursor_position（客户区相对）。
+/// 任一步失败 → None（调用方按「不允许驻留」回退，即保持原隐藏行为）。
+fn cursor_screen_position(window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    let rel = window.cursor_position().ok()?;
+    let pos = window.outer_position().ok()?;
+    Some((pos.x as f64 + rel.x, pos.y as f64 + rel.y))
+}
+
+/// R25：从运行态读光标 + 图标 + 浮层矩形并做驻留判定。
+/// 读不到光标/窗口 → false（回退原隐藏行为——宁可按时隐藏，也不让浮层卡死）。
+fn cursor_allows_stay_now(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window(POPUP_LABEL) else {
+        return false;
+    };
+    let Some(cursor) = cursor_screen_position(&window) else {
+        return false;
+    };
+    let icon = last_geometry().map(|(icon, _)| icon);
+    let popup = (|| {
+        let pos = window.outer_position().ok()?;
+        let size = window.outer_size().ok()?;
+        Some(PhysRect::new(
+            pos.x as f64,
+            pos.y as f64,
+            size.width as f64,
+            size.height as f64,
+        ))
+    })();
+    cursor_allows_stay(cursor, icon, popup, KEEPALIVE_MARGIN_PX)
+}
+
+// ---------- 运行态（全局单例） ----------
 static HOVER_STATE: Mutex<HoverState> = Mutex::new(HoverState::new());
 /// 定时器代号：任何新事件/立即动作都会自增，使旧定时器作废
 static TIMER_GEN: AtomicU64 = AtomicU64::new(0);
@@ -527,13 +586,32 @@ fn schedule_timer(app: &AppHandle, kind: PendingTimer, delay_ms: u64) {
             (PendingTimer::Hide, PopupAction::HideNow) => PopupAction::HideNow,
             _ => return,
         };
-        with_state(|state| {
-            state.visible = effective == PopupAction::ShowNow;
-            state.pending = None;
-        });
         match effective {
-            PopupAction::ShowNow => show_window(&app),
-            _ => hide_window(&app),
+            PopupAction::ShowNow => {
+                with_state(|state| {
+                    state.visible = true;
+                    state.pending = None;
+                });
+                show_window(&app);
+            }
+            PopupAction::HideNow => {
+                // R25：隐藏前的最后一道判定——光标仍在「图标 ∪ 浮层」范围内 → 不隐藏，续约复查。
+                // 覆盖场景：用户从图标缓慢移向浮层（中间有空隙）、系统误报 Leave 等。
+                if cursor_allows_stay_now(&app) {
+                    with_state(|state| {
+                        // 保持 visible，挂上下一次复查（新事件到来会替换掉它，见 generation 机制）
+                        state.pending = Some((PendingTimer::Hide, now + KEEPALIVE_RECHECK_MS));
+                    });
+                    schedule_timer(&app, PendingTimer::Hide, KEEPALIVE_RECHECK_MS);
+                } else {
+                    with_state(|state| {
+                        state.visible = false;
+                        state.pending = None;
+                    });
+                    hide_window(&app);
+                }
+            }
+            _ => {}
         }
     });
 }
@@ -679,6 +757,85 @@ mod tests {
         assert_eq!(state.pending, Some((PendingTimer::Hide, 1250)));
         assert_eq!(due_action(state, 1249), None, "249ms 不该隐藏");
         assert_eq!(due_action(state, 1250), Some(PopupAction::HideNow));
+    }
+
+    // ---------- R25：光标驻留保活（cursor_allows_stay 纯函数） ----------
+
+    /// 图标（屏幕右下角托盘区）与浮层（图标上方）的参照矩形
+    fn ref_icon() -> PhysRect {
+        PhysRect::new(1880.0, 1040.0, 16.0, 16.0)
+    }
+    fn ref_popup() -> PhysRect {
+        PhysRect::new(1600.0, 700.0, 300.0, 330.0)
+    }
+
+    /// 光标在图标内 → 驻留；在浮层内 → 驻留；两者都不在 → 隐藏
+    #[test]
+    fn stay_when_cursor_in_icon_or_popup() {
+        // 图标中心
+        assert!(cursor_allows_stay(
+            (1888.0, 1048.0),
+            Some(ref_icon()),
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        // 浮层中心
+        assert!(cursor_allows_stay(
+            (1750.0, 850.0),
+            Some(ref_icon()),
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        // 远处（屏幕左上）
+        assert!(!cursor_allows_stay(
+            (100.0, 100.0),
+            Some(ref_icon()),
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+    }
+
+    /// 余量覆盖「图标 → 浮层」的间隙：光标在两者之间离浮层 ≤margin 也算驻留；超出余量才隐藏
+    #[test]
+    fn margin_covers_the_gap() {
+        // 浮层底边 y=1030；光标 y=1034（间隙内，距浮层 4px < 6px 余量）→ 驻留
+        assert!(cursor_allows_stay(
+            (1700.0, 1034.0),
+            None,
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        // 光标 y=1037（距浮层 7px > 6px 余量），图标也不命中 → 隐藏
+        // （注意 ref_icon y=1040 顶部，1037 距图标顶 3px < 6px → 图标侧命中 → 仍驻留；换离两者都远的点）
+        assert!(!cursor_allows_stay(
+            (1200.0, 900.0),
+            Some(ref_icon()),
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+    }
+
+    /// 几何缺失：两个矩形都读不到 → 不允许驻留（回退原隐藏行为）；只读到一个 → 由它决定
+    #[test]
+    fn missing_geometry_falls_back_to_hide() {
+        assert!(!cursor_allows_stay(
+            (1750.0, 850.0),
+            None,
+            None,
+            KEEPALIVE_MARGIN_PX
+        ));
+        assert!(cursor_allows_stay(
+            (1750.0, 850.0),
+            None,
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        assert!(!cursor_allows_stay(
+            (1750.0, 850.0),
+            Some(ref_icon()),
+            None,
+            KEEPALIVE_MARGIN_PX
+        ));
     }
 
     /// 未显示时 Leave：取消待显示定时器（防误触）
