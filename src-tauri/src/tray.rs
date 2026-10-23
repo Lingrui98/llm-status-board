@@ -215,7 +215,11 @@ pub fn window_detail_line(w: &QuotaWindow, mode: QuotaDetailMode) -> String {
 /// - 有窗口 + percent + 配额主指标：`名称    {条} {主指标}`（条 = 最紧窗口已用程度）；
 /// - 有窗口 + percent + 余额主指标（窗口未成为主指标）：主行不加条，避免「条 + 金额」无标注混排；
 /// - raw 且最紧窗口带金额字段：`名称    {窗口明细数字行}`；raw 无金额 → 回落 percent 形态。
-pub fn account_line_text(name: &str, outcome: Option<&RefreshOutcome>, mode: QuotaDetailMode) -> String {
+pub fn account_line_text(
+    name: &str,
+    outcome: Option<&RefreshOutcome>,
+    mode: QuotaDetailMode,
+) -> String {
     let status = tray_status_text(outcome);
     let Some(info) = outcome.and_then(|o| o.info.as_ref()) else {
         return format!("{name}    {status}");
@@ -223,7 +227,10 @@ pub fn account_line_text(name: &str, outcome: Option<&RefreshOutcome>, mode: Quo
     let Some(tightest) = crate::primary_metric::tightest_window(&info.quota_windows) else {
         return format!("{name}    {status}");
     };
-    if mode == QuotaDetailMode::Raw && tightest.used_amount.is_some() && tightest.limit_amount.is_some() {
+    if mode == QuotaDetailMode::Raw
+        && tightest.used_amount.is_some()
+        && tightest.limit_amount.is_some()
+    {
         return format!("{name}    {}", window_detail_line(tightest, mode));
     }
     let is_quota_primary = matches!(
@@ -334,8 +341,13 @@ fn build_menu(app: &AppHandle, refreshing: bool) -> Result<Menu<tauri::Wry>, tau
                         )?);
                     }
                     let sep = PredefinedMenuItem::separator(app)?;
-                    let open_item =
-                        MenuItem::with_id(app, account_menu_id(&acc.id), "打开详情", true, None::<&str>)?;
+                    let open_item = MenuItem::with_id(
+                        app,
+                        account_menu_id(&acc.id),
+                        "打开详情",
+                        true,
+                        None::<&str>,
+                    )?;
                     let mut refs: Vec<&dyn IsMenuItem<tauri::Wry>> = Vec::new();
                     for item in &child_items {
                         refs.push(item);
@@ -1049,7 +1061,11 @@ mod tests {
         assert_eq!(quota_detail_mode(None), QuotaDetailMode::Percent);
         assert_eq!(quota_detail_mode(Some("percent")), QuotaDetailMode::Percent);
         assert_eq!(quota_detail_mode(Some(" raw ")), QuotaDetailMode::Raw);
-        assert_eq!(quota_detail_mode(Some("RAW")), QuotaDetailMode::Percent, "大小写不敏感刻意不做（与设置白名单一致）");
+        assert_eq!(
+            quota_detail_mode(Some("RAW")),
+            QuotaDetailMode::Percent,
+            "大小写不敏感刻意不做（与设置白名单一致）"
+        );
         assert_eq!(quota_detail_mode(Some("")), QuotaDetailMode::Percent);
         assert_eq!(quota_detail_mode(Some("bogus")), QuotaDetailMode::Percent);
     }
@@ -1057,8 +1073,14 @@ mod tests {
     fn window(window: &str, used_percent: Option<f64>, amounts: Option<(f64, f64)>) -> QuotaWindow {
         let (used_amount, limit_amount) = match amounts {
             Some((u, l)) => (
-                Some(Money { amount: u, currency: "USD".into() }),
-                Some(Money { amount: l, currency: "USD".into() }),
+                Some(Money {
+                    amount: u,
+                    currency: "USD".into(),
+                }),
+                Some(Money {
+                    amount: l,
+                    currency: "USD".into(),
+                }),
             ),
             None => (None, None),
         };
@@ -1109,7 +1131,10 @@ mod tests {
     #[test]
     fn account_line_text_rules() {
         // 无窗口 / 未刷新：原样
-        assert_eq!(account_line_text("A", None, QuotaDetailMode::Percent), "A    —");
+        assert_eq!(
+            account_line_text("A", None, QuotaDetailMode::Percent),
+            "A    —"
+        );
 
         // 配额主指标（余额 null + 窗口）→ 带条
         let quota = ok_outcome(AccountInfo {
@@ -1123,7 +1148,10 @@ mod tests {
 
         // 余额主指标（余额非 0 + 窗口）→ 主行不加条
         let paid = ok_outcome(AccountInfo {
-            balance: Some(Money { amount: 12.5, currency: "USD".into() }),
+            balance: Some(Money {
+                amount: 12.5,
+                currency: "USD".into(),
+            }),
             quota_windows: vec![window("7d", Some(90.0), None)],
             ..Default::default()
         });
@@ -1134,7 +1162,10 @@ mod tests {
 
         // raw + 数字限额窗口 → 数字行
         let bosc = ok_outcome(AccountInfo {
-            balance: Some(Money { amount: 0.0, currency: "USD".into() }),
+            balance: Some(Money {
+                amount: 0.0,
+                currency: "USD".into(),
+            }),
             quota_windows: vec![window("1d", Some(101.0), Some((202.0, 200.0)))],
             ..Default::default()
         });
