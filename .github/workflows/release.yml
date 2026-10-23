@@ -12,7 +12,30 @@ permissions:
 # 注意：本仓库根目录就是 llm-status-board 项目本身（package.json / src-tauri 都在根下），
 # 不要再给各步骤加 llm-status-board/ 前缀的 working-directory 或 projectPath。
 jobs:
+  # 先创建**唯一**的 draft release，矩阵构建统一往这里传产物。
+  # 为什么需要它：v0.2.5 发版时三个矩阵 job 并发「找不到 release 就各自创建」，
+  # 竞态产生了两个 draft（latest.json 被拆成两半，手工合并修复）。
+  # tauri-action 生成 latest.json 时会合并 release 里已有资产，
+  # 只要所有 job 指向同一个 releaseId，最终清单必然是完整三平台。
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - name: Create draft release
+        id: create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          id=$(gh api repos/${{ github.repository }}/releases \
+            -f tag_name="${{ github.ref_name }}" \
+            -f name="LLM Status Board ${{ github.ref_name }}" \
+            -f body="Win / macOS 安装包见 Assets。" \
+            -f draft=true -f prerelease=false --jq .id)
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -73,9 +96,6 @@ jobs:
           # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "LLM Status Board ${{ github.ref_name }}"
-          releaseBody: "Win / macOS 安装包见 Assets。"
-          releaseDraft: true
-          prerelease: false
+          # 统一上传到 prepare 阶段创建的唯一 draft（防矩阵并发创建重复 release 的竞态）
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
