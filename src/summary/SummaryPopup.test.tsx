@@ -1,7 +1,8 @@
 // R18 浮层交互与三态测试：mock Tauri IPC（jsdom）。
 // - 三态：loading 骨架 / error 文案 / empty 文案（展示卡直注）+ 容器从 IPC 推导；
 // - 交互：行点击 → summary_open_account(accountId) → hide_summary_popup；
-//         指针进出 → set_summary_pointer_inside(true/false)；Escape / blur → hide_summary_popup；
+//         指针进出 → set_summary_pointer_inside(true/false)；Escape → hide_summary_popup；
+//         WebView 内部 blur 不直接隐藏，顶层窗口失焦由 Rust 处理；
 // - 边界：空账号配置不崩、超长账号名不截断数据（靠 CSS 省略号 + title 全文）。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -307,16 +308,15 @@ describe("SummaryPopup：交互接线", () => {
     expect(callsOf("hide_summary_popup")).toHaveLength(1);
   });
 
-  it("窗口失焦：立即隐藏（抢焦点取舍的兜底）", async () => {
+  it("WebView 内部失焦：不直接隐藏，避免原生缩放被 blur 中断", async () => {
     mockData();
     render(<SummaryPopup />);
     await waitFor(() => {
       expect(screen.getByText("监控账号")).toBeTruthy();
     });
     fireEvent.blur(window);
-    await waitFor(() => {
-      expect(callsOf("hide_summary_popup")).toEqual([undefined]);
-    });
+    // 顶层窗口失焦仍由 lib.rs 的 Focused(false) 隐藏。
+    expect(callsOf("hide_summary_popup")).toEqual([]);
   });
 
   it("窗口常驻复用不陈旧：45s 轮询会重新拉取数据", async () => {

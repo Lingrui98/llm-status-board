@@ -9,7 +9,7 @@ import CredentialHelp from "./CredentialHelp";
  * 正常运行版本以 App 传入的 appVersion（唯一事实来源：tauri.conf.json）为准，
  * 发版不再需要手工同步本常量（R22 修复：此前硬编码 "0.1.3" 已与实际版本脱节）。
  */
-export const APP_VERSION = "0.2.8";
+export const APP_VERSION = "0.2.9";
 
 interface Props {
   /** 运行时版本号（App 层查询自 tauri.conf.json）；缺省回退到打包期常量 */

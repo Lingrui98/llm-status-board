@@ -31,8 +31,9 @@ pub const POPUP_HEIGHT: f64 = 360.0;
 pub const POPUP_GAP: f64 = 8.0;
 /// 浮层窗口 label
 pub const POPUP_LABEL: &str = "summary";
-/// R25：光标驻留判定的外扩余量（物理像素）——覆盖图标→浮层的间隔与浮层透明边距
-pub const KEEPALIVE_MARGIN_PX: f64 = 6.0;
+/// 光标驻留判定的外扩余量（物理像素）。
+/// 覆盖图标到浮层的间隔、透明边距，以及不同 DPI 下的原生缩放边缘。
+pub const KEEPALIVE_MARGIN_PX: f64 = 24.0;
 /// R25：判定为「驻留」后下一次复查的间隔（只在「该隐藏但光标仍在范围内」时才存在这条链）
 pub const KEEPALIVE_RECHECK_MS: u64 = 200;
 
@@ -435,12 +436,12 @@ pub fn cursor_allows_stay(
     icon.is_some_and(hit) || popup.is_some_and(hit)
 }
 
-/// 读取光标当前屏幕绝对位置：浮层 outer_position（屏幕绝对）+ cursor_position（客户区相对）。
-/// 任一步失败 → None（调用方按「不允许驻留」回退，即保持原隐藏行为）。
+/// 读取光标的桌面绝对物理坐标。
+///
+/// Tauri 的 `cursor_position()` 已经返回桌面坐标，不能再叠加窗口位置。
+/// 读取失败时返回 `None`，调用方按原隐藏行为处理。
 fn cursor_screen_position(window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
-    let rel = window.cursor_position().ok()?;
-    let pos = window.outer_position().ok()?;
-    Some((pos.x as f64 + rel.x, pos.y as f64 + rel.y))
+    window.cursor_position().ok().map(|p| (p.x, p.y))
 }
 
 /// R25：从运行态读光标 + 图标 + 浮层矩形并做驻留判定。
@@ -795,20 +796,26 @@ mod tests {
         ));
     }
 
-    /// 余量覆盖「图标 → 浮层」的间隙：光标在两者之间离浮层 ≤margin 也算驻留；超出余量才隐藏
+    /// 余量覆盖图标到浮层的间隙，以及高 DPI 下可能延伸到窗外的缩放边缘。
     #[test]
-    fn margin_covers_the_gap() {
-        // 浮层底边 y=1030；光标 y=1034（间隙内，距浮层 4px < 6px 余量）→ 驻留
+    fn margin_covers_gap_and_native_resize_border() {
+        // 浮层底边 y=1030；光标在两者之间时允许驻留。
         assert!(cursor_allows_stay(
             (1700.0, 1034.0),
             None,
             Some(ref_popup()),
             KEEPALIVE_MARGIN_PX
         ));
-        // 光标 y=1037（距浮层 7px > 6px 余量），图标也不命中 → 隐藏
-        // （注意 ref_icon y=1040 顶部，1037 距图标顶 3px < 6px → 图标侧命中 → 仍驻留；换离两者都远的点）
+        // 模拟高 DPI 缩放边缘：光标在右缘外 16px，仍处于 24px 保活余量内。
+        assert!(cursor_allows_stay(
+            (ref_popup().right() + 16.0, 900.0),
+            None,
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        // 光标超出余量，而且不在图标附近时才隐藏。
         assert!(!cursor_allows_stay(
-            (1200.0, 900.0),
+            (ref_popup().right() + KEEPALIVE_MARGIN_PX + 1.0, 900.0),
             Some(ref_icon()),
             Some(ref_popup()),
             KEEPALIVE_MARGIN_PX

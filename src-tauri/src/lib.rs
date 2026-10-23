@@ -101,7 +101,7 @@ pub fn run() {
                 tauri::WindowEvent::Focused(true) if window.label() == "main" => {
                     summary::on_main_focus(window.app_handle());
                 }
-                // R18 §1：浮层自身失焦 → 立即隐藏（Rust 侧比 JS blur 更可靠）
+                // 顶层浮层失焦才立即隐藏。前端不监听 WebView 内部 blur，避免原生缩放误触发隐藏。
                 tauri::WindowEvent::Focused(false) if window.label() == summary::POPUP_LABEL => {
                     summary::on_popup_blur(window.app_handle());
                 }

@@ -1,6 +1,7 @@
 // R18 托盘悬停「用量总结」浮层 —— 数据与交互容器。
 // - 数据：只用既有 IPC（get_config / get_last_results / get_usage_history），不触网、不加依赖；
-// - 交互：指针进入/离开 → set_summary_pointer_inside；Escape / 窗口失焦 → hide_summary_popup；
+// - 交互：指针进入/离开 → set_summary_pointer_inside；Escape → hide_summary_popup；
+//   顶层窗口失焦由 Rust 隐藏。WebView 内部 blur 不直接隐藏，避免原生缩放被中断；
 //   账号行点击 → summary_open_account（后端显示并聚焦主窗口，内部 emit tray-open-account）→ 隐藏浮层；
 // - 窗口由 Rust 常驻创建、show()/hide() 复用不销毁：重新获得焦点时重新拉取，避免陈旧数据。
 
@@ -67,20 +68,16 @@ export default function SummaryPopup() {
     };
   }, [load]);
 
-  // Escape / 失焦 → 立即隐藏（§1「延迟 0」）
+  // Escape 立即隐藏。失焦只由 Rust 的顶层窗口事件处理。
+  // WebView 在原生缩放时可能触发内部 blur，不能把它当成离开浮层。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
       fireAndForget(hideSummaryPopup());
     };
-    const onBlur = () => fireAndForget(hideSummaryPopup());
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("blur", onBlur);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("blur", onBlur);
-    };
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   const handlePointerEnter = useCallback(() => fireAndForget(setSummaryPointerInside(true)), []);
