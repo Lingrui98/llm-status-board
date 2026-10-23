@@ -94,6 +94,7 @@ async fn fetch_with_api_key(
                     window: Some(normalize_window_name(window)),
                     used_percent: Some((used / limit * 100.0).min(100.0)),
                     resets_at: l.get("reset_at").and_then(|r| r.as_str()).map(String::from),
+                    ..Default::default()
                 });
             }
         }

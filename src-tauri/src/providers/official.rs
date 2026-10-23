@@ -267,6 +267,7 @@ async fn kimi_coding_usage(
                     window: Some(label.to_string()),
                     used_percent: Some(pct),
                     resets_at: reset_of(reset_path),
+                    ..Default::default()
                 });
                 info.extras.push(KeyValue {
                     key: format!("{label} 用量"),
@@ -302,6 +303,7 @@ async fn kimi_coding_usage(
                 used_percent: Some((used / limit * 100.0).min(100.0)),
                 resets_at: lookup_string(&v, "usage.resetTime")
                     .or_else(|| lookup_string(&v, "usage.reset_at")),
+                ..Default::default()
             });
         }
     }
@@ -323,6 +325,7 @@ async fn kimi_coding_usage(
                     used_percent: Some((used / limit * 100.0).min(100.0)),
                     resets_at: lookup_string(l, "detail.resetTime")
                         .or_else(|| lookup_string(l, "detail.reset_at")),
+                    ..Default::default()
                 });
                 info.extras.push(KeyValue {
                     key: format!("{label} 用量"),

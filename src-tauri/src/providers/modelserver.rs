@@ -209,6 +209,7 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
                     window: Some(label),
                     used_percent: pct,
                     resets_at,
+                    ..Default::default()
                 });
             }
         }

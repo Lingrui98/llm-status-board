@@ -193,21 +193,21 @@ pub fn window_detail_line(w: &QuotaWindow, mode: QuotaDetailMode) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(crate::primary_metric::DEFAULT_WINDOW_LABEL);
     let pct = w.used_percent.unwrap_or(0.0);
-    if mode == QuotaDetailMode::Raw {
-        if let (Some(u), Some(l)) = (&w.used_amount, &w.limit_amount) {
-            return format!(
-                "{label}  已用 {} / 上限 {} {}",
-                crate::primary_metric::format_decimal(u.amount),
-                crate::primary_metric::format_decimal(l.amount),
-                u.currency
-            );
-        }
+    // 单匹配代替嵌套 if（规避 clippy::collapsible_if；CI -D warnings）
+    match (mode, &w.used_amount, &w.limit_amount) {
+        (QuotaDetailMode::Raw, Some(u), Some(l)) => format!(
+            "{label}  已用 {} / 上限 {} {}",
+            crate::primary_metric::format_decimal(u.amount),
+            crate::primary_metric::format_decimal(l.amount),
+            u.currency
+        ),
+        // raw 但窗口缺金额字段（如 Kimi 的百分比窗口）→ 诚实回落 percent，不留空白
+        _ => format!(
+            "{label}  {} 已用 {}%",
+            quota_bar_text(pct),
+            crate::primary_metric::trim_number_text(pct)
+        ),
     }
-    format!(
-        "{label}  {} 已用 {}%",
-        quota_bar_text(pct),
-        crate::primary_metric::trim_number_text(pct)
-    )
 }
 
 /// R23：账号主行文本（纯函数，可单测）。
