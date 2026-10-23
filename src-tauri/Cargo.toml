@@ -1,6 +1,6 @@
 [package]
 name = "llm-status-board"
-version = "0.2.3"
+version = "0.2.4"
 description = "LLM 提供商余额与用量聚合看板"
 authors = ["Steve Gou"]
 edition = "2021"
@@ -20,6 +20,10 @@ tauri-plugin-dialog = "2.8.1"
 tauri-plugin-autostart = "2.7.0"
 tauri-plugin-window-state = "2.5.0"
 tauri-plugin-notification = "2.7.0"
+# R22 一键更新：updater（检查/下载/安装）+ process（安装后 relaunch）+ opener（兜底打开发布页）
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-opener = "2"
 
 [profile.release]
 codegen-units = 1

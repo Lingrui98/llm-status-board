@@ -4202,3 +4202,55 @@ button.notif-jump:focus-visible .notif-jump-hint {
   box-shadow: none;
   transform: none;
 }
+
+/* ---------- R22 一键更新（docs/round-22-updater-plan.md §4.2） ---------- */
+
+/* 顶栏「新版本」角标：复用 .alert-chip 药丸语言，换 accent 语义（好消息而非告警） */
+.alert-chip.update {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.alert-chip.update:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--bg-2));
+}
+
+/* 设置页更新区块：内联提示里的竖排内容容器（版本行 / 更新说明 / 按钮组） */
+.update-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.update-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+/* 更新说明：折叠展示，长文本自动换行并限高滚动（不做截断，提示必须可读） */
+.update-notes summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.update-notes pre {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text-2);
+}
+
+/* 下载进度条：原生 progress 套主题色（total 未知时浏览器自呈不确定态） */
+.update-progress {
+  width: 240px;
+  height: 6px;
+  accent-color: var(--accent);
+}

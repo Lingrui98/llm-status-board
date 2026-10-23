@@ -161,6 +161,9 @@ pub struct Settings {
     pub refresh_retry_enabled: Option<bool>,
     /// 自动重试的最大次数；None 视为 1，取值 0..=3
     pub refresh_retry_max: Option<u32>,
+    // ---- R22 一键更新 ----
+    /// 启动时是否静默检查更新（只提示不下载）；None 视为 true
+    pub auto_check_update: Option<bool>,
 }
 
 impl Default for Settings {
@@ -178,6 +181,7 @@ impl Default for Settings {
             system_notifications: None,
             refresh_retry_enabled: None,
             refresh_retry_max: None,
+            auto_check_update: None,
         }
     }
 }

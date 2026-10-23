@@ -49,6 +49,19 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(),
   emit: vi.fn(),
 }));
+// R22：更新 / 进程 / 打开链接插件 + 运行时版本（默认「无更新」、版本查询失败回退；用例按需替换）
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: vi.fn(),
+}));
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openUrl: vi.fn(),
+}));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: vi.fn(),
+}));
 import { invoke } from "@tauri-apps/api/core";
 import { confirm, open, save } from "@tauri-apps/plugin-dialog";
 import { emit, listen } from "@tauri-apps/api/event";

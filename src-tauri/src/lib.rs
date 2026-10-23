@@ -76,6 +76,13 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        // R22 一键更新：
+        // - updater：从 GitHub Releases 的 latest.json 检查/下载/安装（签名校验插件内置）
+        // - process：macOS 安装完成后 relaunch（Windows 由 NSIS 安装器自行接管重启）
+        // - opener：更新失败兜底「前往发布页手动下载」（capability 已把 URL 限定在本仓库 releases）
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_opener::init())
         // 必须排在 window-state 之后（见函数注释）
         .plugin(window_geometry_guard_plugin())
         .setup(|app| {

@@ -9,6 +9,7 @@ import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notification
 import { isSystemNotifyEnabled } from "../residentSettings";
 import { NOTIFY_PERMISSION_RETRY_LABEL, notificationManualPath } from "../pluginRuntime";
 import { exportUsageCsv } from "../exportReport";
+import { formatProgress, isUpdateBusy, shortUpdateDate, type UpdateState } from "../updater";
 import * as api from "../api";
 
 /** R16 自启状态（§2）：真值以系统为准，查询中禁用开关 */
@@ -44,6 +45,19 @@ interface Props {
   notifyPermission?: "granted" | "denied" | "unknown";
   /** 用户点「重新请求授权」：请求一次通知权限（不会打开系统设置页，故文案如实描述） */
   onRequestNotifyPermission?: () => void;
+  /* ---- R22 一键更新 ---- */
+  /** 更新状态机（App 层拥有；不传 = 未接更新能力，区块仍显示版本与开关） */
+  updateState?: UpdateState;
+  /** 运行时版本号（空串/缺省 = 查询失败，显示「未知」而不是编造版本） */
+  appVersion?: string;
+  /** 手动「检查更新」 */
+  onCheckUpdate?: () => void;
+  /** 「立即更新」：下载并安装已发现的更新 */
+  onInstallUpdate?: () => void;
+  /** 安装完成后重启进新版 */
+  onRelaunchAfterUpdate?: () => void;
+  /** 兜底：系统浏览器打开 GitHub 发布页 */
+  onOpenReleasePage?: () => void;
 }
 
 /**
@@ -84,6 +98,12 @@ export default function SettingsView({
   onToggleAutostart,
   notifyPermission = "unknown",
   onRequestNotifyPermission,
+  updateState,
+  appVersion,
+  onCheckUpdate,
+  onInstallUpdate,
+  onRelaunchAfterUpdate,
+  onOpenReleasePage,
 }: Props) {
   // 不再持有本地草稿：列表/通用设置全部直接读写 config（App 层 state），
   // 每次变更经 onSave 走自动保存通道 —— 不存在「忘了点保存」的状态
@@ -94,6 +114,32 @@ export default function SettingsView({
   const [exportBusy, setExportBusy] = useState(false);
   // R14：提醒阈值（配置已解析出默认值，供滑块直接受控使用）
   const alerts = resolveAlertSettings(config.settings);
+
+  // R22：更新状态 → 版本行徽标（一目了然；详细状态在区块下方内联展示）
+  const updateBadge = !updateState
+    ? undefined
+    : updateState.kind === "available"
+      ? `v${updateState.info.version} 可更新`
+      : updateState.kind === "ready"
+        ? "待重启"
+        : updateState.kind === "checking"
+          ? "检查中"
+          : updateState.kind === "downloading"
+            ? "下载中"
+            : updateState.kind === "up-to-date"
+              ? "已最新"
+              : updateState.kind === "error"
+                ? "更新失败"
+                : undefined;
+  const updateBadgeTone: "default" | "ok" | "warn" | "err" =
+    updateState?.kind === "available" || updateState?.kind === "ready"
+      ? "warn"
+      : updateState?.kind === "up-to-date"
+        ? "ok"
+        : updateState?.kind === "error"
+          ? "err"
+          : "default";
+  const updateBusy = updateState ? isUpdateBusy(updateState) : false;
 
   useEffect(() => {
     api.configPath().then(setCfgPath).catch(() => {});
@@ -625,6 +671,134 @@ export default function SettingsView({
           </button>
           <span className="muted small">列：账号 / 类型 / 币种 / 日期 / 花费 / 请求数 / Token / 余额快照</span>
         </div>
+      </div>
+
+      {/* R22：关于与更新 —— 版本号 + 一键更新。状态由 App 层驱动，本区块只读渲染 + 发起动作；
+          文案诚实性：Windows 安装器接管后本应用会被重启，「待重启」提示在 macOS 才是主路径（已注明）。 */}
+      <div className="settings-section">
+        <h3>关于与更新</h3>
+        <div className="set-rows">
+          <SettingRow
+            label={`当前版本 ${appVersion ? `v${appVersion}` : "未知"}`}
+            hint="从 GitHub Releases 检查并安装更新（签名校验自动完成）；更新检查与数据查询共用上方「通用设置」里的网络代理"
+            badge={updateBadge}
+            badgeTone={updateBadgeTone}
+            control={(a) => (
+              <button
+                type="button"
+                className="btn ghost"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                disabled={updateBusy || !onCheckUpdate}
+                onClick={onCheckUpdate}
+              >
+                {updateState?.kind === "checking" ? "检查中…" : "检查更新"}
+              </button>
+            )}
+          />
+          <SettingRow
+            label="启动时自动检查更新"
+            hint="启动约 5 秒后静默检查一次；发现新版本只在顶栏提示（及系统通知，若已开启），不会自动下载"
+            control={(a) => (
+              <input
+                type="checkbox"
+                className="switch"
+                id={a.id}
+                aria-describedby={a.describedBy}
+                checked={config.settings.autoCheckUpdate ?? true}
+                onChange={(e) => updateSettings({ autoCheckUpdate: e.target.checked })}
+              />
+            )}
+          />
+        </div>
+
+        {updateState?.kind === "up-to-date" && (
+          <InlineNotice tone="info" message="已是最新版本。" autoHideMs={6000} />
+        )}
+
+        {updateState?.kind === "available" && (
+          <InlineNotice tone="info">
+            <span className="update-block">
+              <span>
+                <strong>发现新版本 v{updateState.info.version}</strong>
+                {shortUpdateDate(updateState.info.date) && `（发布于 ${shortUpdateDate(updateState.info.date)}）`}
+                ，可一键更新。
+              </span>
+              {updateState.info.notes.trim() && (
+                <details className="update-notes">
+                  <summary>更新说明</summary>
+                  <pre>{updateState.info.notes.trim()}</pre>
+                </details>
+              )}
+              <span className="update-actions">
+                <button type="button" className="btn primary" onClick={onInstallUpdate} disabled={!onInstallUpdate}>
+                  立即更新
+                </button>
+                <button type="button" className="btn ghost" onClick={onOpenReleasePage} disabled={!onOpenReleasePage}>
+                  前往发布页
+                </button>
+              </span>
+            </span>
+          </InlineNotice>
+        )}
+
+        {/* 进度高频更新 → live="off"（与重试倒计时同一无障碍规则，状态变化由区块出现本身承担） */}
+        {updateState?.kind === "downloading" && (
+          <InlineNotice tone="info" live="off">
+            <span className="update-block">
+              <span>{formatProgress(updateState.received, updateState.total)}</span>
+              <progress
+                className="update-progress"
+                max={updateState.total ?? undefined}
+                value={updateState.received}
+                aria-label="更新下载进度"
+              />
+              <span className="muted small">
+                下载完成后自动安装；Windows 上安装器会接管并重启本应用，macOS 安装后需点「立即重启」。
+              </span>
+            </span>
+          </InlineNotice>
+        )}
+
+        {updateState?.kind === "ready" && (
+          <InlineNotice tone="info">
+            <span className="update-block">
+              <span>
+                <strong>v{updateState.info.version} 已安装完成</strong>，重启后生效。
+              </span>
+              <span className="update-actions">
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={onRelaunchAfterUpdate}
+                  disabled={!onRelaunchAfterUpdate}
+                >
+                  立即重启
+                </button>
+              </span>
+            </span>
+          </InlineNotice>
+        )}
+
+        {updateState?.kind === "error" && (
+          <InlineNotice tone="err" title={updateState.phase === "check" ? "检查更新失败" : "更新失败"}>
+            <span className="update-block">
+              <span>{updateState.message}</span>
+              <span className="update-actions">
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={updateState.phase === "check" ? onCheckUpdate : onInstallUpdate}
+                >
+                  重试
+                </button>
+                <button type="button" className="btn ghost" onClick={onOpenReleasePage} disabled={!onOpenReleasePage}>
+                  前往发布页手动下载
+                </button>
+              </span>
+            </span>
+          </InlineNotice>
+        )}
       </div>
     </main>
   );

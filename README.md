@@ -66,7 +66,7 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 仓库带两个工作流（`.github/workflows/`）：
 
 - **ci.yml**：push / PR 时自动跑前端测试（vitest + tsc + build）与 Rust 检查（fmt / clippy / 单测，Windows + macOS 双矩阵）
-- **release.yml**：push 一个 tag（如 `v0.1.0`）自动构建 Windows + macOS（Apple Silicon / Intel）安装包并发布到 GitHub Release；macOS 签名相关变量见工作流注释
+- **release.yml**：push 一个 tag（如 `v0.1.0`）自动构建 Windows + macOS（Apple Silicon / Intel）安装包并发布到 GitHub Release；macOS 签名相关变量见工作流注释。配置了更新签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个 Secrets）后，会额外生成 `latest.json` 与签名文件供软件内一键更新使用（见「使用」第 7 条）
 
 > 注意：本仓库根目录就是项目本身（package.json / src-tauri 在根下），工作流按此布局配置。
 
@@ -78,6 +78,7 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 4. 顶栏「立即刷新」或开启自动刷新间隔
 5. 访问 OpenAI 等境外接口不通时，在「设置 → 通用设置」里填网络代理（支持 `http://` / `socks5://`，全局生效）
 6. 跨设备迁移（比如 Windows 配好后搬到 Mac）：「设置 → 导出配置」得到 JSON 文件，在另一台机器上「导入配置」——设置替换、账号按 ID 合并（**导出文件包含 API Key，请妥善保管**）
+7. 一键更新：「设置 → 关于与更新」→「检查更新」→「立即更新」，下载安装全自动（Windows 由安装器接管重启，macOS 安装后点「立即重启」）；默认启动时也会静默检查一次（可关），发现新版本只在顶栏提示。更新包带签名校验，更新检查与数据查询共用同一网络代理设置
 
 ### AiHubMix 余额与累计用量
 

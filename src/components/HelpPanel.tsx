@@ -4,10 +4,16 @@ import { PROVIDER_KINDS } from "../types";
 import DetailDrawer from "./DetailDrawer";
 import CredentialHelp from "./CredentialHelp";
 
-/** 应用版本号（与 package.json version 保持同步） */
-export const APP_VERSION = "0.1.3";
+/**
+ * 打包期回退版本号 —— **仅**当运行时 getVersion() 不可用（jsdom / 浏览器预览）时使用。
+ * 正常运行版本以 App 传入的 appVersion（唯一事实来源：tauri.conf.json）为准，
+ * 发版不再需要手工同步本常量（R22 修复：此前硬编码 "0.1.3" 已与实际版本脱节）。
+ */
+export const APP_VERSION = "0.2.4";
 
 interface Props {
+  /** 运行时版本号（App 层查询自 tauri.conf.json）；缺省回退到打包期常量 */
+  appVersion?: string;
   onClose: () => void;
   /** 重新打开新手引导（App 会同时关闭本面板） */
   onOpenGuide: () => void;
@@ -56,11 +62,13 @@ const SHORTCUTS: { keys: React.ReactNode; desc: string }[] = [
  * 常驻帮助面板（右侧抽屉，复用 DetailDrawer 的交互模型）：
  * 快捷键总表 + 凭证获取帮助（按类型）+ 重开新手引导 + 关于。
  */
-export default function HelpPanel({ onClose, onOpenGuide }: Props) {
+export default function HelpPanel({ appVersion, onClose, onOpenGuide }: Props) {
   const [kind, setKind] = useState<ProviderKind>("newApi");
+  // 运行时版本优先，打包期常量兜底（jsdom / 浏览器预览）
+  const version = appVersion ?? APP_VERSION;
 
   return (
-    <DetailDrawer title="帮助" subtitle={`v${APP_VERSION}`} onClose={onClose}>
+    <DetailDrawer title="帮助" subtitle={`v${version}`} onClose={onClose}>
       <section className="help-section">
         <h4>快捷键</h4>
         <table className="help-kbd-table">
@@ -109,10 +117,11 @@ export default function HelpPanel({ onClose, onOpenGuide }: Props) {
 
       <section className="help-section help-about">
         <h4>关于</h4>
-        <p>LLM Status Board v{APP_VERSION} —— 聚合展示 LLM 提供商 / 中转站的余额与用量。</p>
+        <p>LLM Status Board v{version} —— 聚合展示 LLM 提供商 / 中转站的余额与用量。</p>
         <p>
           数据直接来自各家提供商接口，仅保存在本机配置文件；API Key / Token 不会上传到任何第三方服务器。
         </p>
+        <p className="muted small">新版本检查与一键更新在「设置 → 关于与更新」。</p>
       </section>
     </DetailDrawer>
   );

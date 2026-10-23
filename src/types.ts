@@ -87,6 +87,9 @@ export interface Settings {
   refreshRetryEnabled?: boolean | null;
   /** R16：自动重试次数上限；缺省视为 1，合法区间 0–3 整数 */
   refreshRetryMax?: number | null;
+  /* ---- R22 一键更新 ---- */
+  /** R22：启动时自动检查更新（静默，只提示不下载）；缺省（undefined/null）视为 true */
+  autoCheckUpdate?: boolean | null;
 }
 
 export interface AppConfig {

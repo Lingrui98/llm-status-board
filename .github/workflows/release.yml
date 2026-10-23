@@ -57,6 +57,13 @@ jobs:
       - name: Build
         uses: tauri-apps/tauri-action@v0
         env:
+          # R22 一键更新签名（必需）：tauri-action 检测到私钥后会自动给 updater 产物签名，
+          # 生成 latest.json 并随 draft release 上传（配 `tauri.conf.json` 的 plugins.updater）。
+          # 在 repo Settings → Secrets and variables → Actions 配置以下两项后本功能生效：
+          # - TAURI_SIGNING_PRIVATE_KEY：更新签名私钥（tauri signer generate 生成，**绝不可入库**）
+          # - TAURI_SIGNING_PRIVATE_KEY_PASSWORD：私钥密码
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # macOS 签名/公证（可选）
           # APPLE_CERTIFICATE: ${{ secrets.MACOS_CERT_P12 }}
           # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}

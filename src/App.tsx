@@ -27,7 +27,8 @@ import {
 } from "./systemNotify";
 import { querySystemNotifyPermission, sendSystemNotify } from "./systemNotifyApi";
 import { toggleAutostart } from "./autostart";
-import { pluginAutostart, pluginSystemNotify } from "./pluginRuntime";
+import { pluginAutostart, pluginSystemNotify, pluginUpdater, queryAppVersion } from "./pluginRuntime";
+import { updaterErrorMessage, type UpdateInfo, type UpdateState } from "./updater";
 import {
   computeProblemNotifications,
   diffRecovered,
@@ -148,6 +149,16 @@ export default function App() {
   // 只在用户「打开开关」时请求一次通知权限
   const notifyPermissionAsked = useRef(false);
   const retryCtrlRef = useRef<RefreshRetryController | null>(null);
+
+  /* ---- R22 一键更新（docs/round-22-updater-plan.md §4.4） ---- */
+  // 更新状态机：App 层持有，SettingsView 只读渲染 + 发起动作
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: "idle" });
+  // updateState 的 ref 镜像：install/relaunch 处理器里读最新值而不必列入依赖
+  const updateStateRef = useRef<UpdateState>({ kind: "idle" });
+  // 检查/下载进行中互斥（手动与静默检查共用同一把锁，避免并发请求）
+  const updateBusyRef = useRef(false);
+  // 运行时应用版本（tauri.conf.json 为唯一事实来源；jsdom 下查询失败留空串 → UI 回退常量）
+  const [appVersion, setAppVersion] = useState("");
   /** 本轮刷新的 okCount（供 finally 判定整轮失败；catch 也能读到） */
   const roundOkCountRef = useRef(0);
   if (retryCtrlRef.current === null) {
@@ -464,6 +475,131 @@ export default function App() {
       cancelled = true;
     };
   }, [view, config?.settings.systemNotifications]);
+
+  /* ---- R22 一键更新（docs/round-22-updater-plan.md §4.4） ---- */
+
+  // 静默检查发现新版本时的系统通知：尊重系统通知总开关；同一版本只推一次（localStorage 去重）；
+  // 后台检查**绝不**主动请求权限（allowRequest=false）
+  const maybeNotifyUpdate = useCallback((info: UpdateInfo) => {
+    if (!isSystemNotifyEnabled(configRef.current?.settings)) return;
+    const key = `lsb-update-notified:${info.version}`;
+    try {
+      if (window.localStorage.getItem(key) === "1") return;
+      window.localStorage.setItem(key, "1");
+    } catch {
+      // 存储不可用：照常尝试发送（sendSystemNotify 自身有失败降级）
+    }
+    void sendSystemNotify(
+      pluginSystemNotify,
+      {
+        title: "LLM Status Board 有新版本",
+        body: `v${info.version} 已发布，前往「设置 → 关于与更新」一键更新。`,
+      },
+      false,
+    );
+  }, []);
+
+  /**
+   * 检查更新（手动 / 启动静默共用同一把 busy 锁）。
+   * silent=true：已最新与失败都回落 idle，不在 UI 留痕（只有「发现新版本」才提示）。
+   */
+  const runUpdateCheck = useCallback(
+    async (silent: boolean) => {
+      if (updateBusyRef.current) return;
+      updateBusyRef.current = true;
+      setUpdateState({ kind: "checking" });
+      try {
+        const info = await pluginUpdater.check(configRef.current?.settings.proxy ?? null);
+        if (!info) {
+          setUpdateState(silent ? { kind: "idle" } : { kind: "up-to-date" });
+          return;
+        }
+        setUpdateState({ kind: "available", info });
+        if (silent) maybeNotifyUpdate(info);
+      } catch (e) {
+        setUpdateState(
+          silent ? { kind: "idle" } : { kind: "error", phase: "check", message: updaterErrorMessage(e, "check") },
+        );
+      } finally {
+        updateBusyRef.current = false;
+      }
+    },
+    [maybeNotifyUpdate],
+  );
+
+  const handleCheckUpdate = useCallback(() => {
+    void runUpdateCheck(false);
+  }, [runUpdateCheck]);
+
+  // 一键更新：available → downloading(进度回调) → ready（macOS 待重启；Windows 多半已被 NSIS 接管重启，
+  // downloadAndInstall 不再返回——所以「成功」推进写在 await 之后是安全的，执行不到也无副作用）
+  const handleInstallUpdate = useCallback(async () => {
+    const cur = updateStateRef.current;
+    if (cur.kind !== "available" || updateBusyRef.current) return;
+    updateBusyRef.current = true;
+    setUpdateState({ kind: "downloading", info: cur.info, received: 0, total: null });
+    try {
+      await pluginUpdater.downloadAndInstall((received, total) => {
+        setUpdateState((s) => (s.kind === "downloading" ? { ...s, received, total } : s));
+      });
+      setUpdateState({ kind: "ready", info: cur.info });
+    } catch (e) {
+      setUpdateState({ kind: "error", phase: "install", message: updaterErrorMessage(e, "install") });
+    } finally {
+      updateBusyRef.current = false;
+    }
+  }, []);
+
+  // 安装完成后重启进新版；失败如实告知 + 手动重启指引（绝不假装已重启）
+  const handleRelaunchAfterUpdate = useCallback(async () => {
+    try {
+      await pluginUpdater.relaunch();
+    } catch (e) {
+      setUpdateState({
+        kind: "error",
+        phase: "install",
+        message: `重启失败：${readableError(e)}；请手动关闭应用后重新打开`,
+      });
+    }
+  }, []);
+
+  // 兜底：系统浏览器打开发布页（capability 已把 open 限定在本仓库 releases；失败如实提示）
+  const handleOpenReleasePage = useCallback(async () => {
+    try {
+      await pluginUpdater.openReleasePage();
+    } catch (e) {
+      setUpdateState({
+        kind: "error",
+        phase: "check",
+        message: `无法打开发布页：${readableError(e)}；请手动访问 github.com/Lingrui98/llm-status-board/releases`,
+      });
+    }
+  }, []);
+
+  // updateState → ref 镜像（install/relaunch 处理器读最新值而不必列入依赖）
+  useEffect(() => {
+    updateStateRef.current = updateState;
+  }, [updateState]);
+
+  // 运行时版本号（设置页 / 帮助面板展示；jsdom 查询失败留空串 → 组件回退到打包期常量）
+  useEffect(() => {
+    let cancelled = false;
+    void queryAppVersion().then((v) => {
+      if (!cancelled && v) setAppVersion(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 启动约 5s 后静默检查一次更新（默认开，可在「设置 → 关于与更新」关闭；只提示，不自动下载）
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      if ((configRef.current?.settings.autoCheckUpdate ?? true) === false) return;
+      void runUpdateCheck(true);
+    }, 5000);
+    return () => window.clearTimeout(t);
+  }, [runUpdateCheck]);
 
   // 初始化：加载配置 → 按设置决定是否自动刷新一次
   useEffect(() => {
@@ -971,6 +1107,31 @@ export default function App() {
           <button className="btn ghost" onClick={() => setHelpOpen(true)}>
             帮助
           </button>
+          {/* R22：发现新版本 / 待重启时的顶栏角标（点击去设置页更新）；检查中/失败不在此打扰 */}
+          {(updateState.kind === "available" || updateState.kind === "ready") && (
+            <button
+              type="button"
+              className="alert-chip update"
+              onClick={() => setView("settings")}
+              title={
+                updateState.kind === "available"
+                  ? `发现新版本 v${updateState.info.version}，点击前往「设置 → 关于与更新」`
+                  : `v${updateState.info.version} 已安装，点击前往重启生效`
+              }
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                <path
+                  d="M8 12.8V3.2M4.2 7 8 3.2 11.8 7"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>{updateState.kind === "available" ? `v${updateState.info.version}` : "待重启"}</span>
+            </button>
+          )}
           <button
             className={"btn" + (view === "settings" ? " primary" : " ghost")}
             onClick={() => setView(view === "settings" ? "dashboard" : "settings")}
@@ -1030,6 +1191,12 @@ export default function App() {
           onToggleAutostart={handleToggleAutostart}
           notifyPermission={notifyPermission}
           onRequestNotifyPermission={handleRequestNotifyPermission}
+          updateState={updateState}
+          appVersion={appVersion}
+          onCheckUpdate={handleCheckUpdate}
+          onInstallUpdate={handleInstallUpdate}
+          onRelaunchAfterUpdate={handleRelaunchAfterUpdate}
+          onOpenReleasePage={handleOpenReleasePage}
         />
       )}
 
@@ -1057,7 +1224,13 @@ export default function App() {
         />
       )}
 
-      {helpOpen && <HelpPanel onClose={() => setHelpOpen(false)} onOpenGuide={handleReopenGuide} />}
+      {helpOpen && (
+        <HelpPanel
+          appVersion={appVersion || undefined}
+          onClose={() => setHelpOpen(false)}
+          onOpenGuide={handleReopenGuide}
+        />
+      )}
 
       {/* 首次启动引导：账号为空且未跳过，或被帮助面板手动重开；空状态文案保留在其下方（测试语义不变） */}
       {(guideOpen || (config.accounts.length === 0 && !guideDismissed)) && (

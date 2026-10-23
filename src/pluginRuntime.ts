@@ -8,6 +8,9 @@
 
 import type { AutostartApi } from "./autostart";
 import type { SystemNotifyApi } from "./systemNotifyApi";
+import type { UpdaterApi } from "./updater";
+import { RELEASES_PAGE_URL } from "./updater";
+import type { Update } from "@tauri-apps/plugin-updater";
 
 /** 真实自启 API（§2）：enable / disable / isEnabled */
 export const pluginAutostart: AutostartApi = {
@@ -82,3 +85,83 @@ export function notificationManualPath(platform?: string): string {
 
 /** 权限被拒提示的按钮文案（如实描述：只重新请求，不打开系统设置） */
 export const NOTIFY_PERMISSION_RETRY_LABEL = "重新请求授权";
+
+/* ---------- R22 一键更新（docs/round-22-updater-plan.md §4.1） ---------- */
+
+/**
+ * 上一次 check 发现的待安装更新句柄（插件 Update 对象持有 Rust 侧资源）。
+ * check 与 downloadAndInstall 分两次调用，句柄必须在此暂存；
+ * 再次检查 / 安装结束（成败都算）时释放，避免资源泄漏。
+ */
+let pendingUpdate: Update | null = null;
+
+async function releasePendingUpdate(handle: Update | null): Promise<void> {
+  if (!handle) return;
+  try {
+    await handle.close();
+  } catch {
+    // 句柄已被插件释放 / 进程正在退出（Windows 安装器接管）→ 静默
+  }
+}
+
+/** 真实更新 API（§4.1）：check → downloadAndInstall → relaunch；失败一律抛给调用方做文案化 */
+export const pluginUpdater: UpdaterApi = {
+  async check(proxy) {
+    const mod = await import("@tauri-apps/plugin-updater");
+    // 上一次检查若有遗留句柄先释放（用户连点「检查更新」的正常路径）
+    await releasePendingUpdate(pendingUpdate);
+    pendingUpdate = null;
+    // proxy 与「通用设置」的网络代理共用同一输入：空串/空白 → 走系统默认
+    const update = await mod.check({ proxy: proxy?.trim() || undefined, timeout: 15_000 });
+    if (!update) return null;
+    pendingUpdate = update;
+    return { version: update.version, notes: update.body ?? "", date: update.date ?? "" };
+  },
+
+  async downloadAndInstall(onProgress) {
+    if (!pendingUpdate) throw new Error("没有待安装的更新，请先检查更新");
+    const update = pendingUpdate;
+    let received = 0;
+    let total: number | null = null;
+    try {
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? null;
+          onProgress(0, total);
+        } else if (event.event === "Progress") {
+          received += event.data.chunkLength;
+          onProgress(received, total);
+        }
+        // Finished：安装由插件继续完成，无需在此处理
+      });
+    } finally {
+      // Windows 上安装器接管后进程直接退出，这里可能执行不到——属预期，不依赖它做任何事
+      await releasePendingUpdate(update);
+      if (pendingUpdate === update) pendingUpdate = null;
+    }
+  },
+
+  async relaunch() {
+    const mod = await import("@tauri-apps/plugin-process");
+    await mod.relaunch();
+  },
+
+  async openReleasePage() {
+    const mod = await import("@tauri-apps/plugin-opener");
+    await mod.openUrl(RELEASES_PAGE_URL);
+  },
+};
+
+/**
+ * 运行时应用版本（唯一事实来源：tauri.conf.json 的 version）。
+ * 非 Tauri 环境（jsdom / 浏览器预览）返回 null，调用方用打包期常量回退。
+ */
+export async function queryAppVersion(): Promise<string | null> {
+  try {
+    const mod = await import("@tauri-apps/api/app");
+    const v = await mod.getVersion();
+    return typeof v === "string" && v.trim() ? v : null;
+  } catch {
+    return null;
+  }
+}
