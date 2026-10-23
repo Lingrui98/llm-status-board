@@ -269,7 +269,7 @@ impl AccountEntry {
 }
 
 /// 托盘展示所需数据：启用账号（config.json，提供名字与顺序）+ 上次刷新结果（results.json）
-/// + R23 限额明细显示模式（config.json settings）。
+/// 以及 R23 限额明细显示模式（config.json settings）。
 /// 读取失败均降级为空/默认——托盘必须总能建出来，不能因文件问题拖垮启动
 fn load_tray_data(app: &AppHandle) -> (Vec<AccountConfig>, Vec<RefreshOutcome>, QuotaDetailMode) {
     let cfg = config::load(app).ok();
