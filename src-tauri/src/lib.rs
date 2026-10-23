@@ -101,7 +101,7 @@ pub fn run() {
                 tauri::WindowEvent::Focused(true) if window.label() == "main" => {
                     summary::on_main_focus(window.app_handle());
                 }
-                // 顶层浮层失焦才立即隐藏。前端不监听 WebView 内部 blur，避免原生缩放误触发隐藏。
+                // WebView 内部 LostFocus 也会走到这里；由 on_popup_blur 复核顶层焦点后再隐藏。
                 tauri::WindowEvent::Focused(false) if window.label() == summary::POPUP_LABEL => {
                     summary::on_popup_blur(window.app_handle());
                 }

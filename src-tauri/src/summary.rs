@@ -31,9 +31,9 @@ pub const POPUP_HEIGHT: f64 = 360.0;
 pub const POPUP_GAP: f64 = 8.0;
 /// 浮层窗口 label
 pub const POPUP_LABEL: &str = "summary";
-/// 光标驻留判定的外扩余量（物理像素）。
-/// 覆盖图标到浮层的间隔、透明边距，以及不同 DPI 下的原生缩放边缘。
-pub const KEEPALIVE_MARGIN_PX: f64 = 24.0;
+/// 光标驻留判定的外扩余量（物理像素），覆盖图标到浮层的间隔与透明边距。
+/// 原生缩放边框位于窗口外接矩形内侧，不需要扩大该余量。
+pub const KEEPALIVE_MARGIN_PX: f64 = 6.0;
 /// R25：判定为「驻留」后下一次复查的间隔（只在「该隐藏但光标仍在范围内」时才存在这条链）
 pub const KEEPALIVE_RECHECK_MS: u64 = 200;
 
@@ -682,9 +682,37 @@ pub fn on_main_focus(app: &AppHandle) {
     handle_hover_event(app, HoverEvent::MainFocus);
 }
 
-/// 浮层自身失焦（Rust 侧 `WindowEvent::Focused(false)`）→ 立即隐藏
+/// Windows 直接比较系统前台窗口与浮层句柄，不依赖 WebView 的焦点事件顺序。
+#[cfg(windows)]
+fn top_level_focused(window: &tauri::WebviewWindow) -> Option<bool> {
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    let hwnd = window.hwnd().ok()?;
+    // SAFETY：GetForegroundWindow 没有参数，也不转移窗口句柄的所有权。
+    Some(unsafe { GetForegroundWindow() } == hwnd.0 as _)
+}
+
+/// 非 Windows 平台没有 WebView LostFocus 合成事件，直接读取顶层焦点。
+#[cfg(not(windows))]
+fn top_level_focused(window: &tauri::WebviewWindow) -> Option<bool> {
+    window.is_focused().ok()
+}
+
+/// 失焦事件是否应隐藏浮层。
+/// `Some(true)` 表示顶层窗口仍有焦点，例如 WebView 在原生缩放时内部失焦。
+/// 读取失败时按真实失焦处理，避免浮层无法关闭。
+pub fn should_hide_on_popup_blur(top_level_focused: Option<bool>) -> bool {
+    !top_level_focused.unwrap_or(false)
+}
+
+/// 浮层报告失焦时复核顶层窗口，过滤原生缩放造成的 WebView 内部失焦。
 pub fn on_popup_blur(app: &AppHandle) {
-    handle_hover_event(app, HoverEvent::Blur);
+    let focused = app
+        .get_webview_window(POPUP_LABEL)
+        .and_then(|window| top_level_focused(&window));
+    if should_hide_on_popup_blur(focused) {
+        handle_hover_event(app, HoverEvent::Blur);
+    }
 }
 
 /// 点击浮层里的账号行 → 立即隐藏（走 RowClick 语义，与 Escape 区分便于日后扩展）
@@ -796,9 +824,9 @@ mod tests {
         ));
     }
 
-    /// 余量覆盖图标到浮层的间隙，以及高 DPI 下可能延伸到窗外的缩放边缘。
+    /// 外接矩形覆盖图标到浮层的间隙，也覆盖位于外接矩形内侧的原生缩放边框。
     #[test]
-    fn margin_covers_gap_and_native_resize_border() {
+    fn outer_rect_covers_gap_and_native_resize_border() {
         // 浮层底边 y=1030；光标在两者之间时允许驻留。
         assert!(cursor_allows_stay(
             (1700.0, 1034.0),
@@ -806,14 +834,20 @@ mod tests {
             Some(ref_popup()),
             KEEPALIVE_MARGIN_PX
         ));
-        // 模拟高 DPI 缩放边缘：光标在右缘外 16px，仍处于 24px 保活余量内。
+        // Windows 原生缩放边框在外接矩形内侧，右缘和下缘都必须命中。
         assert!(cursor_allows_stay(
-            (ref_popup().right() + 16.0, 900.0),
+            (ref_popup().right() - 2.0, 900.0),
             None,
             Some(ref_popup()),
             KEEPALIVE_MARGIN_PX
         ));
-        // 光标超出余量，而且不在图标附近时才隐藏。
+        assert!(cursor_allows_stay(
+            (1700.0, ref_popup().bottom() - 2.0),
+            None,
+            Some(ref_popup()),
+            KEEPALIVE_MARGIN_PX
+        ));
+        // 光标超出既有余量，而且不在图标附近时才隐藏。
         assert!(!cursor_allows_stay(
             (ref_popup().right() + KEEPALIVE_MARGIN_PX + 1.0, 900.0),
             Some(ref_icon()),
@@ -951,6 +985,14 @@ mod tests {
             );
             assert_eq!(state, HoverState::new(), "{event:?} 应清空状态与定时器");
         }
+    }
+
+    /// WebView 内部失焦但顶层仍有焦点时不隐藏；真实顶层失焦才隐藏。
+    #[test]
+    fn popup_blur_distinguishes_internal_and_top_level_focus_loss() {
+        assert!(!should_hide_on_popup_blur(Some(true)));
+        assert!(should_hide_on_popup_blur(Some(false)));
+        assert!(should_hide_on_popup_blur(None), "读取失败时不能卡住浮层");
     }
 
     /// Move 不改显隐状态；节流常量与规格一致
