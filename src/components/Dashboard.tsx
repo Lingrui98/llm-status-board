@@ -80,7 +80,11 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
       }) || snapshots.length >= 2,
     [enabled, statuses, snapshots],
   );
-  const trendCurrency = useMemo(() => pickTrendCurrency(snapshots), [snapshots]);
+  const trendSnapshots = useMemo(() => {
+    const ids = new Set(enabled.map((a) => a.id));
+    return snapshots.filter((s) => ids.has(s.accountId) && Number.isFinite(Date.parse(s.ts)) && Number.isFinite(s.balance));
+  }, [snapshots, enabled]);
+  const trendCurrency = useMemo(() => pickTrendCurrency(trendSnapshots), [trendSnapshots]);
 
   // 首次刷新（无任何旧数据）时显示骨架卡片，避免网格从空白突然跳入
   const showSkeleton = refreshing && Object.keys(statuses).length === 0;

@@ -7,8 +7,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
 
-/// 历史快照保留上限（超出丢弃最旧）
-const MAX_HISTORY: usize = 2000;
+/// 每账号保留最近 90 天，15 万条可覆盖每分钟刷新一次的完整窗口。
+const HISTORY_RETENTION_DAYS: i64 = 90;
+const MAX_HISTORY_PER_ACCOUNT: usize = 150_000;
 
 pub fn config_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -56,30 +57,53 @@ pub fn load_results(path: &Path) -> Result<Vec<RefreshOutcome>, String> {
     serde_json::from_str(&text).map_err(|e| format!("结果文件格式错误: {e}"))
 }
 
-/// 滚动保留最近 MAX_HISTORY 条。带总额度的快照按刷新时间记录，保留额度不变的平线；
-/// 只有余额的旧式快照仍跳过连续重复值。
+/// 每次成功查询都记录采样时间，包括余额或总额度不变的情况。
+/// 按账号保留最近 90 天、最多 15 万条；旧四字段快照仍可直接读取。
 pub fn append_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
     let mut all = load_history(path)?;
-    for s in snapshots {
-        let dup = all
-            .last()
-            .map(|last| {
-                last.account_id == s.account_id
-                    && last.currency == s.currency
-                    && (last.balance - s.balance).abs() < f64::EPSILON
-                    && last.total == s.total
-                    && (s.total.is_none() || last.ts == s.ts)
-            })
-            .unwrap_or(false);
-        if !dup {
-            all.push(s.clone());
-        }
-    }
-    if all.len() > MAX_HISTORY {
-        let drain = all.len() - MAX_HISTORY;
-        all.drain(..drain);
-    }
-    save_history(path, &all)
+    all.extend_from_slice(snapshots);
+    let retained = retain_history(all, chrono::Utc::now().timestamp_millis());
+    save_history(path, &retained)
+}
+
+fn retain_history(snapshots: Vec<BalanceSnapshot>, now_ms: i64) -> Vec<BalanceSnapshot> {
+    let cutoff = now_ms - chrono::Duration::days(HISTORY_RETENTION_DAYS).num_milliseconds();
+    let mut dated: Vec<_> = snapshots
+        .into_iter()
+        .filter_map(|snapshot| {
+            let ts = chrono::DateTime::parse_from_rfc3339(&snapshot.ts)
+                .ok()?
+                .timestamp_millis();
+            (ts >= cutoff).then_some((ts, snapshot))
+        })
+        .collect();
+    dated.sort_by(|(at, a), (bt, b)| {
+        at.cmp(bt)
+            .then_with(|| a.account_id.cmp(&b.account_id))
+            .then_with(|| a.currency.cmp(&b.currency))
+    });
+    dated.dedup_by(|(at, a), (bt, b)| {
+        at == bt
+            && a.account_id == b.account_id
+            && a.currency == b.currency
+            && a.balance == b.balance
+            && a.total == b.total
+    });
+    let mut counts = HashMap::new();
+    let mut retained: Vec<_> = dated
+        .into_iter()
+        .rev()
+        .filter_map(|(_, snapshot)| {
+            let count = counts.entry(snapshot.account_id.clone()).or_insert(0usize);
+            if *count >= MAX_HISTORY_PER_ACCOUNT {
+                return None;
+            }
+            *count += 1;
+            Some(snapshot)
+        })
+        .collect();
+    retained.reverse();
+    retained
 }
 
 pub fn save_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
@@ -427,73 +451,126 @@ mod tests {
         dir.join("config.json")
     }
 
+    fn history_snapshot(
+        account: &str,
+        ts: chrono::DateTime<chrono::Utc>,
+        balance: f64,
+    ) -> BalanceSnapshot {
+        BalanceSnapshot {
+            ts: ts.to_rfc3339(),
+            account_id: account.into(),
+            balance,
+            currency: "USD".into(),
+            total: None,
+        }
+    }
+
     #[test]
     fn history_keeps_flat_totals_and_total_only_changes() {
         let path = temp_config_path("total-history").with_file_name("history.json");
         let _ = fs::remove_file(&path);
-        // 从旧的四字段历史开始，升级后不能补造该时间点的总额度。
-        fs::write(
-            &path,
-            r#"[{"ts":"2026-10-19T09:00:00Z","accountId":"a1","balance":10.0,"currency":"USD"}]"#,
-        )
-        .unwrap();
-        for (ts, total) in [
-            ("2026-10-19T10:00:00Z", 100.0),
-            ("2026-10-19T11:00:00Z", 100.0),
-            ("2026-10-19T12:00:00Z", 150.0),
-        ] {
-            let snapshot = BalanceSnapshot {
-                ts: ts.into(),
-                account_id: "a1".into(),
-                balance: 10.0,
-                currency: "USD".into(),
-                total: Some(total),
-            };
+        let base = chrono::Utc::now() - chrono::Duration::hours(4);
+        let legacy = serde_json::json!([{"ts":base.to_rfc3339(),"accountId":"a1","balance":10.0,"currency":"USD"}]);
+        fs::write(&path, legacy.to_string()).unwrap();
+        for (index, total) in [100.0, 100.0, 150.0].into_iter().enumerate() {
+            let mut snapshot =
+                history_snapshot("a1", base + chrono::Duration::hours(index as i64 + 1), 10.0);
+            snapshot.total = Some(total);
             append_history(&path, std::slice::from_ref(&snapshot)).unwrap();
-            // 重复提交同一时间点不重复写入。
             append_history(&path, &[snapshot]).unwrap();
         }
         let history = load_history(&path).unwrap();
         assert_eq!(history.len(), 4);
-        assert_eq!(history[0].total, None);
-        assert_eq!(history[1].total, Some(100.0));
-        assert_eq!(history[2].total, Some(100.0));
-        assert_eq!(history[3].total, Some(150.0));
+        assert_eq!(
+            history.iter().map(|s| s.total).collect::<Vec<_>>(),
+            vec![None, Some(100.0), Some(100.0), Some(150.0)]
+        );
         assert!(history.iter().all(|s| s.balance == 10.0));
         let _ = fs::remove_file(&path);
     }
 
     #[test]
-    fn history_preserves_legacy_deduplication_and_retention_limit() {
-        let path = temp_config_path("history-retention").with_file_name("history.json");
+    fn history_keeps_more_than_2000_readings_and_flat_balances() {
+        let path = temp_config_path("larger-history").with_file_name("history.json");
         let _ = fs::remove_file(&path);
-        let mut snapshot = BalanceSnapshot {
-            ts: "old".into(),
-            account_id: "a1".into(),
-            balance: 10.0,
-            currency: "USD".into(),
-            total: None,
-        };
-        append_history(&path, std::slice::from_ref(&snapshot)).unwrap();
-        snapshot.ts = "later".into();
-        append_history(&path, &[snapshot]).unwrap();
-        assert_eq!(load_history(&path).unwrap().len(), 1);
-
-        let snapshots: Vec<_> = (0..=MAX_HISTORY)
-            .map(|i| BalanceSnapshot {
-                ts: i.to_string(),
-                account_id: "a1".into(),
-                balance: 10.0,
-                currency: "USD".into(),
-                total: Some(100.0),
-            })
+        let now = chrono::Utc::now();
+        let snapshots: Vec<_> = (0..3000)
+            .map(|i| history_snapshot("a1", now - chrono::Duration::minutes(3000 - i), 10.0))
             .collect();
         append_history(&path, &snapshots).unwrap();
+        append_history(&path, &snapshots).unwrap();
         let history = load_history(&path).unwrap();
-        assert_eq!(history.len(), MAX_HISTORY);
-        assert_eq!(history[0].ts, "1");
-        assert_eq!(history.last().unwrap().ts, MAX_HISTORY.to_string());
+        assert_eq!(
+            history.len(),
+            3000,
+            "相同时间点去重，但不同时间的相同余额仍是有效采样"
+        );
+        assert!(history.iter().all(|s| s.total.is_none()));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_retention_is_per_account_and_keeps_the_newest_readings() {
+        let now = chrono::Utc::now();
+        let mut snapshots: Vec<_> = (0..MAX_HISTORY_PER_ACCOUNT + 5)
+            .map(|i| {
+                history_snapshot(
+                    "busy",
+                    now - chrono::Duration::seconds((MAX_HISTORY_PER_ACCOUNT + 10 - i) as i64),
+                    i as f64,
+                )
+            })
+            .collect();
+        snapshots.reverse(); // 文件顺序不可靠时仍按真实时间保留最新记录。
+        snapshots.push(history_snapshot(
+            "quiet",
+            now - chrono::Duration::days(3),
+            42.0,
+        ));
+        let retained = retain_history(snapshots, now.timestamp_millis());
+        assert_eq!(
+            retained.iter().filter(|s| s.account_id == "busy").count(),
+            MAX_HISTORY_PER_ACCOUNT
+        );
+        assert_eq!(
+            retained
+                .iter()
+                .find(|s| s.account_id == "busy")
+                .unwrap()
+                .balance,
+            5.0
+        );
+        assert_eq!(
+            retained.iter().filter(|s| s.account_id == "quiet").count(),
+            1,
+            "高频账号不能挤掉低频账号的历史"
+        );
+    }
+
+    #[test]
+    fn history_retention_handles_day_boundary_offsets_and_invalid_dates() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-22T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let at_cutoff = history_snapshot("a1", now - chrono::Duration::days(90), 1.0);
+        let expired = history_snapshot(
+            "a1",
+            now - chrono::Duration::days(90) - chrono::Duration::milliseconds(1),
+            0.0,
+        );
+        let current = history_snapshot("a1", now, 2.0);
+        let mut same_instant = current.clone();
+        same_instant.ts = "2026-10-22T08:00:00+08:00".into();
+        let mut invalid = current.clone();
+        invalid.ts = "invalid-date".into();
+        let retained = retain_history(
+            vec![current, expired, invalid, at_cutoff, same_instant],
+            now.timestamp_millis(),
+        );
+        assert_eq!(
+            retained.iter().map(|s| s.balance).collect::<Vec<_>>(),
+            vec![1.0, 2.0]
+        );
     }
 
     #[test]
