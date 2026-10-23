@@ -71,7 +71,7 @@ mod tests {
     use super::*;
     use crate::types::ProviderKind;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -158,6 +158,44 @@ mod tests {
         assert_eq!(restored.kind, ProviderKind::AiHubMix);
     }
 
+    fn read_billing_request(stream: &mut TcpStream) -> String {
+        // macOS can inherit the nonblocking listener mode on accepted sockets.
+        // Request headers may arrive after accept(), so use bounded blocking I/O.
+        stream.set_nonblocking(false).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0; 1024];
+        while !request.ends_with(b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0, "Incomplete billing request");
+            request.extend_from_slice(&buffer[..count]);
+            assert!(request.len() < 16384);
+        }
+        String::from_utf8(request).unwrap()
+    }
+
+    #[test]
+    fn accepted_nonblocking_connection_waits_for_fragmented_request_headers() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        // Reproduce the accepted-socket mode on every OS, without public network.
+        stream.set_nonblocking(true).unwrap();
+        let request = "GET /dashboard/billing/subscription HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            client
+                .write_all(b"GET /dashboard/billing/subscription HTTP/1.1\r\n")
+                .unwrap();
+            thread::sleep(Duration::from_millis(30));
+            client.write_all(b"Host: localhost\r\n\r\n").unwrap();
+        });
+        assert_eq!(read_billing_request(&mut stream), request);
+        writer.join().unwrap();
+    }
+
     // A local HTTP fixture checks real request paths, headers, status handling,
     // and dispatch without provider credentials or external network access.
     fn billing_server(
@@ -181,18 +219,7 @@ mod tests {
                     }
                     Err(e) => panic!("Local billing server failed: {e}"),
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0; 1024];
-                while !request.ends_with(b"\r\n\r\n") {
-                    let count = stream.read(&mut buffer).unwrap();
-                    assert!(count > 0, "Incomplete billing request");
-                    request.extend_from_slice(&buffer[..count]);
-                    assert!(request.len() < 16384);
-                }
-                let request = String::from_utf8(request).unwrap();
+                let request = read_billing_request(&mut stream);
                 let (status, body) = match request.lines().next().unwrap() {
                     "GET /dashboard/billing/subscription HTTP/1.1" => (
                         subscription_status,
