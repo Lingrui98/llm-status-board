@@ -689,7 +689,7 @@ fn top_level_focused(window: &tauri::WebviewWindow) -> Option<bool> {
 
     let hwnd = window.hwnd().ok()?;
     // SAFETY：GetForegroundWindow 没有参数，也不转移窗口句柄的所有权。
-    Some(unsafe { GetForegroundWindow() } == hwnd.0 as _)
+    Some(std::ptr::eq(unsafe { GetForegroundWindow() }, hwnd.0))
 }
 
 /// 非 Windows 平台没有 WebView LostFocus 合成事件，直接读取顶层焦点。
