@@ -863,6 +863,7 @@ describe("R15 用量历史接线", () => {
           used: null,
           total: null,
           requests: 7,
+          dailyUsage: [{ date: "2026-06-15", cost: 11.5, costUnit: "USD" }],
           note: null,
           extras: [],
           raw: null,
@@ -906,6 +907,25 @@ describe("R15 用量历史接线", () => {
       expect(screen.getByText(/本地用量历史写入失败/)).toBeTruthy();
     });
     expect(screen.getByText(/磁盘写入失败/)).toBeTruthy();
+  });
+
+  it("后端历史写失败仍展示查询结果，但本轮不能继续写used批次", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(makeR14Config([dsAccount]));
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      if (cmd === "refresh_all") return Promise.resolve<RefreshOutcome[]>([{
+        accountId: "acc-ds", ok: true, historyError: "账本写入失败",
+        info: { balance: null, used: { amount: 101, currency: "USD" }, extras: [], fetchedAt: "2026-10-23T12:00:00Z" },
+      }]);
+      return Promise.resolve([]);
+    });
+    render(<App />);
+    await screen.findByText("DeepSeek 官方");
+    fireEvent.click(screen.getByRole("button", { name: "立即刷新" }));
+    await screen.findByText(/本地历史保存失败/);
+    expect(screen.getByText(/账本写入失败/)).toBeTruthy();
+    expect(screen.queryByText("配置加载失败")).toBeNull();
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === "upsert_usage_history")).toBe(false);
   });
 
   it("D-2：B2 行日期用本地日历日（App 透传 todayKey，不落 UTC 日）", async () => {

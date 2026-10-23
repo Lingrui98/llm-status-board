@@ -152,6 +152,8 @@ export interface UsageRecord {
   tokens: number | null;
   /** 仅本地 used 计数器路径使用（§1.2 B2），其余为 null */
   usedTotal: number | null;
+  /** used 模式标识，与后端基准精确匹配，跨模式不复用旧计数器。 */
+  usedModeSince?: string | null;
   source: UsageSource;
   /** 写入时刻（本地 RFC3339 带偏移） */
   updatedAt: string;
@@ -161,6 +163,7 @@ export interface UsageRecord {
 export interface UsageHistoryFile {
   version: number;
   records: UsageRecord[];
+  balanceCheckpoints?: { accountId: string; ts: string; balance: number | null; currency: string; usedModeSince?: string | null }[];
 }
 
 export interface AccountInfo {
@@ -188,6 +191,8 @@ export interface RefreshOutcome {
   ok: boolean;
   info?: AccountInfo | null;
   error?: string | null;
+  /** 查询成功但本地历史保存失败，不影响当前余额展示。 */
+  historyError?: string | null;
 }
 
 export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {

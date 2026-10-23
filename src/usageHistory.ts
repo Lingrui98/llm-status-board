@@ -1,4 +1,4 @@
-// R15 本地用量历史：把「本次刷新结果 + 余额快照 + 已有历史」算成一批可 upsert 的 UsageRecord。
+// R15 本地用量历史：把「本次刷新结果 + 已有历史」算成站点 / used 计数器批次；余额增量由 Rust 保存。
 // 口径严格遵循 docs/round-15-plan.md §1.2（B1 余额下降法 / B2 used 计数器法）与 §1.3（键与覆盖规则）。
 //
 // 职责边界：本模块只**生成批次**；真正的合并 / 清理 / 幂等 / 原子写由 Rust 侧 upsert_usage_history 负责
@@ -8,7 +8,7 @@
 // 不再经 new Date() 二次换算（否则在 UTC 机器与 UTC+8 机器上会得到不同日期）。
 
 import { normalizeCurrency, shouldSkipCurrency } from "./insights";
-import type { BalanceSnapshot, RefreshOutcome, UsageRecord } from "./types";
+import type { RefreshOutcome, UsageRecord } from "./types";
 
 /** 合法的本地日历日 "YYYY-MM-DD" */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -153,58 +153,6 @@ export function siteRecordsFromOutcomes(
 }
 
 /**
- * §1.2 B1：本地行（余额下降法）。
- * - 只取传入账号的快照，按 ts 升序；对每对相邻且**同归一币种**的快照算 `drop = max(0, 前 − 后)`；
- * - drop 计入**后一条快照**的本地日期（因此「昨日末笔 → 今日首笔」的下降额自然记入今日，AC-6）；
- * - 同一 (账号, 日期) 的多个 drop 求和 → **整日重算，天然幂等**（AC-3）；
- * - 首条无前驱不产出行；drop = 0 的日子不产出行。
- */
-export function localRecordsFromSnapshots(
-  accountIds: readonly string[],
-  snapshots: readonly BalanceSnapshot[],
-  updatedAt: string,
-): UsageRecord[] {
-  const out: UsageRecord[] = [];
-  for (const accountId of accountIds) {
-    const hits = snapshots.filter((s) => s.accountId === accountId);
-    if (hits.length < 2) continue;
-    const cleaned = hits
-      .map((s) => ({ t: new Date(s.ts).getTime(), balance: s.balance, currency: normalizeCurrency(s.currency), date: localDateKey(s.ts) }))
-      .filter((s) => Number.isFinite(s.t) && Number.isFinite(s.balance) && isValidDateKey(s.date))
-      .sort((a, b) => a.t - b.t);
-
-    // 同一日期 → 累计 drop 与其币种
-    const byDate = new Map<string, { cost: number; currency: string }>();
-    for (let i = 1; i < cleaned.length; i++) {
-      const prev = cleaned[i - 1];
-      const cur = cleaned[i];
-      if (prev.currency !== cur.currency) continue; // 跨币种不混算
-      const drop = prev.balance - cur.balance;
-      if (drop <= 0) continue; // 充值免疫
-      const acc = byDate.get(cur.date) ?? { cost: 0, currency: cur.currency };
-      acc.cost += drop;
-      byDate.set(cur.date, acc);
-    }
-    for (const [date, acc] of byDate) {
-      out.push({
-        accountId,
-        date,
-        cost: acc.cost,
-        currency: acc.currency,
-        requests: null,
-        inputTokens: null,
-        outputTokens: null,
-        tokens: null,
-        usedTotal: null,
-        source: "local",
-        updatedAt,
-      });
-    }
-  }
-  return out;
-}
-
-/**
  * §1.2 B2：本地行（used 计数器法，仅当 `balance == null 且 used != null`，如 Kimi 订阅）。
  * `delta = max(0, usedNow − usedTotalRow)`；`usedTotalRow` = 该账号已有记录中最近一条 `usedTotal != null` 的值，
  * 无则视为首次观察（delta = 0，不产生花费行，但**仍写一条 usedTotal 基准行**，否则下次永远算不出 delta）。
@@ -215,6 +163,7 @@ export function localRecordsFromUsedCounter(
   existing: readonly UsageRecord[],
   updatedAt: string,
   dateKey?: string,
+  usedModeSince: ReadonlyMap<string, string> = new Map(),
 ): UsageRecord[] {
   const out: UsageRecord[] = [];
   for (const o of outcomes) {
@@ -228,10 +177,14 @@ export function localRecordsFromUsedCounter(
     // 00:00–08:00 时段会落到前一天（如 2026-10-15T20:30Z 的本地日是 10-16）。
     const date = dateKey !== undefined ? dateKey : localDateKey(updatedAt);
     if (!isValidDateKey(date)) continue;
+    const sameDay = existing.find((r) => r.accountId === o.accountId && r.date === date);
+    // 日账本键不含币种：不能把既有美元累计改写成点数，或将两种单位相加。
+    if (sameDay && normalizeCurrency(sameDay.currency) !== currency) continue;
 
     // 该账号最近一条带 usedTotal 的记录（按日期降序；同日期取 updatedAt 最新）
     const prior = existing
-      .filter((r) => r.accountId === o.accountId && r.usedTotal !== null && Number.isFinite(r.usedTotal))
+      .filter((r) => r.accountId === o.accountId && normalizeCurrency(r.currency) === currency && r.usedTotal !== null && Number.isFinite(r.usedTotal))
+      .filter((r) => !usedModeSince.has(o.accountId) || r.usedModeSince === usedModeSince.get(o.accountId))
       .sort((a, b) => (a.date === b.date ? (a.updatedAt < b.updatedAt ? 1 : -1) : a.date < b.date ? 1 : -1))[0];
     const baseline = prior ? (prior.usedTotal as number) : null;
     const delta = baseline === null ? 0 : Math.max(0, usedNow - baseline);
@@ -252,6 +205,7 @@ export function localRecordsFromUsedCounter(
       outputTokens: null,
       tokens: null,
       usedTotal: usedNow,
+      ...(usedModeSince.has(o.accountId) ? { usedModeSince: usedModeSince.get(o.accountId)! } : {}),
       source: "local",
       updatedAt,
     });
@@ -260,29 +214,28 @@ export function localRecordsFromUsedCounter(
 }
 
 /**
- * 批次生成总入口：站点行 + B1 + B2（同 (账号,日期) 内 local 行合并）。
+ * 前端批次入口：站点行 + B2。余额差分 B1 由 Rust 在快照清理前原子入账。
  * 只处理 `accountIds`（调用方传启用账号），避免给已删除/停用账号写历史。
  * @param dateKey 本地日历日 "YYYY-MM-DD"（todayKey）—— B2 行日期用它，不要再从 updatedAt 推导（D-2）。
  * @param updatedAt 写入时刻（ISO），用于记录的时间戳字段
  */
 export function buildUsageBatch(
   outcomes: readonly RefreshOutcome[],
-  snapshots: readonly BalanceSnapshot[],
   existing: readonly UsageRecord[],
   accountIds: readonly string[],
   updatedAt: string = new Date().toISOString(),
   dateKey?: string,
+  usedModeSince: ReadonlyMap<string, string> = new Map(),
 ): BuiltUsageBatch {
   const enabled = new Set(accountIds);
-  const scopedOutcomes = outcomes.filter((o) => enabled.has(o.accountId));
+  const scopedOutcomes = outcomes.filter((o) => enabled.has(o.accountId) && !o.historyError);
 
   const site = siteRecordsFromOutcomes(scopedOutcomes, updatedAt);
-  const localBalance = localRecordsFromSnapshots(accountIds, snapshots, updatedAt);
-  const localUsed = localRecordsFromUsedCounter(scopedOutcomes, existing, updatedAt, dateKey);
+  const localUsed = localRecordsFromUsedCounter(scopedOutcomes, existing, updatedAt, dateKey, usedModeSince);
 
-  // 同一 (账号,日期) 的 local 行合并：余额法 + used 法都可能产出，cost 相加、币种取已存在者
+  // 同一 (账号,日期) 的 used 行合并；不从曲线快照重算余额消费。
   const localByKey = new Map<string, UsageRecord>();
-  for (const r of [...localBalance, ...localUsed]) {
+  for (const r of localUsed) {
     const key = `${r.accountId}\u0000${r.date}`;
     const prev = localByKey.get(key);
     if (!prev) {
@@ -346,13 +299,14 @@ export function sameUsageRecords(a: readonly UsageRecord[], b: readonly UsageRec
     if (x.requests !== y.requests || x.tokens !== y.tokens) return false;
     if (x.inputTokens !== y.inputTokens || x.outputTokens !== y.outputTokens) return false;
     if (x.usedTotal !== y.usedTotal) return false;
+    if ((x.usedModeSince ?? null) !== (y.usedModeSince ?? null)) return false;
   }
   return true;
 }
 
 /** 该批次是否会在服务端产生变化（无变化则无需 upsert，等价于 §1.3 幂等） */
 export function hasUsageChanges(proposed: readonly UsageRecord[], existing: readonly UsageRecord[]): boolean {
-  return !sameUsageRecords(mergeUsageRecords(proposed), mergeUsageRecords(existing));
+  return !sameUsageRecords(mergeUsageRecords([...existing, ...proposed]), mergeUsageRecords(existing));
 }
 
 /** 站点与本地合并去重后的视图（§3.5）：同一 (账号,日期) 保留 site 行 */

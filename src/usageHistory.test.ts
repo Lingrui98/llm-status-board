@@ -10,7 +10,6 @@ import {
   isEmptyUsageRow,
   isValidDateKey,
   localDateKey,
-  localRecordsFromSnapshots,
   localRecordsFromUsedCounter,
   mergeUsageRecords,
   mergedView,
@@ -20,13 +19,9 @@ import {
   siteRecordsFromOutcomes,
   totalTokens,
 } from "./usageHistory";
-import type { BalanceSnapshot, RefreshOutcome, UsageRecord } from "./types";
+import type { RefreshOutcome, UsageRecord } from "./types";
 
 const UPDATED = "2026-06-15T10:00:00.000Z";
-
-function snap(accountId: string, ts: string, balance: number, currency = "USD"): BalanceSnapshot {
-  return { ts, accountId, balance, currency };
-}
 
 function info(patch: Partial<NonNullable<RefreshOutcome["info"]>> = {}): NonNullable<RefreshOutcome["info"]> {
   return {
@@ -193,7 +188,6 @@ describe("usageHistory：§1.2 A 站点行", () => {
         }),
       ],
       [],
-      [],
       ["a1"],
       UPDATED,
     );
@@ -233,103 +227,6 @@ describe("usageHistory：§1.2 A 站点行", () => {
   });
 });
 
-describe("usageHistory：§1.2 B1 余额下降法", () => {
-  it("AC-2：同日 100→80 → 1 条当日行、cost=20、source=local", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [snap("a1", "2026-06-15T09:00:00+08:00", 100), snap("a1", "2026-06-15T21:00:00+08:00", 80)],
-      UPDATED,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ accountId: "a1", date: "2026-06-15", cost: 20, currency: "USD", source: "local" });
-    expect(rows[0].requests).toBeNull();
-    expect(rows[0].tokens).toBeNull();
-  });
-
-  it("AC-3：同日 100→80→70 → 只有 1 行且 cost=30（整日重算，非累加）", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [
-        snap("a1", "2026-06-15T08:00:00+08:00", 100),
-        snap("a1", "2026-06-15T16:00:00+08:00", 80),
-        snap("a1", "2026-06-15T22:00:00+08:00", 70),
-      ],
-      UPDATED,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].cost).toBe(30);
-  });
-
-  it("AC-5：充值免疫 100→50→80→40 → cost = 50 + 40 = 90", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [
-        snap("a1", "2026-06-15T06:00:00+08:00", 100),
-        snap("a1", "2026-06-15T10:00:00+08:00", 50),
-        snap("a1", "2026-06-15T14:00:00+08:00", 80),
-        snap("a1", "2026-06-15T18:00:00+08:00", 40),
-      ],
-      UPDATED,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].cost).toBe(90);
-  });
-
-  it("AC-6：跨日归属 —— 昨日末笔 100 → 今日首笔 70，差额 30 记入今日", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [snap("a1", "2026-06-14T22:00:00+08:00", 100), snap("a1", "2026-06-15T08:00:00+08:00", 70)],
-      UPDATED,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].date).toBe("2026-06-15");
-    expect(rows[0].cost).toBe(30);
-  });
-
-  it("首条快照不产出行；余额上升（充值）不产生负花费", () => {
-    expect(localRecordsFromSnapshots(["a1"], [snap("a1", "2026-06-15T12:00:00Z", 100)], UPDATED)).toEqual([]);
-    expect(
-      localRecordsFromSnapshots(
-        ["a1"],
-        [snap("a1", "2026-06-15T09:00:00Z", 50), snap("a1", "2026-06-15T10:00:00Z", 150)],
-        UPDATED,
-      ),
-    ).toEqual([]);
-  });
-
-  it("跨币种不混算：币种切换的那一对跳过", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [
-        snap("a1", "2026-06-14T09:00:00Z", 100, "USD"),
-        snap("a1", "2026-06-15T09:00:00Z", 60, "CNY"), // 币种不同 → 跳过这一对
-        snap("a1", "2026-06-15T21:00:00Z", 40, "CNY"), // 同币种 → 20 CNY
-      ],
-      UPDATED,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ date: "2026-06-15", cost: 20, currency: "CNY" });
-  });
-
-  it("多天数据按日分组；未列入 accountIds 的账号被忽略", () => {
-    const rows = localRecordsFromSnapshots(
-      ["a1"],
-      [
-        snap("a1", "2026-06-13T09:00:00Z", 100),
-        snap("a1", "2026-06-13T21:00:00Z", 90), // 13 日 10
-        snap("a1", "2026-06-14T21:00:00Z", 70), // 14 日 20
-        snap("a2", "2026-06-13T09:00:00Z", 100),
-        snap("a2", "2026-06-13T21:00:00Z", 1),
-      ],
-      UPDATED,
-    );
-    expect(rows.map((r) => [r.accountId, r.date, r.cost])).toEqual([
-      ["a1", "2026-06-13", 10],
-      ["a1", "2026-06-14", 20],
-    ]);
-  });
-});
-
 describe("usageHistory：§1.2 B2 used 计数器法", () => {
   it("D-2：注入本地日历日后，B2 行日期就是该本地日（不受 UTC 日影响）", () => {
     // 2026-10-15T20:30Z 在 Asia/Shanghai（UTC+8）下的本地日历日是 10-16；
@@ -348,7 +245,6 @@ describe("usageHistory：§1.2 B2 used 计数器法", () => {
   it("D-2：buildUsageBatch 透传 dateKey 给 B2（端到端本地日归属）", () => {
     const batch = buildUsageBatch(
       [outcome("kimi", { used: { amount: 1000, currency: "CREDITS" }, balance: null })],
-      [],
       [],
       ["kimi"],
       "2026-10-15T20:30:00.000Z",
@@ -497,7 +393,53 @@ describe("usageHistory：§1.3 合并优先级与幂等", () => {
 });
 
 describe("usageHistory：批次生成 buildUsageBatch", () => {
-  it("站点行 + 本地行合并；site 优先", () => {
+  it("余额由后端入账，前端不再生成会覆盖完整累计的余额重算行", () => {
+    const existing = [localRec("a1", "2026-06-15", 11)];
+    const batch = buildUsageBatch([outcome("a1", { balance: { amount: 89, currency: "USD" }, used: { amount: 111, currency: "USD" } })], existing, ["a1"], UPDATED);
+    expect(batch.records).toEqual([]);
+    expect(hasUsageChanges(batch.records, existing)).toBe(false);
+  });
+
+  it("余额模式切回used时不复用更早的计数器，之后的增量仍正常累计", () => {
+    const existing = [localRec("a1", "2026-06-15", 12, { usedTotal: 100, updatedAt: "2026-06-15T09:00:00Z" })];
+    const since = new Map([["a1", "2026-06-15T10:00:00Z"]]);
+    const first = buildUsageBatch([outcome("a1", { used: { amount: 103, currency: "USD" } })], existing, ["a1"], "2026-06-15T10:00:00Z", "2026-06-15", since);
+    expect(first.records[0].cost).toBe(12);
+    expect(first.records[0].usedTotal).toBe(103);
+    const next = buildUsageBatch([outcome("a1", { used: { amount: 104, currency: "USD" } })], first.records, ["a1"], "2026-06-15T11:00:00Z", "2026-06-15", since);
+    expect(next.records[0].cost).toBe(13);
+  });
+
+  it("后端基准未提交的失败轮次不能继续写used批次", () => {
+    const result = { ...outcome("a1", { used: { amount: 110, currency: "USD" } }), historyError: "写入失败" };
+    const batch = buildUsageBatch([result], [localRec("a1", "2026-06-15", 10, { usedTotal: 100 })], ["a1"], UPDATED);
+    expect(batch.records).toEqual([]);
+  });
+
+  it("美元日累计不能在used切换后被改成同数额的CREDITS", () => {
+    const existing = [localRec("a1", "2026-06-15", 10)];
+    const batch = buildUsageBatch([outcome("a1", { used: { amount: 200, currency: "CREDITS" } })], existing, ["a1"], UPDATED, "2026-06-15", new Map([["a1", UPDATED]]));
+    expect(batch.records).toEqual([]);
+    expect(mergeUsageRecords([...existing, ...batch.records])[0]).toMatchObject({ cost: 10, currency: "USD" });
+  });
+
+  it("used模式用精确标识区分同毫秒的纳秒边界，首次观察后正常递增", () => {
+    const since = "2026-06-15T10:00:00.000000003Z";
+    const existing = [localRec("a1", "2026-06-15", 12, { usedTotal: 100, updatedAt: "2026-06-15T10:00:00.000000001Z" })];
+    const map = new Map([["a1", since]]);
+    const first = buildUsageBatch([outcome("a1", { used: { amount: 103, currency: "USD" } })], existing, ["a1"], "2026-06-15T10:00:00.000Z", "2026-06-15", map);
+    expect(first.records[0]).toMatchObject({ cost: 12, usedTotal: 103, usedModeSince: since });
+    const next = buildUsageBatch([outcome("a1", { used: { amount: 104, currency: "USD" } })], first.records, ["a1"], "2026-06-15T10:00:00.001Z", "2026-06-15", map);
+    expect(next.records[0].cost).toBe(13);
+    const markerOnly = buildUsageBatch([outcome("a1", { used: { amount: 100, currency: "USD" } })], existing, ["a1"], UPDATED, "2026-06-15", map);
+    expect(hasUsageChanges(markerOnly.records, existing)).toBe(true);
+    const saved = mergeUsageRecords([...existing, ...markerOnly.records]);
+    const increment = buildUsageBatch([outcome("a1", { used: { amount: 101, currency: "USD" } })], saved, ["a1"], UPDATED, "2026-06-15", map);
+    expect(increment.records[0].cost).toBe(13);
+    expect(hasUsageChanges(next.records, next.records)).toBe(false);
+  });
+
+  it("前端生成站点行，余额差分由后端独立入账", () => {
     const batch = buildUsageBatch(
       [
         outcome("a1", {
@@ -505,7 +447,6 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
           dailyUsage: [{ date: "2026-06-15", cost: 5, costUnit: "USD", requests: 2 }],
         }),
       ],
-      [snap("a1", "2026-06-15T09:00:00+08:00", 100), snap("a1", "2026-06-15T21:00:00+08:00", 80)],
       [],
       ["a1"],
       UPDATED,
@@ -518,7 +459,6 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
     const batch = buildUsageBatch(
       [outcome("a1", { dailyUsage: [{ date: "2026-06-15", cost: 5, costUnit: "USD" }] }), outcome("gone", { dailyUsage: [{ date: "2026-06-15", cost: 9, costUnit: "USD" }] })],
       [],
-      [],
       ["a1"],
       UPDATED,
     );
@@ -528,7 +468,6 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
   it("余额法与 used 法同日合并：cost 相加", () => {
     const rows = buildUsageBatch(
       [outcome("a1", { used: { amount: 150, currency: "CREDITS" }, balance: null })],
-      [],
       [localRec("a1", "2026-06-15", 30, { currency: "CREDITS", usedTotal: 100 })],
       ["a1"],
       "2026-06-15T10:00:00+08:00",
@@ -542,7 +481,6 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
     const batch = buildUsageBatch(
       [outcome("a1", { dailyUsage: [{ date: "2026-06-15", cost: 1, costUnit: "USD" }] })],
       [],
-      [],
       ["a1", "empty-acc"],
       UPDATED,
     );
@@ -551,7 +489,7 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
   });
 
   it("空输入 → 空批次，不崩", () => {
-    const batch = buildUsageBatch([], [], [], [], UPDATED);
+    const batch = buildUsageBatch([], [], [], UPDATED);
     expect(batch.records).toEqual([]);
     expect(batch.skipped).toEqual([]);
   });
@@ -563,9 +501,8 @@ describe("usageHistory：批次生成 buildUsageBatch", () => {
         dailyUsage: [{ date: "2026-06-15", cost: 5, costUnit: "USD" }],
       }),
     ];
-    const snapshots = [snap("a1", "2026-06-15T09:00:00+08:00", 100), snap("a1", "2026-06-15T21:00:00+08:00", 80)];
-    const first = buildUsageBatch(outcomes, snapshots, [], ["a1"], UPDATED);
-    const second = buildUsageBatch(outcomes, snapshots, first.records, ["a1"], UPDATED);
+    const first = buildUsageBatch(outcomes, [], ["a1"], UPDATED);
+    const second = buildUsageBatch(outcomes, first.records, ["a1"], UPDATED);
     expect(sameUsageRecords(first.records, second.records)).toBe(true);
     expect(hasUsageChanges(second.records, first.records)).toBe(false);
   });

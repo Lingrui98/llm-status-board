@@ -94,8 +94,6 @@ export default function App() {
   const [usageError, setUsageError] = useState<string | null>(null);
   // 「今日」本地日历日：整个分析视图共用同一份来源，避免多处 new Date() 造成口径漂移
   const [todayKey, setTodayKey] = useState(() => toLocalDateKey());
-  // usageRecords 的镜像 ref：persistUsageBatch / refresh 里读最新值而不必把它们列入依赖
-  const usageRecordsRef = useRef<UsageRecord[]>([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // 新手引导：accounts 为空 && 未跳过时自动出现；guideOpen 支持从帮助面板手动重开
@@ -226,17 +224,21 @@ export default function App() {
    * 这里捕获所有异常，只设置一条可读提示；调用方（refresh）不会因此中断。
    */
   const persistUsageBatch = useCallback(
-    async (outcomes: RefreshOutcome[], snaps: BalanceSnapshot[], existing: UsageRecord[], dayKey: string) => {
+    async (outcomes: RefreshOutcome[], dayKey: string) => {
       try {
+        // Rust 已在清理快照前提交 B1：必须读其最新结果，不能用刷新前的旧视图计算 B2。
+        const file = await api.getUsageHistory();
+        const existing = Array.isArray(file?.records) ? file.records : [];
+        setUsageRecords(existing);
         const accountIds = (configRef.current?.accounts ?? []).filter((a) => a.enabled).map((a) => a.id);
         // D-2：日期用本地日历日 dayKey（todayKey），不再让 B2 从 toISOString() 里推导 UTC 日
         const batch = buildUsageBatch(
           outcomes,
-          snaps,
           existing,
           accountIds,
           new Date().toISOString(),
           dayKey,
+          new Map((file.balanceCheckpoints ?? []).filter((c) => c.usedModeSince).map((c) => [c.accountId, c.usedModeSince!])),
         );
         // 无变化则不写盘（幂等；与 Rust 侧的字节级幂等双保险）
         if (!hasUsageChanges(batch.records, existing)) {
@@ -245,8 +247,8 @@ export default function App() {
         }
         await api.upsertUsageHistory(batch.records);
         // 需要合并结果时再读一次（Rust 侧是唯一合并点）
-        const file = await api.getUsageHistory();
-        setUsageRecords(Array.isArray(file?.records) ? file.records : []);
+        const saved = await api.getUsageHistory();
+        setUsageRecords(Array.isArray(saved?.records) ? saved.records : []);
         setUsageError(null);
       } catch (e) {
         // 仅轻量提示：刷新结果照常展示
@@ -302,13 +304,16 @@ export default function App() {
       // R15：刷新后「今天」重新取一次（跨零点刷新时窗口口径要跟着走），
       // 并把它同时用于余额历史与用量历史批次（单一来源，避免时区漂移）。
       const dayKey = toLocalDateKey();
-      // 刷新成功后重新拉取余额历史（后端已追加本次快照）；同一次读取结果同时喂给
-      // 余额趋势图与 R15 的「余额下降法」批次计算，避免重复 IPC。
+      // 曲线历史与消费账本独立；不再用保留下来的点覆盖整日累计。
       const freshSnaps = await api.getHistory().catch(() => null);
       if (freshSnaps) {
         setHistory(freshSnaps);
-        // R15：算批次并写入本地用量历史。失败只提示、不抛出 —— 刷新主流程不受影响。
-        await persistUsageBatch(outcomes, freshSnaps, usageRecordsRef.current, dayKey);
+      }
+      const historyError = outcomes.find((o) => o.historyError)?.historyError;
+      if (historyError) {
+        setUsageError(`本地历史保存失败（查询结果仍可用）：${historyError}`);
+      } else {
+        await persistUsageBatch(outcomes, dayKey);
       }
       setTodayKey(dayKey);
     } catch (e) {
@@ -634,11 +639,6 @@ export default function App() {
       if (savedFadeTimerRef.current) window.clearTimeout(savedFadeTimerRef.current);
     };
   }, []);
-
-  // usageRecords → ref 镜像（供刷新流程读取最新值，避免把 records 放进 refresh 的依赖导致重建）
-  useEffect(() => {
-    usageRecordsRef.current = usageRecords;
-  }, [usageRecords]);
 
   // ---------- 通知推导（纯前端，从 refresh / get_last_results 的结果计算，不动 IPC 逻辑） ----------
 

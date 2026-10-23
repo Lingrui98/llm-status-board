@@ -5,11 +5,24 @@ use crate::types::{
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::Manager;
 
 /// 每账号保留最近 90 天，15 万条可覆盖每分钟刷新一次的完整窗口。
 const HISTORY_RETENTION_DAYS: i64 = 90;
 const MAX_HISTORY_PER_ACCOUNT: usize = 150_000;
+static USAGE_HISTORY_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+#[path = "balance_usage_tests.rs"]
+mod balance_usage_tests;
+
+struct BalanceInput<'a> {
+    snapshots: &'a [BalanceSnapshot],
+    account_ids: &'a [String],
+    resets: &'a [String],
+    observed_at: &'a str,
+}
 
 pub fn config_file_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
@@ -59,11 +72,61 @@ pub fn load_results(path: &Path) -> Result<Vec<RefreshOutcome>, String> {
 
 /// 每次成功查询都记录采样时间，包括余额或总额度不变的情况。
 /// 按账号保留最近 90 天、最多 15 万条；旧四字段快照仍可直接读取。
-pub fn append_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
+#[cfg(test)]
+fn append_history(path: &Path, snapshots: &[BalanceSnapshot]) -> Result<(), String> {
     let mut all = load_history(path)?;
     all.extend_from_slice(snapshots);
     let retained = retain_history(all, chrono::Utc::now().timestamp_millis());
     save_history(path, &retained)
+}
+
+/// 日累计与处理基准先原子落盘，成功后才淘汰曲线点。失败保留未裁剪原始点，供下次重放。
+pub fn record_balance_history(
+    history_path: &Path,
+    usage_path: &Path,
+    snapshots: &[BalanceSnapshot],
+    account_ids: &[String],
+    resets: &[String],
+    observed_at: &str,
+) -> Result<(), String> {
+    record_balance_history_at(
+        history_path,
+        usage_path,
+        snapshots,
+        account_ids,
+        resets,
+        observed_at,
+        chrono::Utc::now().timestamp_millis(),
+    )
+}
+
+fn record_balance_history_at(
+    history_path: &Path,
+    usage_path: &Path,
+    snapshots: &[BalanceSnapshot],
+    account_ids: &[String],
+    resets: &[String],
+    observed_at: &str,
+    now_ms: i64,
+) -> Result<(), String> {
+    let _guard = USAGE_HISTORY_LOCK
+        .lock()
+        .map_err(|_| "用量历史锁不可用".to_string())?;
+    let mut all = load_history(history_path)?;
+    all.extend_from_slice(snapshots);
+    let input = BalanceInput {
+        snapshots: &all,
+        account_ids,
+        resets,
+        observed_at,
+    };
+    if let Err(error) = update_usage_history(usage_path, &[], Some(input)) {
+        save_history(history_path, &all)
+            .map_err(|backup| format!("{error}；未裁剪快照保存也失败：{backup}"))?;
+        return Err(error);
+    }
+    let retained = retain_history(all, now_ms);
+    save_history(history_path, &retained)
 }
 
 fn retain_history(snapshots: Vec<BalanceSnapshot>, now_ms: i64) -> Vec<BalanceSnapshot> {
@@ -71,10 +134,8 @@ fn retain_history(snapshots: Vec<BalanceSnapshot>, now_ms: i64) -> Vec<BalanceSn
     let mut dated: Vec<_> = snapshots
         .into_iter()
         .filter_map(|snapshot| {
-            let ts = chrono::DateTime::parse_from_rfc3339(&snapshot.ts)
-                .ok()?
-                .timestamp_millis();
-            (ts >= cutoff).then_some((ts, snapshot))
+            let ts = chrono::DateTime::parse_from_rfc3339(&snapshot.ts).ok()?;
+            (ts.timestamp_millis() >= cutoff).then_some((ts, snapshot))
         })
         .collect();
     dated.sort_by(|(at, a), (bt, b)| {
@@ -350,6 +411,17 @@ fn write_usage_history_text(path: &Path, text: &str) -> Result<(), String> {
 /// - §1.5 版本过高 → 返回 Err 且不覆盖原文件
 /// - 空批次 **且** 文件不存在 → 直接 `Ok(0)`，不创建无意义的空文件
 pub fn upsert_usage_history(path: &Path, batch: &[UsageRecord]) -> Result<usize, String> {
+    let _guard = USAGE_HISTORY_LOCK
+        .lock()
+        .map_err(|_| "用量历史锁不可用".to_string())?;
+    update_usage_history(path, batch, None)
+}
+
+fn update_usage_history(
+    path: &Path,
+    batch: &[UsageRecord],
+    balance_input: Option<BalanceInput<'_>>,
+) -> Result<usize, String> {
     let existing_text = if path.exists() {
         Some(fs::read_to_string(path).map_err(|e| format!("读取用量历史失败: {e}"))?)
     } else {
@@ -358,7 +430,7 @@ pub fn upsert_usage_history(path: &Path, batch: &[UsageRecord]) -> Result<usize,
 
     // 空批次 + 文件不存在：不落盘（避免用户配置目录里出现无意义空文件）。
     // 文件已存在时按原逻辑处理，以保持 §1.3 的字节幂等。
-    if batch.is_empty() && existing_text.is_none() {
+    if batch.is_empty() && existing_text.is_none() && balance_input.is_none() {
         return Ok(0);
     }
 
@@ -382,19 +454,26 @@ pub fn upsert_usage_history(path: &Path, batch: &[UsageRecord]) -> Result<usize,
         },
     };
 
-    let mut records = std::mem::take(&mut file.records);
-    merge_usage_records(&mut records, batch);
-    trim_usage_records(&mut records);
+    merge_usage_records(&mut file.records, batch);
+    if let Some(input) = balance_input {
+        crate::balance_usage::ingest(
+            &mut file,
+            input.snapshots,
+            input.account_ids,
+            input.observed_at,
+        );
+        crate::balance_usage::reset(&mut file, input.resets, input.observed_at);
+    }
+    trim_usage_records(&mut file.records);
     // 落盘前兜底：合并后的整份总账（含既有行）都不得出现空币种/非法 source/全空行
-    normalize_usage_currency(&mut records);
-    normalize_usage_source(&mut records);
-    drop_empty_usage_records(&mut records);
+    normalize_usage_currency(&mut file.records);
+    normalize_usage_source(&mut file.records);
+    drop_empty_usage_records(&mut file.records);
     // 入批与既有行都被净化后一条不剩、且原本没有文件 → 别创建无意义的空文件
-    if records.is_empty() && existing_text.is_none() {
+    if file.records.is_empty() && file.balance_checkpoints.is_empty() && existing_text.is_none() {
         return Ok(0);
     }
     file.version = USAGE_HISTORY_VERSION;
-    file.records = records;
     let total = file.records.len();
 
     let text =
@@ -734,12 +813,14 @@ mod tests {
                     ..Default::default()
                 }),
                 error: None,
+                history_error: None,
             },
             crate::types::RefreshOutcome {
                 account_id: "a2".into(),
                 ok: false,
                 info: None,
                 error: Some("HTTP 401".into()),
+                history_error: None,
             },
         ];
         save_results(&path, &outcomes).unwrap();
@@ -907,6 +988,7 @@ mod tests {
             output_tokens: None,
             tokens: None,
             used_total: None,
+            used_mode_since: None,
             source: source.into(),
             updated_at: "2026-10-15T10:00:00+08:00".into(),
         }
@@ -1452,6 +1534,7 @@ mod tests {
             output_tokens: None,
             tokens: None,
             used_total: None,
+            used_mode_since: None,
             source: "site".into(),
             updated_at: "2026-10-15T10:00:00+08:00".into(),
         }
@@ -1526,6 +1609,7 @@ mod tests {
                 empty_row("ghost", "2026-10-01"),
                 rec("keep", "2026-10-02", Some(2.0), "site"),
             ],
+            ..Default::default()
         };
         fs::write(&path, serde_json::to_string_pretty(&dirty).unwrap()).unwrap();
 
