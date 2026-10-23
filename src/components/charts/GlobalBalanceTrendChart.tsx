@@ -10,9 +10,11 @@ import {
   YAxis,
 } from "recharts";
 import type { AccountConfig, BalanceSnapshot } from "../../types";
-import { formatCompact, formatDecimal } from "../../format";
-import { ChartEmpty, tsLabel, usePrefersReducedMotion } from "./shared";
+import { formatDecimal } from "../../format";
+import { ChartEmpty, usePrefersReducedMotion } from "./shared";
 import { SERIES_COLORS } from "./GlobalDailyUsageChart";
+import TrendRangeControls, { useTrendRange } from "../TrendRangeControls";
+import { sampleTrendRows, TREND_GAP_MS, trendTick, trendTicks } from "../../trendHistory";
 
 interface Props {
   snapshots: BalanceSnapshot[];
@@ -25,9 +27,10 @@ interface SeriesDef {
   key: string; // accountId
   name: string;
   color: string;
+  points: Row[];
 }
 
-type Row = { label: string; fullTs: string } & Record<string, number | string>;
+type Row = { timestamp: number } & Record<string, number | null>;
 
 interface TipProps {
   active?: boolean;
@@ -40,7 +43,8 @@ function MultiTrendTip({ active, payload, series, currency }: TipProps) {
   if (!active || !payload || payload.length === 0) return null;
   const nameOf = (k: string | number | undefined) =>
     series.find((s) => s.key === k)?.name ?? String(k ?? "");
-  const title = payload[0]?.payload?.fullTs ?? "";
+  const timestamp = payload[0]?.payload?.timestamp;
+  const title = timestamp == null ? "" : new Date(timestamp).toLocaleString("zh-CN", { hour12: false });
   return (
     <div className="chart-tooltip">
       <div className="tt-title">{title}</div>
@@ -66,12 +70,17 @@ function MultiTrendTip({ active, payload, series, currency }: TipProps) {
  */
 export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) {
   const reducedMotion = usePrefersReducedMotion();
+  const available = useMemo(() => {
+    const ids = new Set(accounts.filter((a) => a.enabled).map((a) => a.id));
+    return snapshots.filter((s) => ids.has(s.accountId) && Number.isFinite(Date.parse(s.ts)) && Number.isFinite(s.balance));
+  }, [snapshots, accounts]);
+  const range = useTrendRange(available);
   const { rows, series, currency } = useMemo(() => {
     const nameOf = new Map(accounts.map((a) => [a.id, a.name || a.id]));
 
     // 按币种分组 → 取「有快照的账号数」最多的币种（并列时取快照更多的）
     const byCurrency = new Map<string, BalanceSnapshot[]>();
-    for (const s of snapshots) {
+    for (const s of available) {
       const list = byCurrency.get(s.currency) ?? [];
       list.push(s);
       byCurrency.set(s.currency, list);
@@ -89,7 +98,8 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
 
     // 该币种下按账号分组，按最新余额取前 6
     const byAccount = new Map<string, BalanceSnapshot[]>();
-    for (const s of best) {
+    for (const s of range.filtered) {
+      if (s.currency !== currency) continue;
       const list = byAccount.get(s.accountId) ?? [];
       list.push(s);
       byAccount.set(s.accountId, list);
@@ -102,79 +112,107 @@ export default function GlobalBalanceTrendChart({ snapshots, accounts }: Props) 
       .sort((a, b) => b.latest - a.latest)
       .slice(0, MAX_LINES);
 
-    const series: SeriesDef[] = ranked.map((a, i) => ({
-      key: a.id,
-      name: nameOf.get(a.id) ?? a.id,
-      color: SERIES_COLORS[i % SERIES_COLORS.length],
-    }));
+    const series: SeriesDef[] = ranked.map((a, i) => {
+      const points: Row[] = [];
+      for (const snapshot of a.sorted) {
+        const ts = Date.parse(snapshot.ts);
+        const previous = points[points.length - 1];
+        if (previous && ts - previous.timestamp > TREND_GAP_MS) {
+          points.push({ timestamp: previous.timestamp + (ts - previous.timestamp) / 2, [a.id]: null });
+        }
+        points.push({ timestamp: ts, [a.id]: snapshot.balance });
+      }
+      return { key: a.id, name: nameOf.get(a.id) ?? a.id, color: SERIES_COLORS[i % SERIES_COLORS.length],
+        points: sampleTrendRows(points, (r) => [r[a.id]]) };
+    });
 
     // 按时间戳对齐成行（同一时间点的快照合并到一行），按原始 ts 排序
-    const byTs = new Map<string, Row>();
+    const byTs = new Map<number, Row>();
     for (const a of ranked) {
       for (const s of a.sorted) {
-        const d = new Date(s.ts);
-        const row = byTs.get(s.ts) ?? {
-          label: tsLabel(s.ts),
-          fullTs: isNaN(d.getTime()) ? s.ts : d.toLocaleString("zh-CN", { hour12: false }),
+        const ts = Date.parse(s.ts);
+        const row = byTs.get(ts) ?? {
+          timestamp: ts,
         };
         row[a.id] = s.balance;
-        byTs.set(s.ts, row);
+        byTs.set(ts, row);
       }
     }
-    const rows = [...byTs.keys()]
-      .sort((x, y) => new Date(x).getTime() - new Date(y).getTime())
+    const sorted = [...byTs.keys()]
+      .sort((x, y) => x - y)
       .map((ts) => byTs.get(ts)!);
+    const withGaps: Row[] = [];
+    for (const row of sorted) {
+      const previous = withGaps[withGaps.length - 1];
+      if (previous && row.timestamp - previous.timestamp > TREND_GAP_MS) {
+        withGaps.push({ timestamp: previous.timestamp + (row.timestamp - previous.timestamp) / 2 });
+      }
+      withGaps.push(row);
+    }
+    const rows = sampleTrendRows(withGaps, (r) => series.map((s) => typeof r[s.key] === "number" ? r[s.key] as number : null));
     return { rows, series, currency };
-  }, [snapshots, accounts]);
-
-  if (rows.length < 2 || series.length === 0) return <ChartEmpty text="暂无余额历史（至少两次刷新后生成）" />;
+  }, [available, range.filtered, accounts]);
 
   const multi = series.length > 1;
 
   return (
-    <ResponsiveContainer width="100%" height={200} className="chart-box">
-      <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-        <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tickLine={false}
-          axisLine={false}
-          dy={6}
-          tick={{ fontSize: 11, fill: "currentColor" }}
-          minTickGap={24}
-        />
-        <YAxis
-          width={52}
-          domain={["auto", "auto"]}
-          tickLine={false}
-          axisLine={false}
-          tick={{ fontSize: 11, fill: "currentColor" }}
-          tickFormatter={(v: number) => formatCompact(v)}
-        />
-        <Tooltip
-          content={<MultiTrendTip series={series} currency={currency} />}
-          cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
-        />
-        {multi && (
-          <Legend iconType="plainline" iconSize={10} wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
-        )}
-        {series.map((s) => (
-          <Line
-            key={s.key}
-            type="monotone"
-            dataKey={s.key}
-            name={s.name}
-            stroke={s.color}
-            strokeWidth={2}
-            dot={multi ? false : { r: 2, strokeWidth: 0, fill: s.color }}
-            activeDot={{ r: 3, strokeWidth: 0 }}
-            isAnimationActive={!reducedMotion}
-            animationDuration={500}
-            connectNulls
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
+    <div className="global-balance-trend">
+      <TrendRangeControls selection={range.selection} onChange={range.setSelection} bounds={range.bounds} window={range.window} />
+      {rows.length < 2 || series.length === 0 ? <ChartEmpty text={range.window.error ?? "此时间范围余额记录不足，可选择更长时间或“全部”"} /> : (
+        <ResponsiveContainer width="100%" height={200} className="chart-box">
+          <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+            <CartesianGrid stroke="var(--chart-grid)" vertical={false} />
+            <XAxis
+              dataKey="timestamp"
+              type="number"
+              scale="time"
+              domain={[range.window.from, range.window.to]}
+              allowDataOverflow
+              allowDuplicatedCategory={false}
+              ticks={trendTicks(range.window)}
+              tickCount={5}
+              tickFormatter={(ts: number) => trendTick(ts, range.window)}
+              tickLine={false}
+              axisLine={false}
+              dy={6}
+              tick={{ fontSize: 11, fill: "currentColor" }}
+              minTickGap={24}
+            />
+            <YAxis
+              width={52}
+              domain={["auto", "auto"]}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 11, fill: "currentColor" }}
+              tickFormatter={(v: number) => v.toLocaleString("zh-CN", { maximumFractionDigits: 6 })}
+            />
+            <Tooltip
+              content={<MultiTrendTip series={series} currency={currency} />}
+              cursor={{ stroke: "var(--chart-cursor)", strokeDasharray: "3 3" }}
+            />
+            {multi && (
+              <Legend iconType="plainline" iconSize={10} wrapperStyle={{ fontSize: 11, paddingTop: 6 }} />
+            )}
+            {series.map((s) => (
+              <Line
+                key={s.key}
+                type="linear"
+                dataKey={s.key}
+                data={s.points}
+                name={s.name}
+                stroke={s.color}
+                strokeWidth={2}
+                dot={multi || rows.length > 100 ? false : { r: 2, strokeWidth: 0, fill: s.color }}
+                activeDot={{ r: 3, strokeWidth: 0 }}
+                isAnimationActive={!reducedMotion && rows.length < 300}
+                animationDuration={500}
+                connectNulls={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
   );
 }
 

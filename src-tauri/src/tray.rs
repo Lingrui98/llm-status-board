@@ -405,6 +405,7 @@ mod tests {
             ok: true,
             info: Some(info),
             error: None,
+            history_error: None,
         }
     }
 
@@ -416,6 +417,7 @@ mod tests {
             ok: false,
             info: None,
             error: Some("HTTP 401: 无效的访问令牌".into()),
+            history_error: None,
         };
         let text = tray_status_text(Some(&long));
         assert!(text.starts_with("✗ "), "失败应以 ✗ 前缀标识: {text}");
@@ -428,12 +430,14 @@ mod tests {
 
         let short = RefreshOutcome {
             error: Some("HTTP 401".into()),
+            history_error: None,
             ..long
         };
         assert_eq!(tray_status_text(Some(&short)), "✗ HTTP 401");
 
         let no_reason = RefreshOutcome {
             error: None,
+            history_error: None,
             ..short
         };
         assert_eq!(tray_status_text(Some(&no_reason)), "✗ 刷新失败");
@@ -720,6 +724,7 @@ mod tests {
                     ok: false,
                     info: None,
                     error: Some(err.to_string()),
+                    history_error: None,
                 })),
                 GoldenInput::NotRefreshed => tray_status_text(None),
                 GoldenInput::Info { balance, windows } => {

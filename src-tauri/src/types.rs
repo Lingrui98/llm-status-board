@@ -338,6 +338,9 @@ pub struct RefreshOutcome {
     pub ok: bool,
     pub info: Option<AccountInfo>,
     pub error: Option<String>,
+    /// 查询结果仍可用，但本地历史写入失败时单独提示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_error: Option<String>,
 }
 
 /// 余额与总额度历史快照；旧记录缺少 total 时仍可直接读取。
@@ -381,6 +384,9 @@ pub struct UsageHistoryFile {
     pub version: u32,
     #[serde(default)]
     pub records: Vec<UsageRecord>,
+    /// 与日累计同一事务保存；曲线快照淘汰不删除增量基准。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub balance_checkpoints: Vec<BalanceCheckpoint>,
 }
 
 impl Default for UsageHistoryFile {
@@ -388,8 +394,22 @@ impl Default for UsageHistoryFile {
         Self {
             version: USAGE_HISTORY_VERSION,
             records: Vec::new(),
+            balance_checkpoints: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceCheckpoint {
+    pub account_id: String,
+    pub ts: String,
+    /// 成功查询不再提供余额时置空，避免与 used 计数器路径重复计费。
+    pub balance: Option<f64>,
+    pub currency: String,
+    /// 从余额模式切入 used 模式的边界，旧 usedTotal 不能跨过此边界复用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_mode_since: Option<String>,
 }
 
 /// 单条逐日用量记录，键 = `(accountId, date)`（R15 §1.1）。
@@ -411,6 +431,9 @@ pub struct UsageRecord {
     pub tokens: Option<f64>,
     /// 仅 §1.2 B2（used 计数器法）使用，其余路径为 null
     pub used_total: Option<f64>,
+    /// used 模式代际标识，与 checkpoint 的边界字符串精确相等；不用有损时间比较。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_mode_since: Option<String>,
     /// `"site"` 或 `"local"`
     pub source: String,
     /// 写入时刻（`now_iso()`，本地 RFC3339 带偏移）
@@ -678,6 +701,7 @@ mod tests {
             output_tokens: Some(20.0),
             tokens: Some(120.0),
             used_total: Some(999.0),
+            used_mode_since: Some("2026-12-31T12:00:00.000000001+08:00".into()),
             source: "local".into(),
             updated_at: "2026-12-31T23:59:59+08:00".into(),
         };

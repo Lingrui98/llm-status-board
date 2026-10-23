@@ -118,6 +118,7 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
                         ok: true,
                         info: Some(info),
                         error: None,
+                        history_error: None,
                     },
                 ),
                 Err(e) => (
@@ -127,6 +128,7 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
                         ok: false,
                         info: None,
                         error: Some(e),
+                        history_error: None,
                     },
                 ),
             }
@@ -161,20 +163,42 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save(&app, &cfg);
     }
 
-    // 结果持久化：下次启动时直接展示上次数据（时间戳保持为旧值）
-    let outcomes: Vec<RefreshOutcome> = results.into_iter().map(|(_, o)| o).collect();
-    if let Ok(path) = config::results_file_path(&app) {
-        // 持久化失败不影响本次刷新结果返回
-        let _ = config::save_results(&path, &outcomes);
+    let mut outcomes: Vec<RefreshOutcome> = results.into_iter().map(|(_, o)| o).collect();
+    // 同秒内连续刷新也有独立游标，避免秒级时间戳漏记差分。
+    let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let snapshots = balance_snapshots(&outcomes, &now);
+    let resets: Vec<String> = outcomes
+        .iter()
+        .filter(|o| {
+            o.ok && o
+                .info
+                .as_ref()
+                .is_some_and(|i| i.balance.as_ref().is_none_or(|b| !b.amount.is_finite()))
+        })
+        .map(|o| o.account_id.clone())
+        .collect();
+    if !snapshots.is_empty() || !resets.is_empty() {
+        let saved = (|| {
+            let history = config::history_file_path(&app)?;
+            let usage = config::usage_history_file_path(&app)?;
+            let accounts = cfg
+                .accounts
+                .iter()
+                .filter(|a| a.enabled)
+                .map(|a| a.id.clone())
+                .collect::<Vec<_>>();
+            config::record_balance_history(&history, &usage, &snapshots, &accounts, &resets, &now)
+        })();
+        if let Err(error) = saved {
+            for outcome in outcomes.iter_mut().filter(|o| o.ok) {
+                outcome.history_error = Some(error.clone());
+            }
+        }
     }
 
-    // 保存本次成功刷新的余额与总额度，供趋势图和余额差分指标使用。
-    let now = crate::types::now_iso();
-    let snapshots = balance_snapshots(&outcomes, &now);
-    if !snapshots.is_empty() {
-        if let Ok(path) = config::history_file_path(&app) {
-            let _ = config::append_history(&path, &snapshots);
-        }
+    // 历史写入失败独立记录，查询结果照常可用。
+    if let Ok(path) = config::results_file_path(&app) {
+        let _ = config::save_results(&path, &outcomes);
     }
 
     Ok(outcomes)
@@ -291,6 +315,7 @@ mod tests {
                 ..Default::default()
             }),
             error: None,
+            history_error: None,
         }
     }
 
