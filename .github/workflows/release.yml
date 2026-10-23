@@ -31,7 +31,7 @@ jobs:
             -f tag_name="${{ github.ref_name }}" \
             -f name="LLM Status Board ${{ github.ref_name }}" \
             -f body="Win / macOS 安装包见 Assets。" \
-            -f draft=true -f prerelease=false --jq .id)
+            -F draft=true -F prerelease=false --jq .id)
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   build:
