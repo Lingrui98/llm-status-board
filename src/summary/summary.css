@@ -1,9 +1,9 @@
 /* ============================================================
    R18 托盘悬停「用量总结」浮层（summary.html 专属布局）
    - 颜色全部来自 styles.css 的变量（明暗两套随 prefers-color-scheme 自动切换），零硬编码色值；
-   - 浮层本身：唯一一层边框 + 唯一一个阴影 + 10px 圆角（规格 §5.1）；
-   - 数字 tabular-nums；字号层级 12 / 13 / 15 / 20；
-   - 入场动画 120ms（透明度 + 2px 位移），prefers-reduced-motion 下无动画；
+   - 浮层本身：唯一一层边框 + 唯一一个阴影 + 16px 圆角；
+   - 数字 tabular-nums；字号层级 10.5 / 12.5 / 14 / 19；
+   - 入场动画 160ms（透明度 + 2px 位移），prefers-reduced-motion 下无动画；
    - 焦点环沿用全局 :focus-visible（styles.css 已提供）。
    ============================================================ */
 
@@ -24,7 +24,7 @@ body::before {
 .summary-shell {
   position: relative; /* R24：承载右下角尺寸拖拽手柄 */
   height: 100%;
-  padding: 6px; /* 给圆角阴影留出绘制空间（窗口 transparent） */
+  padding: 8px; /* 给圆角阴影留出绘制空间（窗口 transparent） */
   user-select: none;
 }
 
@@ -32,12 +32,14 @@ body::before {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-2);
-  border: 1px solid var(--border); /* 唯一一层边框 */
-  border-radius: 10px;
-  box-shadow: var(--shadow-pop); /* 唯一一个阴影 */
+  background:
+    radial-gradient(280px 130px at 0% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 78%),
+    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 96%, var(--on-accent)), var(--bg-2));
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: var(--shadow-modal);
   overflow: hidden;
-  animation: summary-in 0.12s var(--ease-out);
+  animation: summary-in 0.16s var(--ease-out);
 }
 
 @keyframes summary-in {
@@ -60,105 +62,157 @@ body::before {
 /* ---------- 头部：标题 + 最后刷新 ---------- */
 .summary-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 10px 12px 8px;
+  padding: 13px 14px 12px;
+}
+
+.summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.summary-brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .summary-title {
   margin: 0;
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
+  font-size: 14px;
+  font-weight: 680;
+  letter-spacing: 0.015em;
 }
 
 .summary-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
-  font-size: 12px;
-  color: var(--text-2);
+  font-size: 10.5px;
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-/* ---------- 总览 2×2：复用 StatTile，去掉第二层边框/阴影 ---------- */
+/* ---------- 总览 2×2：复用 StatTile，使用紧凑浅底磁贴 ---------- */
 .summary-overview {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 0 8px 8px;
+  gap: 7px;
+  padding: 0 10px 12px;
 }
 
 .summary-card .stat-tile {
-  border: none;
-  box-shadow: none;
-  background: var(--bg-1);
-  border-radius: var(--radius-s);
-  padding: 7px 9px;
-  gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-accent) 2%, transparent);
+  background: color-mix(in srgb, var(--bg-1) 72%, transparent);
+  border-radius: 10px;
+  padding: 9px 10px;
+  gap: 4px;
 }
 
 .summary-card .stat-tile:hover {
-  border: none;
-  box-shadow: none;
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-accent) 3%, transparent);
+  background: color-mix(in srgb, var(--bg-1) 72%, transparent);
   transform: none;
 }
 
 .summary-card .stat-tile-label {
-  font-size: 12px;
+  font-size: 10.5px;
   color: var(--text-3);
+  letter-spacing: 0.025em;
 }
 
 .summary-card .stat-tile-value {
-  font-size: 20px;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.025em;
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
 
 .summary-card .stat-tile-unit,
 .summary-card .stat-tile-hint {
-  font-size: 12px;
+  font-size: 10.5px;
 }
 
 /* ---------- 账号行（数量多时本区段内滚动） ---------- */
+.summary-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 13px 7px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 10px;
+  letter-spacing: 0.035em;
+}
+
+.summary-section-head span:first-child {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.summary-section-head span:last-child {
+  letter-spacing: 0;
+}
+
 .summary-rows {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
-  padding: 0;
+  padding: 0 5px 5px;
   overflow-y: auto;
   list-style: none;
-  border-top: 1px solid var(--border);
+}
+
+.summary-rows li + li {
+  margin-top: 2px;
 }
 
 .summary-row {
-  display: block; /* R23：行体改为纵向块（首行网格 + 可选窗口明细区），原网格移到 .summary-row-line */
+  position: relative;
+  display: block;
   width: 100%;
-  padding: 7px 12px;
-  background: none;
-  border: none;
-  border-top: 1px solid var(--border); /* 分隔线（非嵌套边框） */
-  border-radius: 0;
+  padding: 8px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 9px;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.16s var(--ease-out), border-color 0.16s var(--ease-out), transform 0.16s var(--ease-out);
 }
 
-/* R23：首行 = 原 summary-row 的网格（状态点 / 名称 / 主指标），结构变化但视觉不变 */
 .summary-row-line {
+  position: relative;
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
 }
 
-.summary-rows li:first-child .summary-row {
-  border-top: none;
+.summary-row:hover {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
-.summary-row:hover {
-  background: color-mix(in srgb, var(--bg-3) 55%, transparent);
+.summary-row:active {
+  transform: scale(0.992);
 }
 
 .summary-dot {
@@ -170,10 +224,12 @@ body::before {
 
 .summary-dot.ok {
   background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
 }
 
 .summary-dot.err {
   background: var(--err);
+  box-shadow: 0 0 0 3px var(--err-soft);
 }
 
 .summary-row-main {
@@ -182,26 +238,66 @@ body::before {
 
 .summary-row-name {
   display: block;
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 550;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.16s var(--ease-out);
 }
 
 .summary-row-value {
-  font-size: 13px;
+  padding-right: 14px;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--text);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
+.summary-row-arrow {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  color: var(--accent);
+  opacity: 0;
+  transform: translate(-3px, -50%);
+  transition: opacity 0.16s var(--ease-out), transform 0.16s var(--ease-out);
+}
+
+.summary-row:hover .summary-row-name,
+.summary-row:focus-visible .summary-row-name {
+  color: var(--accent);
+}
+
+.summary-row:hover .summary-row-arrow,
+.summary-row:focus-visible .summary-row-arrow {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
 /* ---------- 底部：本地历史天数 ---------- */
 .summary-foot {
-  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 31px;
+  padding: 7px 13px;
   border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-2);
+  background: color-mix(in srgb, var(--bg-1) 45%, transparent);
+  font-size: 10.5px;
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
+}
+
+.summary-foot::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.75;
 }
 
 /* ---------- R23：配额窗口明细区（直条 = 已用；色系与主卡 QuotaWindowBars 同阈值） ---------- */
@@ -277,8 +373,8 @@ body::before {
 .summary-resize-grip {
   position: absolute;
   /* 内移到卡片区域，避开 Windows 覆盖窗口边缘的原生缩放边框 */
-  right: 10px;
-  bottom: 10px;
+  right: 11px;
+  bottom: 11px;
   width: 20px;
   height: 20px;
   cursor: nwse-resize;
@@ -299,16 +395,43 @@ body::before {
 }
 
 .summary-skeleton-row {
-  height: 30px;
-  margin-bottom: 6px;
-  border-radius: var(--radius-s);
-  background: var(--bg-3);
+  height: 34px;
+  margin-bottom: 7px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, var(--bg-1), var(--bg-3), var(--bg-1));
+  background-size: 200% 100%;
+  animation: summary-skeleton 1.4s ease-in-out infinite;
+}
+
+@keyframes summary-skeleton {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
 }
 
 .summary-state {
   margin: 0;
-  padding: 16px 12px;
-  font-size: 13px;
+  padding: 28px 16px;
+  font-size: 12.5px;
   color: var(--text-2);
-  line-height: 1.5;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.summary-rows::-webkit-scrollbar {
+  width: 5px;
+}
+
+.summary-rows::-webkit-scrollbar-thumb {
+  border: none;
+  background: var(--border-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-skeleton-row {
+    animation: none;
+  }
 }

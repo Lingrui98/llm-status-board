@@ -1038,8 +1038,15 @@ export default function App() {
       </div>
       <header className="topbar">
         <div className="topbar-title">
-          <span className="logo-dot" />
-          <h1>LLM Status Board</h1>
+          <span className="logo-dot" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M4 12.5V9M9 12.5V4.5M14 12.5V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </span>
+          <div className="topbar-copy">
+            <h1>LLM Status Board</h1>
+            <span className="topbar-subtitle">账号状态与用量中心</span>
+          </div>
         </div>
         <div className="topbar-actions">
           {unreadCount > 0 && (

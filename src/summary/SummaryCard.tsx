@@ -1,6 +1,6 @@
 // R18 托盘悬停「用量总结」浮层 —— 纯展示卡。
 // 与数据获取解耦：三态（loading / error / empty / ready）由外部注入，便于注水单测。
-// 版式：头部（标题 + 最后刷新）→ 总览 2×2 数字（复用 StatTile，去第二层边框）→
+// 版式：头部（标题 + 最后刷新）→ 总览 2×2 数字（复用 StatTile 的紧凑样式）→
 // 账号行（状态点 + 名称/异常摘要 + 数值 + R23 配额窗口明细条，区段内滚动）→ 本地历史天数。
 
 import StatTile from "../components/ui/StatTile";
@@ -78,8 +78,21 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
     <div className="summary-shell" onMouseEnter={onPointerEnter} onMouseLeave={onPointerLeave}>
       <section className="summary-card" aria-label="用量总结">
         <header className="summary-head">
-          <h1 className="summary-title">用量总结</h1>
-          <span className="summary-refresh">{refreshText}</span>
+          <div className="summary-heading">
+            <span className="summary-brand-mark" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 18 18" fill="none">
+                <path d="M4 12.5V9M9 12.5V4.5M14 12.5V7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              </svg>
+            </span>
+            <h1 className="summary-title">用量总结</h1>
+          </div>
+          <span className="summary-refresh">
+            <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" fill="none" />
+              <path d="M8 4.8v3.6l2.3 1.4" stroke="currentColor" strokeWidth="1.4" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {refreshText}
+          </span>
         </header>
 
         {status === "loading" && (
@@ -107,6 +120,11 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
               <StatTile label="余额合计 · CNY" value={data.cnyText} />
             </div>
 
+            <div className="summary-section-head">
+              <span>账号明细</span>
+              <span>点击查看详情</span>
+            </div>
+
             <ul className="summary-rows" aria-label="账号余额">
               {data.rows.map((row) => (
                 <li key={row.accountId}>
@@ -125,6 +143,9 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
                         </span>
                       </span>
                       <span className="summary-row-value">{row.valueText}</span>
+                      <svg className="summary-row-arrow" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+                        <path d="m4 2.5 3.5 3.5L4 9.5" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
                     </span>
                     {/* R23：配额窗口明细（每个有效窗口一行）；高度随窗口数增长，行区已有滚动 */}
                     {row.windows.length > 0 && (
