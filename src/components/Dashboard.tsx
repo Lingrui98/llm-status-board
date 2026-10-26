@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ProviderCard, { type FocusRequest } from "./ProviderCard";
 import SkeletonCard from "./SkeletonCard";
+import MasonryGrid from "./MasonryGrid";
 // recharts 图表统一懒加载（拆出首屏主包）
 import {
   LazyGlobalDailyUsageChart as GlobalDailyUsageChart,
@@ -240,7 +241,8 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         </section>
       )}
 
-      <div className="card-grid">
+      {/* 各列独立累计高度，避免普通 Grid 的行高耦合；保留 enabled 的原始顺序。 */}
+      <MasonryGrid>
         {showSkeleton
           ? Array.from({ length: skeletonCount }, (_, i) => <SkeletonCard key={`skl-${i}`} />)
           : enabled.map((acc) => (
@@ -254,7 +256,7 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
                 focusRequest={focusRequest}
               />
             ))}
-      </div>
+      </MasonryGrid>
 
       {/* R17 版位：洞察 / 深度分析移到账号卡片下方（默认收起，用户选择在 localStorage 记忆） */}
       {/* R14 洞察区：内部计算完全来自 history 快照，与上方全局统计的 hasStats 判据解耦 */}

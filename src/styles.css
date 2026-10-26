@@ -5,24 +5,25 @@
 
 :root {
   color-scheme: dark;
-  --bg: #080b11;
-  --bg-1: #0d121b;
-  --bg-2: #121925;
-  --bg-3: #1b2534;
-  --border: rgba(148, 163, 184, 0.11);
+  --bg: #0a0d12;
+  --bg-1: #0f141b;
+  --bg-2: #141a22;
+  --bg-3: #1c242f;
+  --border: rgba(148, 163, 184, 0.12);
   --border-strong: rgba(148, 163, 184, 0.22);
-  --text: #edf2fa;
-  --text-2: #a2afc1;
-  --text-3: #788ba3; /* 4.8:1 on --bg-2，11px 小字标签达 WCAG AA */
-  --accent: #69a8ff;
-  --accent-soft: rgba(105, 168, 255, 0.12);
+  --text: #e9eef6;
+  --text-2: #a2adbd;
+  --text-3: #7e8da1;
+  --accent: #78a6f8;
+  --accent-soft: rgba(120, 166, 248, 0.11);
+  --accent-contrast: #09111e;
   --ok: #3ecf8e;
   --ok-soft: rgba(62, 207, 142, 0.12);
   --warn: #f0b44c;
   --warn-soft: rgba(240, 180, 76, 0.12);
   --err: #f26868;
   --err-soft: rgba(242, 104, 104, 0.12);
-  /* 主色上的前景/提亮锚点：按钮文字、开关圆点、进度条渐变提亮端共用 */
+  /* 提亮锚点：渐变、开关圆点和高光共用；按钮文字使用独立的 accent-contrast */
   --on-accent: #ffffff;
   /* Token 输出紫（与图表色板第 4 色 --chart-4 同源） */
   --violet: #b48bff;
@@ -40,19 +41,17 @@
   --chart-cursor-fill: color-mix(in srgb, var(--text-3) 10%, transparent);
   --radius-s: 8px;
   --radius: 12px;
-  --radius-l: 16px;
-  /* 阴影阶梯：卡片常态 → 卡片悬浮 → tooltip 浮层 → 抽屉 → 命令面板 */
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px -14px rgba(0, 0, 0, 0.55);
-  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 16px 36px -14px rgba(0, 0, 0, 0.6);
+  --radius-l: 14px;
+  /* 卡片保持安静，明显阴影只用于悬浮层 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22);
+  --shadow-card-hover: 0 10px 26px -18px rgba(0, 0, 0, 0.55);
   --shadow-pop: 0 6px 22px -8px rgba(0, 0, 0, 0.5);
   --shadow-drawer: -18px 0 48px -18px rgba(0, 0, 0, 0.55);
   --shadow-modal: 0 24px 64px -20px rgba(0, 0, 0, 0.6);
   /* 遮罩：抽屉（重）/ 命令面板（轻） */
   --overlay: rgba(4, 8, 14, 0.55);
   --overlay-soft: rgba(4, 8, 14, 0.38);
-  --glow:
-    radial-gradient(900px 440px at 18% -180px, rgba(105, 168, 255, 0.14), transparent 70%),
-    radial-gradient(720px 380px at 88% -160px, rgba(62, 207, 142, 0.055), transparent 72%);
+  --glow: radial-gradient(960px 460px at 18% -250px, rgba(120, 166, 248, 0.1), transparent 72%);
   /* 位移/形变统一缓动（色彩类过渡保持默认 ease） */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --mono: "SF Mono", "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
@@ -61,17 +60,18 @@
 @media (prefers-color-scheme: light) {
   :root {
     color-scheme: light;
-    --bg: #f4f6f9;
-    --bg-1: #eceff4;
+    --bg: #f5f6f8;
+    --bg-1: #edf0f4;
     --bg-2: #ffffff;
-    --bg-3: #f0f3f7;
+    --bg-3: #eff2f5;
     --border: rgba(15, 23, 42, 0.09);
     --border-strong: rgba(15, 23, 42, 0.17);
     --text: #16202e;
     --text-2: #54647a;
     --text-3: #66788d; /* 4.6:1 on #fff，小字标签达 WCAG AA（原 #8593a6 仅 3.1:1） */
     --accent: #1a6fd4; /* 4.9:1 on #fff（原 #1f7ae0 为 4.3:1，未达 AA） */
-    --accent-soft: rgba(26, 111, 212, 0.1);
+    --accent-soft: rgba(26, 111, 212, 0.09);
+    --accent-contrast: #ffffff;
     --ok: #097551; /* 5.1:1 on #fff（原 #0e9f6e 为 3.4:1，未达 AA） */
     --ok-soft: rgba(9, 117, 81, 0.1);
     --warn: #9a6608; /* 4.9:1 on #fff（原 #b97b0e 为 3.6:1，未达 AA） */
@@ -83,16 +83,14 @@
     --chart-5: #e0497e;
     --chart-6: #0e8ea3;
     --chart-7: #7c8aa0;
-    --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05), 0 10px 28px -16px rgba(15, 23, 42, 0.16);
-    --shadow-card-hover: 0 2px 4px rgba(15, 23, 42, 0.06), 0 14px 32px -14px rgba(15, 23, 42, 0.2);
+    --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-card-hover: 0 10px 24px -18px rgba(15, 23, 42, 0.2);
     --shadow-pop: 0 6px 22px -8px rgba(15, 23, 42, 0.3);
     --shadow-drawer: -18px 0 48px -18px rgba(15, 23, 42, 0.28);
     --shadow-modal: 0 24px 64px -22px rgba(15, 23, 42, 0.35);
     --overlay: rgba(15, 23, 42, 0.32);
     --overlay-soft: rgba(15, 23, 42, 0.22);
-    --glow:
-      radial-gradient(900px 420px at 18% -160px, rgba(26, 111, 212, 0.09), transparent 70%),
-      radial-gradient(720px 380px at 88% -140px, rgba(9, 117, 81, 0.04), transparent 72%);
+    --glow: radial-gradient(960px 440px at 18% -240px, rgba(26, 111, 212, 0.065), transparent 72%);
   }
 }
 
@@ -197,12 +195,12 @@ body::before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 66px;
-  padding: 11px 26px;
+  min-height: 64px;
+  padding: 10px 28px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 78%, transparent);
-  backdrop-filter: blur(20px) saturate(135%);
-  -webkit-backdrop-filter: blur(20px) saturate(135%);
+  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -221,33 +219,30 @@ body::before {
 }
 
 .topbar-title h1 {
-  font-size: 14.5px;
+  font-size: 15px;
   margin: 0;
-  font-weight: 680;
-  letter-spacing: 0.015em;
+  font-weight: 660;
+  letter-spacing: 0.005em;
   line-height: 1.35;
 }
 
 .topbar-subtitle {
   color: var(--text-3);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
-  line-height: 1.35;
+  font-size: 11.5px;
+  letter-spacing: 0.015em;
+  line-height: 1.4;
 }
 
 .logo-dot {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid color-mix(in srgb, var(--on-accent) 22%, transparent);
-  border-radius: 10px;
-  color: var(--on-accent);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 82%, var(--on-accent)), var(--accent) 58%, color-mix(in srgb, var(--accent) 68%, var(--ok)));
-  box-shadow:
-    0 6px 18px -8px color-mix(in srgb, var(--accent) 85%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--on-accent) 24%, transparent);
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .topbar-actions {
@@ -258,9 +253,9 @@ body::before {
 
 /* ---------- 按钮 ---------- */
 .btn {
-  min-height: 32px;
+  min-height: 34px;
   border: 1px solid var(--border-strong);
-  background: color-mix(in srgb, var(--bg-2) 88%, transparent);
+  background: color-mix(in srgb, var(--bg-2) 76%, transparent);
   color: var(--text);
   padding: 6px 13px;
   border-radius: 9px;
@@ -268,19 +263,16 @@ body::before {
   font-size: 12.5px;
   font-weight: 550;
   font-family: inherit;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--on-accent) 3%, transparent);
-  transition: border-color 0.16s var(--ease-out), background 0.16s var(--ease-out), color 0.16s var(--ease-out), opacity 0.16s var(--ease-out), transform 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
+  transition: border-color 0.16s var(--ease-out), background 0.16s var(--ease-out), color 0.16s var(--ease-out), opacity 0.16s var(--ease-out), box-shadow 0.16s var(--ease-out);
 }
 
 .btn:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--border-strong));
+  border-color: var(--border-strong);
   background: var(--bg-3);
-  box-shadow: 0 5px 14px -10px color-mix(in srgb, var(--accent) 70%, transparent);
-  transform: translateY(-1px);
 }
 
 .btn:active:not(:disabled) {
-  transform: translateY(0);
+  background: color-mix(in srgb, var(--bg-3) 82%, var(--bg-1));
 }
 
 .btn:disabled {
@@ -289,17 +281,16 @@ body::before {
 }
 
 .btn.primary {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, var(--on-accent)), var(--accent));
-  border-color: color-mix(in srgb, var(--accent) 80%, var(--on-accent));
-  color: var(--on-accent);
-  box-shadow:
-    0 6px 18px -8px color-mix(in srgb, var(--accent) 85%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--on-accent) 22%, transparent);
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-contrast);
+  box-shadow: none;
 }
 
 .btn.primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 78%, var(--on-accent)), color-mix(in srgb, var(--accent) 92%, var(--on-accent)));
-  box-shadow: 0 8px 22px -8px color-mix(in srgb, var(--accent) 90%, transparent);
+  background: color-mix(in srgb, var(--accent) 90%, var(--on-accent));
+  border-color: transparent;
+  box-shadow: none;
 }
 
 @media (prefers-color-scheme: light) {
@@ -354,8 +345,8 @@ body::before {
 /* ---------- 主区域 ---------- */
 .main {
   flex: 1;
-  padding: 26px 28px 32px;
-  max-width: 1360px;
+  padding: 28px 28px 36px;
+  max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
@@ -381,29 +372,27 @@ body::before {
   position: relative;
   display: flex;
   flex-wrap: wrap;
-  background:
-    radial-gradient(420px 120px at 4% 0%, var(--accent-soft), transparent 72%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 96%, var(--on-accent)), var(--bg-2));
-  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-2) 76%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-l);
-  box-shadow: var(--shadow-card);
+  box-shadow: none;
   overflow: hidden;
-  margin-bottom: 18px;
+  margin-bottom: 24px;
 }
 
 .summary-item {
   position: relative;
   flex: 1 1 150px;
-  padding: 15px 20px 16px;
+  padding: 16px 20px 17px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
   border-left: 1px solid var(--border);
   transition: background 0.18s var(--ease-out);
 }
 
-.summary-item:hover {
-  background: color-mix(in srgb, var(--accent) 3.5%, transparent);
+.summary-item:has(button):hover {
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 
 .summary-item:first-child {
@@ -411,18 +400,18 @@ body::before {
 }
 
 .summary-label {
-  font-size: 10.5px;
-  font-weight: 550;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--text-3);
-  letter-spacing: 0.075em;
+  letter-spacing: 0.035em;
   text-transform: uppercase;
 }
 
 .summary-value {
-  font-size: 24px;
-  font-weight: 720;
-  letter-spacing: -0.025em;
-  line-height: 1.25;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
   font-variant-numeric: tabular-nums;
 }
 
@@ -433,11 +422,20 @@ body::before {
   padding-top: 6px;
 }
 
-/* 刷新按钮：旋转图标 */
-.refresh-btn {
+/* 顶栏主操作：淡主色底，不与状态告警争夺注意力 */
+.btn.refresh-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+}
+
+.btn.refresh-btn:hover:not(:disabled) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-2));
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
 }
 
 .refresh-icon {
@@ -456,52 +454,55 @@ body::before {
   }
 }
 
-/* ---------- 卡片网格 ---------- */
+/* ---------- 卡片瀑布布局 ---------- */
 .card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 18px;
-  align-items: start;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  margin-bottom: var(--card-grid-gap, 20px);
+}
+
+.card-grid-item {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.card-grid-item > .card {
+  width: 100%;
 }
 
 .card {
   position: relative; /* 承载刷新 shimmer / 新数据高亮浮层 */
-  background:
-    radial-gradient(320px 120px at 0% 0%, color-mix(in srgb, var(--accent) 5%, transparent), transparent 75%),
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 97%, var(--on-accent)), color-mix(in srgb, var(--bg-2) 90%, var(--bg)));
+  background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-l);
-  padding: 18px 18px 14px;
+  padding: 20px 20px 14px;
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  gap: 14px;
   box-shadow: var(--shadow-card);
-  transition: border-color 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out), transform 0.2s var(--ease-out);
+  transition: border-color 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out), background 0.18s var(--ease-out);
 }
 
-/* hover 抬升：位移与阴影同步变化；状态卡的彩色描边规则在后方、优先级天然更高，hover 不覆盖
-   （骨架卡 pointer-events: none，天然不触发 hover） */
+/* 静态卡片不做悬浮位移，只轻微提升边界层次 */
 .card:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border-strong));
-  transform: translateY(-3px);
+  border-color: var(--border-strong);
   box-shadow: var(--shadow-card-hover);
 }
 
 .card.status-ok {
-  border-color: color-mix(in srgb, var(--ok) 30%, var(--border));
+  border-color: var(--border);
 }
 
 .card.status-error {
-  border-color: color-mix(in srgb, var(--err) 45%, var(--border));
-  border-left: 3px solid var(--err);
+  border-color: color-mix(in srgb, var(--err) 34%, var(--border));
 }
 
 .card.status-error .card-name {
-  color: color-mix(in srgb, var(--err) 78%, var(--text));
-}
-
-.card.status-pending {
-  opacity: 0.8;
+  color: var(--text);
 }
 
 .card-head {
@@ -529,11 +530,11 @@ body::before {
 
 .kind-badge {
   font-size: 11px;
-  color: var(--text-2);
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  padding: 2px 9px;
-  border-radius: 99px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 2px 0 2px 6px;
+  border-radius: 5px;
   white-space: nowrap;
 }
 
@@ -552,7 +553,7 @@ body::before {
   font-variant-numeric: tabular-nums;
 }
 
-/* 状态点权重分级：error 最醒目 > pending（呼吸+微光）> ok 安静（常态弱光）/ 未知灰 */
+/* 状态颜色集中在小标记，正常态保持安静 */
 .dot {
   width: 8px;
   height: 8px;
@@ -563,17 +564,15 @@ body::before {
 
 .dot.ok {
   background: var(--ok);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--ok) 42%, transparent);
 }
 
 .dot.error {
   background: var(--err);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--err) 70%, transparent);
+  box-shadow: 0 0 0 3px var(--err-soft);
 }
 
 .dot.pending {
   background: var(--warn);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 55%, transparent);
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -591,20 +590,21 @@ body::before {
 .card-balance {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
 }
 
 .balance-label {
-  font-size: 11px;
+  font-size: 11.5px;
+  font-weight: 500;
   color: var(--text-3);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.035em;
 }
 
 .balance-value {
-  font-size: 30px;
-  font-weight: 720;
-  letter-spacing: -0.035em;
-  line-height: 1.18;
+  font-size: 32px;
+  font-weight: 680;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   font-variant-numeric: tabular-nums;
 }
 
@@ -612,14 +612,14 @@ body::before {
   color: var(--warn);
 }
 
-/* 货币单位：小一号、上标感、muted，与大数字形成层级 */
+/* 货币单位与大数字共用基线，形成安静的次级信息 */
 .balance-currency {
-  font-size: 0.46em;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-size: 0.36em;
+  font-weight: 550;
+  letter-spacing: 0.045em;
   color: var(--text-3);
-  margin-left: 5px;
-  vertical-align: 0.55em;
+  margin-left: 8px;
+  vertical-align: baseline;
 }
 
 /* ---------- 用量 / 配额进度条 ---------- */
@@ -657,7 +657,7 @@ body::before {
 
 .usage-bar,
 .quota-track {
-  height: 6px;
+  height: 5px;
   border-radius: 99px;
   background: var(--bg-3);
   overflow: hidden;
@@ -670,20 +670,20 @@ body::before {
   transition: width 0.4s var(--ease-out);
 }
 
-/* 渐变起点全部由语义色派生：ok 混入主色（青→绿），warn/err 向亮锚点提亮 */
+/* 进度条使用单一语义色，避免装饰性渐变干扰数值判断 */
 .usage-bar-fill.ok,
 .quota-fill.ok {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 65%, var(--accent)), var(--ok));
+  background: var(--ok);
 }
 
 .usage-bar-fill.warn,
 .quota-fill.warn {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 86%, var(--on-accent)), var(--warn));
+  background: var(--warn);
 }
 
 .usage-bar-fill.err,
 .quota-fill.err {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--err) 86%, var(--on-accent)), var(--err));
+  background: var(--err);
 }
 
 /* 配额窗口组 */
@@ -869,7 +869,21 @@ button.error-copy.copied .copy-hint {
 .card-actions {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
+}
+
+.card-actions .link-btn {
+  min-height: 28px;
+  padding: 4px 8px;
+  color: var(--text-2);
+}
+
+.card-actions .link-btn:hover {
+  color: var(--accent);
+}
+
+.card-actions .expand-toggle {
+  color: var(--accent);
 }
 
 .expand-toggle {
@@ -1191,13 +1205,11 @@ button.error-copy.copied .copy-hint {
 
 /* ---------- 全局统计区块 ---------- */
 .global-stats {
-  background:
-    radial-gradient(520px 150px at 0% 0%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 78%),
-    linear-gradient(180deg, var(--bg-2), color-mix(in srgb, var(--bg-2) 88%, var(--bg)));
-  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-l);
-  box-shadow: var(--shadow-card);
-  margin-bottom: 18px;
+  box-shadow: none;
+  margin-bottom: 20px;
   overflow: hidden;
 }
 

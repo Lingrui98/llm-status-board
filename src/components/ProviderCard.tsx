@@ -33,10 +33,17 @@ interface Props {
   focusRequest?: FocusRequest | null;
 }
 
-function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): string {
+function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): "ok" | "error" | "pending" | "unknown" {
   if (!outcome) return refreshing ? "pending" : "unknown";
   return outcome.ok ? "ok" : "error";
 }
+
+const STATUS_LABEL = {
+  ok: "正常",
+  error: "异常",
+  pending: "等待数据",
+  unknown: "尚未刷新",
+} as const;
 
 function usageLevel(pct: number): "ok" | "warn" | "err" {
   if (pct > 80) return "err";
@@ -168,8 +175,10 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       {flashTick > 0 && <span key={flashTick} className="card-flash" aria-hidden="true" />}
       <div className="card-head">
         <div className="card-title">
-          <span className={`dot ${st}`} />
-          <span className="card-name">{account.name}</span>
+          <span className={`dot ${st}`} role="img" aria-label={`账号状态：${STATUS_LABEL[st]}`} />
+          <span className="card-name" title={account.name}>
+            {account.name}
+          </span>
         </div>
         <div className="card-head-meta">
           {ago !== null && (
