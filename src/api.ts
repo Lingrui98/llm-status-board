@@ -8,6 +8,7 @@ import type {
   RefreshOutcome,
   UsageHistoryFile,
   UsageRecord,
+  QuotaSample,
 } from "./types";
 
 export async function getConfig(): Promise<AppConfig> {
@@ -22,6 +23,22 @@ export async function testAccount(account: AccountConfig): Promise<AccountInfo> 
   return invoke<AccountInfo>("test_account", { account });
 }
 
+/** 仅选择路径，凭据由本机后端在每次查询时读取，不把文件内容送入前端。 */
+export async function pickCodexAuthFile(): Promise<string | null> {
+  return open({ title: "选择 Codex 登录文件 auth.json", multiple: false, directory: false,
+    filters: [{ name: "JSON", extensions: ["json"] }] });
+}
+
+export interface ChatgptLoginStart { attemptId: string; authUrl: string }
+export type ChatgptLoginStatus = { status: "pending" } |
+  { status: "complete"; authId: string; accountId: string | null } |
+  { status: "failed"; message: string };
+export const startChatgptLogin = () => invoke<ChatgptLoginStart>("start_chatgpt_login");
+export const openChatgptLogin = (attemptId: string) => invoke<void>("open_chatgpt_login", { attemptId });
+export const chatgptLoginStatus = (attemptId: string) => invoke<ChatgptLoginStatus>("chatgpt_login_status", { attemptId });
+export const cancelChatgptLogin = (attemptId: string) => invoke<void>("cancel_chatgpt_login", { attemptId });
+export const discardChatgptAuth = (authId: string) => invoke<void>("discard_chatgpt_auth", { authId });
+
 export async function refreshAll(): Promise<RefreshOutcome[]> {
   return invoke<RefreshOutcome[]>("refresh_all");
 }
@@ -35,6 +52,9 @@ export async function getLastResults(): Promise<RefreshOutcome[]> {
 export async function getHistory(): Promise<BalanceSnapshot[]> {
   return invoke<BalanceSnapshot[]>("get_history");
 }
+
+export const getQuotaHistory = (accountId: string, scope: string) =>
+  invoke<QuotaSample[]>("get_quota_history", { accountId, scope });
 
 /// R15 本地用量历史（逐日总账，带版本封套）；文件缺失时后端返回空记录集
 export async function getUsageHistory(): Promise<UsageHistoryFile> {

@@ -9,6 +9,7 @@
 
 import { formatTimeUntil } from "./format";
 import type { AccountInfo, Money, QuotaWindow } from "./types";
+import { mainSubscriptionWindow } from "./quotaHistory";
 
 export type PrimaryMetric =
   | { kind: "none" }
@@ -119,11 +120,14 @@ export function pickPrimaryMetric(info?: AccountInfo | null): PrimaryMetric {
   if (!info) return { kind: "none" };
 
   const balance = info.balance ?? null;
-  const windows = validQuotaWindows(info.quotaWindows);
+  const subscription = !!info.quotaScope || info.quotaWindows?.some(w => /^(codex|review|extra):/.test(w.historyKey ?? ""));
+  const main = subscription ? mainSubscriptionWindow(info) : null;
+  const sourceWindows = subscription ? (main ? [main] : []) : info.quotaWindows;
+  const windows = validQuotaWindows(sourceWindows);
   const balanceIsZeroOrNull = balance === null || balance.amount === 0;
 
   if (windows.length > 0 && balanceIsZeroOrNull) {
-    const tightest = tightestWindow(info.quotaWindows);
+    const tightest = tightestWindow(sourceWindows);
     if (tightest) {
       const usedPercent = clampPercent(tightest.usedPercent);
       const remainingPercent = Number((100 - usedPercent).toFixed(2));

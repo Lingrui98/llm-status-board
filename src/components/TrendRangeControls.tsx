@@ -16,16 +16,17 @@ interface Props {
   onChange: (selection: TrendSelection) => void;
   bounds: [number, number] | null;
   window: TrendWindow;
+  ranges?: readonly { value: TrendSelection["preset"]; label: string }[];
 }
 
-export default function TrendRangeControls({ selection, onChange, bounds, window }: Props) {
+export default function TrendRangeControls({ selection, onChange, bounds, window, ranges = TREND_RANGES }: Props) {
   const id = useId();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const fullTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { hour12: false });
   return (
     <div className="trend-controls">
       <div className="trend-range-buttons" role="group" aria-label="趋势时间范围">
-        {TREND_RANGES.map(({ value, label }) => (
+        {ranges.map(({ value, label }) => (
           <button key={value} type="button" aria-pressed={selection.preset === value}
             onClick={() => {
               const [from, to] = bounds ?? [Date.now() - 86_400_000, Date.now()];

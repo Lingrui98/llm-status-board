@@ -91,6 +91,8 @@ async fn fetch_with_token(
     let requests = lookup_i64(data, "request_count");
 
     let mut info = AccountInfo {
+        quota_scope: None,
+        quota_history_error: None,
         balance: Some(Money {
             amount: quota / per,
             currency: "USD".into(),

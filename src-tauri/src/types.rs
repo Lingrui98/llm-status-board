@@ -28,6 +28,7 @@ pub enum ProviderKind {
     AiHubMix,
     DeepSeek,
     OpenAi,
+    OpenAiSubscription,
     SiliconFlow,
     Moonshot,
     Zhipu,
@@ -89,6 +90,13 @@ pub struct AccountConfig {
     pub api_key: String,
     pub token: String,
     pub refresh_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_auth_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt_account_id: Option<String>,
+    /// Reference to credentials managed by this app; tokens never enter frontend/config exports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt_auth_id: Option<String>,
     pub user_id: Option<i64>,
     pub username: String,
     pub password: String,
@@ -107,6 +115,9 @@ impl Default for AccountConfig {
             api_key: String::new(),
             token: String::new(),
             refresh_token: String::new(),
+            codex_auth_path: None,
+            chatgpt_account_id: None,
+            chatgpt_auth_id: None,
             user_id: None,
             username: String::new(),
             password: String::new(),
@@ -320,6 +331,11 @@ pub struct QuotaWindow {
     pub used_amount: Option<Money>,
     /// R23：数字限额窗口的原始上限（limit>0 才产出窗口，故存在即正数）
     pub limit_amount: Option<Money>,
+    /// Stable identity, independent of primary/secondary slot and translated label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -346,6 +362,11 @@ pub struct AccountInfo {
     /// 配额窗口（进度条用）
     #[serde(default)]
     pub quota_windows: Vec<QuotaWindow>,
+    /// Hash of the actual subscription workspace, never an access token or login reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_history_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

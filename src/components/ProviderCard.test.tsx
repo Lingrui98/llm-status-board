@@ -15,6 +15,7 @@ vi.mock("./charts/lazy", () => ({
   LazyBalanceTrendChart: ({ metric = "balance" }: { metric?: "balance" | "total" }) => <div data-testid={`${metric}-chart`} />,
   LazyBalanceBreakdownChart: () => <div data-testid="breakdown-chart" />,
   LazyTokenSplitChart: () => <div data-testid="token-chart" />,
+  LazyQuotaHistoryChart: () => <div data-testid="quota-history-chart" />,
 }));
 
 afterEach(cleanup);
@@ -88,6 +89,36 @@ describe("ProviderCard：AiHubMix", () => {
 });
 
 describe("ProviderCard：订阅主指标（AC-4）", () => {
+  it("weekly-only Pro shows its weekly allowance without a five-hour placeholder", () => {
+    renderCard({ account: account("codex-pro-weekly", "openAiSubscription", "ChatGPT Pro"), info: info({
+      balance: null, quotaWindows: [{ window: "Codex · 每周", usedPercent: 60, resetsAt: FUTURE }],
+      extras: [{ key: "订阅套餐", value: "pro" }],
+    }) });
+    expect(tileText(".balance-num")).toBe("40");
+    expect(tileText(".balance-sub")).toContain("Codex · 每周");
+    expect(document.querySelectorAll(".quota-row")).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("5小时");
+  });
+
+  it("Codex shows the tightest subscription window, both resets, and no fabricated dollar balance", () => {
+    renderCard({ account: account("codex", "openAiSubscription", "ChatGPT Pro"), info: info({
+      balance: null, quotaWindows: [
+        { window: "Codex · 5小时", usedPercent: 25, resetsAt: FUTURE },
+        { window: "Codex · 每周", usedPercent: 60, resetsAt: FUTURE },
+      ], extras: [{ key: "额外 Credits", value: "12.50" }],
+    }) });
+    expect(tileText(".kind-badge")).toBe("Codex 订阅");
+    expect(tileText(".balance-num")).toBe("40");
+    expect(tileText(".balance-sub")).toContain("Codex · 每周");
+    expect(screen.getByText("Codex · 5小时")).toBeTruthy();
+    expect(document.body.textContent).not.toContain("USD");
+    expect(document.body.textContent).not.toContain("$0");
+    fireEvent.click(screen.getByRole("button", { name: /详情/ }));
+    expect(screen.getByText("额度使用历史")).toBeTruthy();
+    expect(screen.queryByText("余额趋势")).toBeNull();
+    expect(screen.queryByText("总额度")).toBeNull();
+  });
+
   it("ModelServer 真实数据（余额 0 + 7d 0%）→ 订阅剩余 100%，卡片内不出现 $0", () => {
     renderCard({
       info: info({

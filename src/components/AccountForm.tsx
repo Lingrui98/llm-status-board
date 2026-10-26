@@ -4,6 +4,7 @@ import { PROVIDER_KINDS, DEFAULT_BASE_URLS } from "../types";
 import * as api from "../api";
 import { formatMoney, formatNumber } from "../format";
 import CredentialHelp from "./CredentialHelp";
+import ChatgptLogin from "./ChatgptLogin";
 
 interface Props {
   initial: AccountConfig;
@@ -12,7 +13,7 @@ interface Props {
 }
 
 interface AuthField {
-  field: "apiKey" | "token" | "username" | "password" | "userId" | "refreshToken";
+  field: "apiKey" | "token" | "username" | "password" | "userId" | "refreshToken" | "chatgptAccountId";
   label: string;
   placeholder: string;
   type?: "text" | "password" | "number";
@@ -44,6 +45,10 @@ const AUTH_FIELDS: Record<ProviderKind, AuthField[]> = {  oneApi: [
   ],
   openAi: [
     { field: "apiKey", label: "API Key（需要管理员权限）", placeholder: "sk-admin-... 或 sk-svcacct-...", type: "password", hint: "查询组织用量需要 admin 权限的 key" },
+  ],
+  openAiSubscription: [
+    { field: "token", label: "ChatGPT Access Token", placeholder: "ChatGPT 登录访问令牌（不是 sk- API Key）", type: "password" },
+    { field: "chatgptAccountId", label: "ChatGPT Account ID（可选）", placeholder: "多工作区账号可指定对应的 account_id", hint: "只指定要查询的订阅账号；选择登录文件时自动读取其中的账号 ID" },
   ],
   siliconFlow: [
     { field: "apiKey", label: "API Key", placeholder: "sk-...", type: "password" },
@@ -77,14 +82,19 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
   const flashTimer = useRef<number | null>(null);
   // 「怎么获取凭证？」折叠面板（内容随类型切换）
   const [credHelpOpen, setCredHelpOpen] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const newLogins = useRef(new Set<string>());
 
-  const authFields = useMemo(() => AUTH_FIELDS[acc.kind] ?? [], [acc.kind]);
+  const authFields = useMemo(() => acc.kind === "openAiSubscription" && (acc.codexAuthPath?.trim() || acc.chatgptAuthId)
+    ? [] : AUTH_FIELDS[acc.kind] ?? [], [acc.kind, acc.codexAuthPath, acc.chatgptAuthId]);
   // 类型下拉分组：从 PROVIDER_KINDS 派生，保证组名/顺序与表格徽章等口径一致
   const kindGroups = useMemo(() => [...new Set(PROVIDER_KINDS.map((k) => k.group))], []);
 
   useEffect(
     () => () => {
       if (flashTimer.current) window.clearTimeout(flashTimer.current);
+      for (const id of newLogins.current) void api.discardChatgptAuth(id).catch(() => {});
     },
     [],
   );
@@ -98,11 +108,34 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
       baseUrl: DEFAULT_BASE_URLS[kind],
       apiKey: "",
       token: "",
+      refreshToken: "",
+      codexAuthPath: null,
+      chatgptAccountId: null,
+      chatgptAuthId: null,
       userId: null,
       username: "",
       password: "",
       custom: kind === "custom" ? defaultCustom() : null,
     }));
+    setFileError(null);
+    setTestResult(null);
+  };
+
+  const pickAuthFile = async () => {
+    setFileError(null);
+    try {
+      const path = await api.pickCodexAuthFile();
+      if (path) {
+        set({ codexAuthPath: path, token: "", chatgptAccountId: null });
+        setTestResult(null);
+      }
+    } catch { setFileError("未能打开文件选择器，可手动填写登录文件的完整路径"); }
+  };
+
+  const handleSubmit = () => {
+    // Keep the selected session when closing the form; discard any abandoned replacement logins.
+    if (acc.chatgptAuthId) newLogins.current.delete(acc.chatgptAuthId);
+    onSubmit(acc);
   };
 
   const handleTest = async () => {
@@ -124,6 +157,13 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
       if (info.balance) parts.push(`余额 ${formatMoney(info.balance)}`);
       if (info.used) parts.push(`已用 ${formatMoney(info.used)}`);
       if (info.requests !== null && info.requests !== undefined) parts.push(`请求 ${formatNumber(info.requests)}`);
+      if (acc.kind === "openAiSubscription") {
+        for (const window of info.quotaWindows ?? []) {
+          if (typeof window.usedPercent === "number" && Number.isFinite(window.usedPercent)) {
+            parts.push(`${window.window ?? "订阅窗口"} 已用 ${window.usedPercent}%，剩余 ${Math.max(0, 100 - window.usedPercent)}%`);
+          }
+        }
+      }
       ok = true;
       setTestResult({ ok: true, msg: parts.join(" · ") || info.note || "连接成功" });
     } catch (e) {
@@ -152,7 +192,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
           </svg>
           {credHelpOpen ? "收起凭证教程" : "怎么获取凭证？"}
         </button>
-        <span className="muted small">不知道令牌 / Key 从哪来，点这里看当前类型的获取步骤</span>
+        <span className="muted small">{acc.kind === "openAiSubscription" ? "可直接通过浏览器登录，也可使用已有凭证" : "不知道令牌 / Key 从哪来，点这里看当前类型的获取步骤"}</span>
       </div>
       {credHelpOpen && (
         <div className="form-cred-help">
@@ -186,7 +226,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
 
         <label className="form-field wide">
           <span>站点地址 (Base URL)</span>
-          <input value={acc.baseUrl} onChange={(e) => set({ baseUrl: e.target.value })} />
+          <input value={acc.baseUrl} readOnly={acc.kind === "openAiSubscription"} onChange={(e) => set({ baseUrl: e.target.value })} />
           {acc.kind === "modelServer" && (
             <em className="field-hint">
               填 API 后端地址 <code>https://codeapi.cs.ac.cn</code>（不是网页面板的
@@ -195,6 +235,31 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
             </em>
           )}
         </label>
+
+        {acc.kind === "openAiSubscription" && (
+          <ChatgptLogin authId={acc.chatgptAuthId} onBusyChange={setLoginBusy}
+            onConnected={(authId, accountId) => {
+              newLogins.current.add(authId);
+              set({ chatgptAuthId: authId, chatgptAccountId: accountId, codexAuthPath: null, token: "", refreshToken: "", apiKey: "" });
+              setTestResult(null);
+            }}
+            onDisconnect={() => { set({ chatgptAuthId: null, chatgptAccountId: null }); setTestResult(null); }} />
+        )}
+        {acc.kind === "openAiSubscription" && !acc.chatgptAuthId && (
+          <div className="form-field wide">
+            <span>已有 Codex 登录文件（可选）</span>
+            <div className="auth-file-row">
+              <input aria-label="Codex 登录文件路径" value={acc.codexAuthPath ?? ""}
+                disabled={loginBusy}
+                onChange={(e) => { set({ codexAuthPath: e.target.value, token: "", chatgptAccountId: null }); setTestResult(null); }}
+                placeholder="选择本机 Codex 通过 ChatGPT 登录后生成的 auth.json" />
+              <button type="button" className="btn" disabled={loginBusy} onClick={pickAuthFile}>选择 auth.json</button>
+              {acc.codexAuthPath && <button type="button" className="btn" disabled={loginBusy} onClick={() => set({ codexAuthPath: null })}>改用令牌</button>}
+            </div>
+            <em className="field-hint">也可选择已有文件或手动填令牌；外部文件只读，需由 Codex 更新会话。网络代理在通用设置中配置。</em>
+            {fileError && <span role="status">{fileError}</span>}
+          </div>
+        )}
 
         {(acc.kind === "oneApi" || acc.kind === "newApi") && (
           <label className="form-field wide">
@@ -214,6 +279,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
             <span>{f.label}</span>
             <input
               type={f.type ?? "text"}
+              disabled={loginBusy}
               value={(acc as unknown as Record<string, unknown>)[f.field] as string | number | undefined ?? ""}
               onChange={(e) =>
                 set({ [f.field]: f.type === "number" ? Number(e.target.value) || null : e.target.value } as Partial<AccountConfig>)
@@ -255,7 +321,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
         <button
           className={`btn ghost test-btn${testFlash ? ` ${testFlash}` : ""}`}
           onClick={handleTest}
-          disabled={testing || !valid}
+          disabled={testing || loginBusy || !valid}
         >
           {testing && (
             <svg className="refresh-icon spinning" width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
@@ -275,7 +341,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
         <button className="btn ghost" onClick={onCancel}>
           取消
         </button>
-        <button className="btn primary" onClick={() => onSubmit(acc)} disabled={!valid}>
+        <button className="btn primary" onClick={handleSubmit} disabled={!valid || loginBusy}>
           确定
         </button>
       </div>

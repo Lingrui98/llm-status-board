@@ -110,11 +110,49 @@ fn tightest_window(windows: &[QuotaWindow]) -> Option<&QuotaWindow> {
 /// 主指标判定（判定顺序见模块文档；越界钳制 `<0→100%剩余`、`>100→0%剩余`）
 pub fn pick_primary_metric(info: &AccountInfo) -> PrimaryMetric {
     let balance = info.balance.as_ref();
-    let has_valid_window = !valid_windows(&info.quota_windows).is_empty();
+    let subscription = info.quota_scope.is_some()
+        || info.quota_windows.iter().any(|w| {
+            w.history_key.as_deref().is_some_and(|key| {
+                ["codex:", "review:", "extra:"]
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
+            })
+        });
+    let selected = if subscription {
+        let windows: Vec<_> = valid_windows(&info.quota_windows)
+            .into_iter()
+            .filter(|w| {
+                w.history_key
+                    .as_deref()
+                    .is_some_and(|key| key.starts_with("codex:"))
+            })
+            .collect();
+        windows
+            .iter()
+            .find(|w| {
+                w.window_seconds == Some(604800) || w.history_key.as_deref() == Some("codex:604800")
+            })
+            .copied()
+            .or_else(|| {
+                windows
+                    .into_iter()
+                    .fold(None::<&QuotaWindow>, |best, w| match best {
+                        Some(old)
+                            if clamp_percent(old.used_percent.unwrap_or(0.0))
+                                >= clamp_percent(w.used_percent.unwrap_or(0.0)) =>
+                        {
+                            Some(old)
+                        }
+                        _ => Some(w),
+                    })
+            })
+    } else {
+        tightest_window(&info.quota_windows)
+    };
     let balance_zero_or_null = balance.is_none_or(|b| b.amount == 0.0);
 
-    if has_valid_window && balance_zero_or_null {
-        if let Some(w) = tightest_window(&info.quota_windows) {
+    if balance_zero_or_null {
+        if let Some(w) = selected {
             let used = clamp_percent(w.used_percent.unwrap_or(0.0));
             let remaining_percent = round2(100.0 - used);
             let label = w
@@ -157,6 +195,34 @@ pub fn format_primary_metric_line(metric: &PrimaryMetric) -> String {
 mod tests {
     use super::*;
     use crate::types::Money;
+
+    #[test]
+    fn codex_weekly_metric_matches_cards_and_does_not_use_review_allowance() {
+        let mut info = AccountInfo {
+            quota_windows: vec![
+                QuotaWindow {
+                    window: Some("代码审查 · 每周".into()),
+                    history_key: Some("review:604800".into()),
+                    used_percent: Some(99.0),
+                    ..Default::default()
+                },
+                QuotaWindow {
+                    window: Some("Codex · 每周".into()),
+                    history_key: Some("codex:604800".into()),
+                    window_seconds: Some(604800),
+                    used_percent: Some(60.0),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            format_primary_metric_line(&pick_primary_metric(&info)),
+            "剩余 40%（Codex · 每周）"
+        );
+        info.quota_windows.pop();
+        assert_eq!(pick_primary_metric(&info), PrimaryMetric::None);
+    }
 
     fn info(
         balance: Option<(f64, &str)>,

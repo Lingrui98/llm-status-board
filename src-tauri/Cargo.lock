@@ -2145,11 +2145,14 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 name = "llm-status-board"
 version = "0.2.11"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures",
+ "rand",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
