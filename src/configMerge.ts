@@ -44,3 +44,14 @@ export function moveAccount(accounts: AccountConfig[], id: string, dir: -1 | 1):
   copy[j] = accounts[i];
   return copy;
 }
+
+/** Move an account directly to another account's position, preserving all other relative order. */
+export function reorderAccount(accounts: AccountConfig[], id: string, targetId: string): AccountConfig[] {
+  const from = accounts.findIndex((account) => account.id === id);
+  const to = accounts.findIndex((account) => account.id === targetId);
+  if (from < 0 || to < 0 || from === to) return accounts;
+  const next = [...accounts];
+  const [account] = next.splice(from, 1);
+  next.splice(to, 0, account);
+  return next;
+}
