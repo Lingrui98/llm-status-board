@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AccountConfig, AppConfig, ProviderKind, Settings } from "../types";
-import { PROVIDER_KINDS, DEFAULT_BASE_URLS, newAccountId } from "../types";
-import { moveAccount } from "../configMerge";
+import { DEFAULT_BASE_URLS, newAccountId } from "../types";
+import AccountTable from "./AccountTable";
 import AccountForm from "./AccountForm";
 import ThresholdSlider from "./ui/ThresholdSlider";
 import { InlineNotice, SegmentedControl, SettingRow } from "./ui";
@@ -214,25 +214,6 @@ export default function SettingsView({
     updateAccounts([...accounts, { ...acc, id: newAccountId(), name: acc.name + " 副本" }]);
   };
 
-  const move = (id: string, dir: -1 | 1) => {
-    const next = moveAccount(accounts, id, dir);
-    if (next !== accounts) updateAccounts(next);
-  };
-
-  // 表格行键盘导航：↑↓ 在行间移动焦点，Enter/Space 打开编辑（仅当焦点在行本身，不拦截行内按钮的原生行为）
-  const onRowKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>, acc: AccountConfig) => {
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const rows = Array.from(e.currentTarget.parentElement?.querySelectorAll("tr") ?? []);
-      const i = rows.indexOf(e.currentTarget);
-      const next = rows[e.key === "ArrowDown" ? i + 1 : i - 1] as HTMLElement | undefined;
-      next?.focus();
-    } else if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-      e.preventDefault();
-      setEditing(acc);
-    }
-  };
-
   // 报表导出：按需拉取历史快照与上次结果（设置页不常驻这些数据，避免额外 props 传递）
   const handleExportCsv = async () => {
     setExportBusy(true);
@@ -347,107 +328,20 @@ export default function SettingsView({
           <p className="muted">还没有账号，点击「添加账号」开始。</p>
         </div>
       ) : (
-        <div className="accounts-table-wrap">
-          <table className="accounts-table">
-            <thead>
-              <tr>
-                <th>启用</th>
-                <th>名称</th>
-                <th>类型</th>
-                <th>Base URL</th>
-                <th>认证</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accounts.map((a, index) => {
-                const kindMeta = PROVIDER_KINDS.find((k) => k.value === a.kind);
-                const authLabel = a.token
-                  ? "Token"
-                  : a.apiKey
-                    ? "API Key"
-                    : a.username
-                      ? "账号密码"
-                      : a.custom
-                        ? "自定义"
-                        : null;
-                const displayName = a.name || "未命名账号";
-                const atTop = index === 0;
-                const atBottom = index === accounts.length - 1;
-                return (
-                  <tr
-                    key={a.id}
-                    className={a.enabled ? "" : "disabled-row"}
-                    tabIndex={0}
-                    onKeyDown={(e) => onRowKeyDown(e, a)}
-                    aria-label={`账号 ${a.name || "未命名"}，回车编辑`}
-                  >
-                    <td>
-                      <input
-                        type="checkbox"
-                        className="switch"
-                        checked={a.enabled}
-                        onChange={() => toggleEnabled(a.id)}
-                        aria-label={`启用 ${displayName}`}
-                        title={a.enabled ? "点击停用" : "点击启用"}
-                      />
-                    </td>
-                    <td className="cell-name">{a.name || <span className="muted">（未命名）</span>}</td>
-                    <td>
-                      <span className={`badge ${kindMeta?.group === "官方" ? "badge-official" : "badge-relay"}`}>
-                        {kindMeta?.label ?? a.kind}
-                      </span>
-                    </td>
-                    <td className="cell-url" title={a.baseUrl}>
-                      {a.baseUrl}
-                    </td>
-                    <td>
-                      {authLabel ? <span className="badge badge-auth">{authLabel}</span> : <span className="muted">—</span>}
-                    </td>
-                    <td className="cell-actions">
-                      {/* 上移/下移：aria-disabled 而非 disabled，边界时仍可聚焦（连续操作焦点不丢失） */}
-                      <button
-                        type="button"
-                        className="link-btn"
-                        aria-disabled={atTop}
-                        aria-label={`上移 ${displayName}（当前第 ${index + 1} 位）`}
-                        title={atTop ? "已在最前" : "上移一位"}
-                        onClick={() => !atTop && move(a.id, -1)}
-                      >
-                        上移
-                      </button>
-                      <button
-                        type="button"
-                        className="link-btn"
-                        aria-disabled={atBottom}
-                        aria-label={`下移 ${displayName}（当前第 ${index + 1} 位）`}
-                        title={atBottom ? "已在最后" : "下移一位"}
-                        onClick={() => !atBottom && move(a.id, 1)}
-                      >
-                        下移
-                      </button>
-                      <button className="link-btn" onClick={() => setEditing(a)}>
-                        编辑
-                      </button>
-                      <button className="link-btn" onClick={() => duplicateAccount(a)}>
-                        复制
-                      </button>
-                      <button className="link-btn danger" onClick={() => removeAccount(a.id)}>
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <AccountTable
+          accounts={accounts}
+          onReorder={updateAccounts}
+          onToggle={toggleEnabled}
+          onEdit={setEditing}
+          onDuplicate={duplicateAccount}
+          onRemove={removeAccount}
+        />
       )}
 
       {accounts.length > 0 && (
         <p className="muted small table-kbd-hint">
-          提示：<kbd>Tab</kbd> 聚焦行后 <kbd>↑</kbd>
-          <kbd>↓</kbd> 移动，<kbd>Enter</kbd> 编辑；「上移 / 下移」调整看板卡片顺序，全部变更自动保存。
+          拖动左侧手柄调整顺序，松手后自动保存。键盘：聚焦手柄后，<kbd>空格</kbd> 开始／确认，
+          <kbd>↑</kbd><kbd>↓</kbd> 移动，<kbd>Esc</kbd> 取消。
         </p>
       )}
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeRotatedTokens, moveAccount } from "./configMerge";
+import { mergeRotatedTokens, moveAccount, reorderAccount } from "./configMerge";
 import type { AccountConfig, AppConfig } from "./types";
 
 function makeAccount(id: string, patch: Partial<AccountConfig> = {}): AccountConfig {
@@ -24,6 +24,34 @@ function makeAccount(id: string, patch: Partial<AccountConfig> = {}): AccountCon
 function makeConfig(accounts: AccountConfig[]): AppConfig {
   return { version: 1, settings: { autoRefreshSec: 0, refreshOnStart: false, proxy: null }, accounts };
 }
+
+describe("drag account reordering", () => {
+  const list = [makeAccount("a"), makeAccount("b"), makeAccount("c"), makeAccount("d")];
+
+  it("moves directly across several rows while preserving the other relative order and objects", () => {
+    const next = reorderAccount(list, "d", "a");
+    expect(next.map((a) => a.id)).toEqual(["d", "a", "b", "c"]);
+    expect(next[0]).toBe(list[3]);
+    expect(next[2]).toBe(list[1]);
+    expect(list.map((a) => a.id)).toEqual(["a", "b", "c", "d"]);
+    expect(reorderAccount(list, "a", "d").map((a) => a.id)).toEqual(["b", "c", "d", "a"]);
+  });
+
+  it("does not save for an unchanged or missing destination", () => {
+    expect(reorderAccount(list, "b", "b")).toBe(list);
+    expect(reorderAccount(list, "b", "missing")).toBe(list);
+    expect(reorderAccount(list, "missing", "b")).toBe(list);
+  });
+
+  it("retains refreshed credentials when the reordered configuration is persisted", () => {
+    const orig = makeConfig(list);
+    const next = makeConfig(reorderAccount(list, "d", "a"));
+    const disk = makeConfig(list.map((a) => a.id === "d" ? { ...a, token: "fresh-token", refreshToken: "fresh-refresh" } : a));
+    const merged = mergeRotatedTokens(next, orig, disk);
+    expect(merged.accounts.map((a) => a.id)).toEqual(["d", "a", "b", "c"]);
+    expect(merged.accounts[0]).toMatchObject({ token: "fresh-token", refreshToken: "fresh-refresh" });
+  });
+});
 
 describe("mergeRotatedTokens（token 轮换合并）", () => {
   it("用户没改 token 且磁盘已轮换 → 采用磁盘最新值", () => {
