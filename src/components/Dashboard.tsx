@@ -2,21 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import ProviderCard, { type FocusRequest } from "./ProviderCard";
 import SkeletonCard from "./SkeletonCard";
 import MasonryGrid from "./MasonryGrid";
-// recharts 图表统一懒加载（拆出首屏主包）
-import {
-  LazyGlobalDailyUsageChart as GlobalDailyUsageChart,
-  LazyGlobalModelUsageChart as GlobalModelUsageChart,
-  LazyGlobalBalanceTrendChart as GlobalBalanceTrendChart,
-  LazyCostBreakdownChart as CostBreakdownChart,
-  pickTrendCurrency,
-} from "./charts/lazy";
-import { ChartSection } from "./charts/shared";
+import OverviewCards from "./OverviewCards";
+import GlobalStatsCard from "./GlobalStatsCard";
 import InsightsPanel from "./InsightsPanel";
 import AnalysisView from "./AnalysisView";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome, UsageRecord } from "../types";
 import { aggregateBalances } from "../balances";
-import { formatDurationMs, formatTimeAgo } from "../format";
 import { toLocalDateKey } from "../usageHistory";
+import { normalizeLocalDay } from "../localDay";
 
 interface Props {
   config: AppConfig;
@@ -47,12 +40,12 @@ interface Props {
   onOpenNotifications?: () => void;
   /** 点总览条「刷新」时间 = 立即刷新（快捷入口，等同顶栏按钮） */
   onRefresh?: () => void;
+  /** 从异常卡片直接打开对应账号的编辑表单 */
+  onEditAccount?: (accountId: string) => void;
 }
 
-export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, usageRecords, usageError, todayKey, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh }: Props) {
+export default function Dashboard({ config, statuses, refreshing, lastRefreshAt, lastRefreshMs, autoRefreshSec, snapshots, usageRecords, usageError, todayKey, focusRequest, onFocusRequestHandled, onGoSettings, onAddAccount, onOpenHelp, onOpenNotifications, onRefresh, onEditAccount }: Props) {
   const enabled = useMemo(() => config.accounts.filter((a) => a.enabled), [config.accounts]);
-  const okCount = Object.values(statuses).filter((s) => s.ok).length;
-  const failCount = Object.values(statuses).filter((s) => !s.ok).length;
   // 余额合计口径与悬停浮层共用（src/balances.ts），按币种分开、绝不跨币种相加
   const totals = useMemo(() => aggregateBalances(Object.values(statuses)), [statuses]);
 
@@ -71,35 +64,30 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
     return () => window.clearInterval(t);
   }, []);
 
-  // 全局统计区块：可折叠（默认展开）；三类数据全无时整个区块不渲染
-  const [statsOpen, setStatsOpen] = useState(true);
-  const hasStats = useMemo(
-    () =>
-      enabled.some((acc) => {
-        const info = statuses[acc.id]?.info;
-        return (info?.dailyUsage?.length ?? 0) > 0 || (info?.modelUsage?.length ?? 0) > 0;
-      }) || snapshots.length >= 2,
-    [enabled, statuses, snapshots],
-  );
-  const trendSnapshots = useMemo(() => {
-    const ids = new Set(enabled.map((a) => a.id));
-    return snapshots.filter((s) => ids.has(s.accountId) && Number.isFinite(Date.parse(s.ts)) && Number.isFinite(s.balance));
-  }, [snapshots, enabled]);
-  const trendCurrency = useMemo(() => pickTrendCurrency(trendSnapshots), [trendSnapshots]);
+  // 全局统计区块：只在有效用量或可用余额趋势存在时显示，忽略占位行和停用账号。
+  const hasStats = useMemo(() => {
+    const finite = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value);
+    const hasUsage = enabled.some((acc) => {
+      const info = statuses[acc.id]?.info;
+      const daily = (info?.dailyUsage ?? []).some(
+        (point) => !!point.date && !!normalizeLocalDay(point.date) && (finite(point.requests) || finite(point.cost)),
+      );
+      const models = (info?.modelUsage ?? []).some((point) => !!point.model && finite(point.requests));
+      return daily || models;
+    });
+    if (hasUsage) return true;
+    const ids = new Set(enabled.map((account) => account.id));
+    const trendTimes = new Set(
+      snapshots
+        .filter((s) => ids.has(s.accountId) && Number.isFinite(Date.parse(s.ts)) && Number.isFinite(s.balance))
+        .map((s) => Date.parse(s.ts)),
+    );
+    return trendTimes.size >= 2;
+  }, [enabled, statuses, snapshots]);
 
   // 首次刷新（无任何旧数据）时显示骨架卡片，避免网格从空白突然跳入
   const showSkeleton = refreshing && Object.keys(statuses).length === 0;
   const skeletonCount = Math.min(Math.max(enabled.length, 3), 4);
-
-  // 总览条「刷新」文本：时刻 + 相对时间 + 刷新方式 + 本次耗时（耗时仅刷新完成后显示）
-  const refreshSummary =
-    (refreshing
-      ? "进行中…"
-      : lastRefreshAt
-        ? `${new Date(lastRefreshAt).toLocaleTimeString("zh-CN", { hour12: false })} · ${formatTimeAgo(lastRefreshAt, now)}`
-        : "—") +
-    (autoRefreshSec > 0 ? ` · 每 ${autoRefreshSec}s` : " · 手动") +
-    (!refreshing && lastRefreshMs != null ? ` · 耗时 ${formatDurationMs(lastRefreshMs)}` : "");
 
   if (enabled.length === 0) {
     return (
@@ -150,96 +138,20 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
 
   return (
     <main className="main">
-      <div className="summary-bar">
-        <div className="summary-item">
-          <span className="summary-label">监控账号</span>
-          <span className="summary-value">{enabled.length}</span>
-        </div>
-        <div className="summary-item">
-          <span className="summary-label">正常 / 异常</span>
-          {failCount > 0 && onOpenNotifications ? (
-            <button
-              type="button"
-              className="summary-value summary-jump"
-              onClick={onOpenNotifications}
-              title="查看异常详情（打开通知中心）"
-            >
-              <span className="ok-text">{okCount}</span>
-              <span className="muted"> / </span>
-              <span className="fail-text">{failCount}</span>
-            </button>
-          ) : (
-            <span className="summary-value">
-              <span className="ok-text">{okCount}</span>
-              <span className="muted"> / </span>
-              <span className="fail-text">{failCount}</span>
-            </span>
-          )}
-        </div>
-        <div className="summary-item">
-          <span className="summary-label">余额合计 (USD)</span>
-          <span className="summary-value">${totals.usd.toFixed(2)}</span>
-        </div>
-        <div className="summary-item">
-          <span className="summary-label">余额合计 (CNY)</span>
-          <span className="summary-value">¥{totals.cny.toFixed(2)}</span>
-        </div>
-        <div className="summary-item">
-          <span className="summary-label">刷新</span>
-          {refreshing || !onRefresh ? (
-            <span className="summary-value small">{refreshSummary}</span>
-          ) : (
-            <button
-              type="button"
-              className="summary-value small summary-refresh-btn"
-              onClick={onRefresh}
-              title="点击立即刷新"
-            >
-              {refreshSummary}
-            </button>
-          )}
-        </div>
-      </div>
+      <OverviewCards
+        accounts={enabled}
+        statuses={statuses}
+        totals={totals}
+        refreshing={refreshing}
+        lastRefreshAt={lastRefreshAt}
+        lastRefreshMs={lastRefreshMs}
+        autoRefreshSec={autoRefreshSec}
+        todayKey={todayKey}
+        onOpenNotifications={onOpenNotifications}
+        onRefresh={onRefresh}
+      />
 
-      {hasStats && (
-        <section className="global-stats">
-          <button
-            className="global-stats-head"
-            onClick={() => setStatsOpen((v) => !v)}
-            aria-expanded={statsOpen}
-          >
-            <span className="global-stats-title">全局统计</span>
-            <span className="muted small">跨账号汇总视图</span>
-            <svg className="chevron" width="12" height="12" viewBox="0 0 10 10" aria-hidden="true">
-              <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-          {statsOpen && (
-            <div className="global-stats-grid">
-              <div className="global-chart span-2">
-                <ChartSection title="全账号用量趋势（近 14 天）">
-                  <GlobalDailyUsageChart accounts={enabled} statuses={statuses} />
-                </ChartSection>
-              </div>
-              <div className="global-chart">
-                <ChartSection title="全账号模型用量 TOP 8">
-                  <GlobalModelUsageChart accounts={enabled} statuses={statuses} />
-                </ChartSection>
-              </div>
-              <div className="global-chart">
-                <ChartSection title={trendCurrency ? `余额趋势（多账号 · ${trendCurrency}）` : "余额趋势（多账号）"}>
-                  <GlobalBalanceTrendChart snapshots={snapshots} accounts={enabled} />
-                </ChartSection>
-              </div>
-              <div className="global-chart span-2">
-                <ChartSection title="今日费用构成（按账号 · 分币种）">
-                  <CostBreakdownChart accounts={enabled} statuses={statuses} />
-                </ChartSection>
-              </div>
-            </div>
-          )}
-        </section>
-      )}
+      {hasStats && <GlobalStatsCard accounts={enabled} statuses={statuses} snapshots={snapshots} />}
 
       {/* 各列独立累计高度，避免普通 Grid 的行高耦合；保留 enabled 的原始顺序。 */}
       <MasonryGrid>
@@ -253,30 +165,34 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
                 refreshing={refreshing}
                 snapshots={snapshots}
                 now={now}
+                todayKey={todayKey}
                 focusRequest={focusRequest}
+                onRetry={onRefresh}
+                onEdit={onEditAccount ? () => onEditAccount(acc.id) : undefined}
               />
             ))}
       </MasonryGrid>
 
-      {/* R17 版位：洞察 / 深度分析移到账号卡片下方（默认收起，用户选择在 localStorage 记忆） */}
-      {/* R14 洞察区：内部计算完全来自 history 快照，与上方全局统计的 hasStats 判据解耦 */}
-      <InsightsPanel
-        accounts={config.accounts}
-        statuses={statuses}
-        snapshots={snapshots}
-        settings={config.settings}
-        onRefresh={onRefresh}
-      />
+      <div className="dashboard-bottom-grid">
+        {/* R14 洞察区：内部计算完全来自 history 快照，与上方全局统计的 hasStats 判据解耦 */}
+        <InsightsPanel
+          accounts={config.accounts}
+          statuses={statuses}
+          snapshots={snapshots}
+          settings={config.settings}
+          onRefresh={onRefresh}
+        />
 
-      {/* R15 深度分析区：数据源是本地用量历史（usage-history.json）+ results.json 的 modelUsage */}
-      <AnalysisView
-        records={usageRecords ?? []}
-        statuses={statuses}
-        accounts={config.accounts}
-        today={todayKey ?? toLocalDateKey()}
-        errorNote={usageError ?? undefined}
-        onRefresh={onRefresh}
-      />
+        {/* R15 深度分析区：数据源是本地用量历史（usage-history.json）+ results.json 的 modelUsage */}
+        <AnalysisView
+          records={usageRecords ?? []}
+          statuses={statuses}
+          accounts={config.accounts}
+          today={todayKey ?? toLocalDateKey()}
+          errorNote={usageError ?? undefined}
+          onRefresh={onRefresh}
+        />
+      </div>
     </main>
   );
 }

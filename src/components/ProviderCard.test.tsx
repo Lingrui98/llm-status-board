@@ -54,16 +54,28 @@ function info(patch: Partial<AccountInfo> = {}): AccountInfo {
   return { extras: [], fetchedAt: "2026-10-23T04:11:36Z", ...patch };
 }
 
-function renderCard(props: { account?: AccountConfig; info?: AccountInfo | null; snapshots?: BalanceSnapshot[]; id?: string }) {
+function renderCard(props: {
+  account?: AccountConfig;
+  info?: AccountInfo | null;
+  snapshots?: BalanceSnapshot[];
+  id?: string;
+  todayKey?: string;
+  outcome?: RefreshOutcome;
+  onRetry?: () => void;
+  onEdit?: () => void;
+}) {
   const acc = props.account ?? account();
   const id = props.id ?? acc.id;
   return render(
     <ProviderCard
       account={acc}
-      outcome={outcome(props.info === undefined ? info() : props.info, id)}
+      outcome={props.outcome ?? outcome(props.info === undefined ? info() : props.info, id)}
       refreshing={false}
       snapshots={props.snapshots ?? []}
       now={Date.now()}
+      todayKey={props.todayKey}
+      onRetry={props.onRetry}
+      onEdit={props.onEdit}
     />,
   );
 }
@@ -445,5 +457,51 @@ describe("ProviderCard：详情抽屉空数据默认折叠（AC-7/8/9/10）", ()
     const rawToggle = document.querySelector(".drawer-raw .extras-toggle") as HTMLElement;
     expect(rawToggle.textContent).toContain("原始数据");
     expect(rawToggle.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+describe("ProviderCard：界面信息层级优化", () => {
+  it("无已用和总额度数据时不渲染占位行或空统计容器", () => {
+    renderCard({ info: info({ balance: { amount: 5, currency: "USD" }, used: null, total: null }) });
+    expect(screen.queryByText("已用")).toBeNull();
+    expect(screen.queryByText("总额度")).toBeNull();
+    expect(document.querySelector(".card-rows")).toBeNull();
+    expect(document.querySelector(".provider-brand")).toBeTruthy();
+    expect(document.querySelector(".card-head-meta .dot")).toBeTruthy();
+  });
+
+  it("余额卡复用本地快照绘制迷你趋势，并显示今日消耗", () => {
+    renderCard({
+      info: info({
+        balance: { amount: 8, currency: "USD" },
+        dailyUsage: [{ date: "2026-10-27", cost: 2.87, costUnit: "USD" }],
+      }),
+      todayKey: "2026-10-27",
+      snapshots: [
+        { accountId: "ms", ts: "2026-10-26T10:00:00Z", balance: 10, currency: "USD" },
+        { accountId: "ms", ts: "2026-10-27T10:00:00Z", balance: 8, currency: "USD" },
+        { accountId: "ms", ts: "2026-10-27T11:00:00Z", balance: 99, currency: "CNY" },
+      ],
+    });
+    expect(document.querySelector(".card-sparkline .spark-line")).toBeTruthy();
+    expect(screen.getByText("今日 -$2.87")).toBeTruthy();
+  });
+
+  it("异常卡片提供重试和编辑入口，并保留最近成功快照", () => {
+    const onRetry = vi.fn();
+    const onEdit = vi.fn();
+    renderCard({
+      outcome: { accountId: "ms", ok: false, info: null, error: "请求超时（10s）" },
+      snapshots: [{ accountId: "ms", ts: "2026-10-26T13:14:00Z", balance: 3.8, currency: "USD" }],
+      onRetry,
+      onEdit,
+    });
+    expect(screen.getByText("请求超时（10s）")).toBeTruthy();
+    expect(screen.getByText(/上次成功：/)).toBeTruthy();
+    expect(screen.getByText(/余额 3.80 USD/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledTimes(1);
   });
 });

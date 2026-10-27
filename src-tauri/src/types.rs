@@ -180,6 +180,17 @@ pub struct Settings {
     // ---- R23 托盘额度可视化 ----
     /// 限额窗口明细显示方式："percent"（默认，百分比条）/ "raw"（原始数字）；None 视为 percent
     pub quota_detail_display: Option<String>,
+    // ---- 主题（None = 前端默认值，旧配置无需迁移）----
+    /// dark / light / system / scheduled / sunrise；None 视为 system
+    pub theme_mode: Option<String>,
+    /// 固定时间模式的浅色开始时间，24 小时制 HH:mm；None 视为 07:00
+    pub theme_light_time: Option<String>,
+    /// 固定时间模式的深色开始时间，24 小时制 HH:mm；None 视为 19:00
+    pub theme_dark_time: Option<String>,
+    /// 日出日落模式的纬度；None 视为 0，合法范围 -90..=90
+    pub theme_latitude: Option<f64>,
+    /// 日出日落模式的经度；None 视为 0，合法范围 -180..=180
+    pub theme_longitude: Option<f64>,
 }
 
 impl Default for Settings {
@@ -200,6 +211,11 @@ impl Default for Settings {
             auto_check_update: None,
             update_channel: None,
             quota_detail_display: None,
+            theme_mode: None,
+            theme_light_time: None,
+            theme_dark_time: None,
+            theme_latitude: None,
+            theme_longitude: None,
         }
     }
 }
@@ -211,6 +227,15 @@ pub const NOTIFY_QUOTA_PERCENT_RANGE: (f64, f64) = (1.0, 100.0);
 pub const INSIGHT_WINDOW_DAYS_RANGE: (u32, u32) = (3, 90);
 /// R16 §1：自动重试次数范围（0 = 不重试）
 pub const REFRESH_RETRY_MAX_RANGE: (u32, u32) = (0, 3);
+/// 主题字段的缺省值。Option 为 None 时由前端使用这些值。
+pub const DEFAULT_THEME_MODE: &str = "system";
+pub const DEFAULT_THEME_LIGHT_TIME: &str = "07:00";
+pub const DEFAULT_THEME_DARK_TIME: &str = "19:00";
+pub const DEFAULT_THEME_LATITUDE: f64 = 0.0;
+pub const DEFAULT_THEME_LONGITUDE: f64 = 0.0;
+pub const THEME_MODES: [&str; 5] = ["dark", "light", "system", "scheduled", "sunrise"];
+pub const THEME_LATITUDE_RANGE: (f64, f64) = (-90.0, 90.0);
+pub const THEME_LONGITUDE_RANGE: (f64, f64) = (-180.0, 180.0);
 
 /// 服务端范围校验（AC-9 的后端保障）：越界返回**可读中文错误**，全部合法返回 Ok。
 ///
@@ -262,7 +287,46 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
             ));
         }
     }
+    // 主题：模式白名单、严格 HH:mm、有限经纬度。
+    if let Some(mode) = settings.theme_mode.as_deref() {
+        if !THEME_MODES.contains(&mode) {
+            return Err(format!(
+                "主题模式只支持 dark / light / system / scheduled / sunrise，当前为 {mode:?}"
+            ));
+        }
+    }
+    if let Some(value) = settings.theme_light_time.as_deref() {
+        check_theme_time(value, "浅色主题开始时间")?;
+    }
+    if let Some(value) = settings.theme_dark_time.as_deref() {
+        check_theme_time(value, "深色主题开始时间")?;
+    }
+    if let Some(value) = settings.theme_latitude {
+        check_number(value, THEME_LATITUDE_RANGE, "纬度", false)?;
+    }
+    if let Some(value) = settings.theme_longitude {
+        check_number(value, THEME_LONGITUDE_RANGE, "经度", false)?;
+    }
     Ok(())
+}
+
+/// 严格校验 24 小时制 HH:mm。不接受单数字小时、秒或首尾空白。
+fn check_theme_time(value: &str, label: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    let has_valid_shape = bytes.len() == 5
+        && bytes[2] == b':'
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+        && bytes[4].is_ascii_digit();
+    if has_valid_shape {
+        let hour = (bytes[0] - b'0') * 10 + (bytes[1] - b'0');
+        let minute = (bytes[3] - b'0') * 10 + (bytes[4] - b'0');
+        if hour <= 23 && minute <= 59 {
+            return Ok(());
+        }
+    }
+    Err(format!("{label}必须使用 24 小时制 HH:mm，当前为 {value:?}"))
 }
 
 /// 数值范围 + 可选整数要求；`NaN`/`Infinity` 一律拒绝
@@ -885,6 +949,110 @@ mod tests {
             };
             let error = validate_settings(&settings).expect_err("非法更新渠道必须被拒绝");
             assert!(error.contains("stable / nightly"), "实际错误: {error}");
+        }
+    }
+
+    #[test]
+    fn theme_settings_default_to_none_and_round_trip_camel_case() {
+        let legacy: Settings = serde_json::from_str(r#"{"autoRefreshSec":300}"#)
+            .expect("缺少主题字段的旧配置应可加载");
+        assert_eq!(legacy.theme_mode, None);
+        assert_eq!(legacy.theme_light_time, None);
+        assert_eq!(legacy.theme_dark_time, None);
+        assert_eq!(legacy.theme_latitude, None);
+        assert_eq!(legacy.theme_longitude, None);
+        assert!(validate_settings(&legacy).is_ok());
+
+        let json = r#"{
+            "themeMode":"sunrise",
+            "themeLightTime":"06:30",
+            "themeDarkTime":"18:45",
+            "themeLatitude":31.2304,
+            "themeLongitude":121.4737
+        }"#;
+        let settings: Settings = serde_json::from_str(json).expect("主题字段应可反序列化");
+        assert_eq!(settings.theme_mode.as_deref(), Some("sunrise"));
+        assert_eq!(settings.theme_light_time.as_deref(), Some("06:30"));
+        assert_eq!(settings.theme_dark_time.as_deref(), Some("18:45"));
+        assert_eq!(settings.theme_latitude, Some(31.2304));
+        assert_eq!(settings.theme_longitude, Some(121.4737));
+        assert!(validate_settings(&settings).is_ok());
+
+        let back = serde_json::to_string(&settings).expect("主题字段应可序列化");
+        assert!(back.contains("\"themeMode\":\"sunrise\""));
+        assert!(back.contains("\"themeLightTime\":\"06:30\""));
+        assert!(back.contains("\"themeLatitude\":31.2304"));
+        assert!(!back.contains("theme_mode"));
+    }
+
+    #[test]
+    fn theme_mode_validation_uses_exact_whitelist() {
+        for mode in THEME_MODES {
+            let settings = Settings {
+                theme_mode: Some(mode.to_string()),
+                ..Default::default()
+            };
+            assert!(validate_settings(&settings).is_ok(), "{mode} 应被接受");
+        }
+        for mode in ["", "System", "auto", " sunrise", "sunrise "] {
+            let settings = Settings {
+                theme_mode: Some(mode.to_string()),
+                ..Default::default()
+            };
+            let error = validate_settings(&settings).expect_err("非法主题模式必须被拒绝");
+            assert!(error.contains("主题模式"), "实际错误: {error}");
+        }
+    }
+
+    #[test]
+    fn theme_time_validation_requires_strict_hh_mm() {
+        for value in ["00:00", "07:05", "23:59"] {
+            let settings = Settings {
+                theme_light_time: Some(value.to_string()),
+                theme_dark_time: Some(value.to_string()),
+                ..Default::default()
+            };
+            assert!(validate_settings(&settings).is_ok(), "{value} 应被接受");
+        }
+        for value in ["", "7:00", "24:00", "12:60", "12:00:00", " 12:00", "12:00 "] {
+            let settings = Settings {
+                theme_light_time: Some(value.to_string()),
+                ..Default::default()
+            };
+            let error = validate_settings(&settings).expect_err("非法时间必须被拒绝");
+            assert!(error.contains("HH:mm"), "实际错误: {error}");
+        }
+    }
+
+    #[test]
+    fn theme_coordinates_validate_finite_ranges() {
+        for (latitude, longitude) in [(-90.0, -180.0), (0.0, 0.0), (90.0, 180.0)] {
+            let settings = Settings {
+                theme_latitude: Some(latitude),
+                theme_longitude: Some(longitude),
+                ..Default::default()
+            };
+            assert!(validate_settings(&settings).is_ok());
+        }
+        for value in [-90.1, 90.1, f64::NAN, f64::INFINITY] {
+            let settings = Settings {
+                theme_latitude: Some(value),
+                ..Default::default()
+            };
+            assert!(
+                validate_settings(&settings).is_err(),
+                "纬度 {value} 应被拒绝"
+            );
+        }
+        for value in [-180.1, 180.1, f64::NAN, f64::NEG_INFINITY] {
+            let settings = Settings {
+                theme_longitude: Some(value),
+                ..Default::default()
+            };
+            assert!(
+                validate_settings(&settings).is_err(),
+                "经度 {value} 应被拒绝"
+            );
         }
     }
 }

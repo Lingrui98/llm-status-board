@@ -27,6 +27,8 @@ import {
 } from "./systemNotify";
 import { querySystemNotifyPermission, sendSystemNotify } from "./systemNotifyApi";
 import { toggleAutostart } from "./autostart";
+import { useTheme } from "./useTheme";
+import { useTodayKey } from "./useTodayKey";
 import { pluginAutostart, pluginSystemNotify, pluginUpdater, queryAppVersion } from "./pluginRuntime";
 import {
   resolveUpdateChannel,
@@ -86,6 +88,7 @@ function isEditingTarget(t: EventTarget | null): boolean {
 export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [config, setConfig] = useState<AppConfig | null>(null);
+  useTheme(config?.settings);
   const [statuses, setStatuses] = useState<Record<string, RefreshOutcome>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [refreshAnnouncement, setRefreshAnnouncement] = useState("");
@@ -99,8 +102,8 @@ export default function App() {
   // R15：本地用量历史（逐日总账）。读取/写入失败都只做轻量提示，绝不影响看板主流程。
   const [usageRecords, setUsageRecords] = useState<UsageRecord[]>([]);
   const [usageError, setUsageError] = useState<string | null>(null);
-  // 「今日」本地日历日：整个分析视图共用同一份来源，避免多处 new Date() 造成口径漂移
-  const [todayKey, setTodayKey] = useState(() => toLocalDateKey());
+  // 「今日」本地日历日：整个分析视图共用同一份来源，跨午夜也会自动前进
+  const { todayKey, updateTodayKey } = useTodayKey();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   // 新手引导：accounts 为空 && 未跳过时自动出现；guideOpen 支持从帮助面板手动重开
@@ -109,6 +112,8 @@ export default function App() {
   const configRef = useRef<AppConfig | null>(null);
   // 「去设置并添加账号（预选类型）」请求：nonce 判重，SettingsView 消费后经 onAddRequestHandled 清除
   const [addRequest, setAddRequest] = useState<{ kind: ProviderKind; nonce: number } | null>(null);
+  // 异常卡片「编辑配置」请求：设置页据此直接打开对应账号表单
+  const [editRequest, setEditRequest] = useState<{ accountId: string; nonce: number } | null>(null);
   // 「跳转到账号」请求：nonce 判重，Dashboard 投递给匹配卡片后经 onFocusRequestHandled 清除
   const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
   const refreshTimer = useRef<number | null>(null);
@@ -176,6 +181,7 @@ export default function App() {
 
   const clearFocusRequest = useCallback(() => setFocusRequest(null), []);
   const clearAddRequest = useCallback(() => setAddRequest(null), []);
+  const clearEditRequest = useCallback(() => setEditRequest(null), []);
 
   // 关闭引导并持久化标记（跳过 / 完成 / ESC 共用）
   const dismissGuide = useCallback(() => {
@@ -197,6 +203,11 @@ export default function App() {
     },
     [dismissGuide],
   );
+
+  const handleEditAccount = useCallback((accountId: string) => {
+    setEditRequest({ accountId, nonce: Date.now() });
+    setView("settings");
+  }, []);
 
   // 帮助面板「重新打开新手引导」
   const handleReopenGuide = useCallback(() => {
@@ -332,7 +343,7 @@ export default function App() {
       } else {
         await persistUsageBatch(outcomes, dayKey);
       }
-      setTodayKey(dayKey);
+      updateTodayKey();
     } catch (e) {
       ipcFailed = true;
       setLoadError(String(e));
@@ -371,7 +382,7 @@ export default function App() {
         setRetryAnnouncement("");
       }
     }
-  }, [loadHistory, persistUsageBatch]);
+  }, [loadHistory, persistUsageBatch, updateTodayKey]);
 
   // R16 §5：把配置同步进重试控制器（开关 / 次数上限）
   useEffect(() => {
@@ -1220,6 +1231,7 @@ export default function App() {
           onOpenHelp={() => setHelpOpen(true)}
           onOpenNotifications={openNotifications}
           onRefresh={refresh}
+          onEditAccount={handleEditAccount}
         />
       ) : (
         <SettingsView
@@ -1228,6 +1240,8 @@ export default function App() {
           onRefresh={handleSettingsRefresh}
           addRequest={addRequest}
           onAddRequestHandled={clearAddRequest}
+          editRequest={editRequest}
+          onEditRequestHandled={clearEditRequest}
           saveState={saveState}
           saveError={saveError}
           onRetrySave={handleRetrySave}

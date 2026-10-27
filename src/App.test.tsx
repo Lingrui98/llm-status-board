@@ -324,7 +324,7 @@ describe("App 设置页", () => {
     // 进入设置
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
     // 表格里能看到账号行与认证方式
     expect(screen.getByText("new-api 系中转")).toBeTruthy();
@@ -350,7 +350,7 @@ describe("App 设置页", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 
@@ -414,7 +414,7 @@ describe("App 配置导入/导出", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "导出配置" }));
 
@@ -445,7 +445,7 @@ describe("App 配置导入/导出", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
 
     // 导入前只有 1 个账号
@@ -477,7 +477,7 @@ describe("App 配置导入/导出", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("button", { name: "导入配置" }));
 
@@ -545,7 +545,7 @@ describe("R14 设置页：提醒与洞察", () => {
   async function openSettings() {
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("账号管理")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "账号管理" })).toBeTruthy();
     });
   }
 
@@ -566,7 +566,7 @@ describe("R14 设置页：提醒与洞察", () => {
     });
     await openSettings();
 
-    expect(screen.getByText("提醒与洞察")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "提醒与洞察" })).toBeTruthy();
     // 四项阈值控件以可访问名（label）存在：USD 余额 / CNY 余额 / 配额百分比 / 洞察窗口
     expect(numberField("低余额提醒阈值（USD 及其他法币）")).toBeTruthy();
     expect(numberField("低余额提醒阈值（CNY）")).toBeTruthy();
@@ -762,7 +762,7 @@ describe("R14 配置化告警阈值", () => {
     // 进设置 → 关掉提醒总开关（会写入配置并触发重算）
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
     await waitFor(() => {
-      expect(screen.getByText("提醒与洞察")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "提醒与洞察" })).toBeTruthy();
     });
     fireEvent.click(screen.getByRole("checkbox", { name: "启用余额 / 配额提醒" }));
     await waitFor(() => {
@@ -1296,7 +1296,7 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "常驻与通知" })).toBeTruthy());
     expect(screen.getByText("开机自启")).toBeTruthy();
     expect(screen.getByText("系统通知")).toBeTruthy();
     expect(screen.getByText("刷新失败时自动重试")).toBeTruthy();
@@ -1365,7 +1365,7 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
 
     // 设置页：整页不再出现该能力相关字样与恢复入口；间隔说明写清 0 = 关闭
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "常驻与通知" })).toBeTruthy());
     expect(document.body.textContent).not.toContain("暂停");
     expect(document.body.textContent).not.toContain("恢复自动刷新");
     expect(screen.getByText(/设为 0 即关闭自动刷新/)).toBeTruthy();
@@ -1521,7 +1521,7 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
     await waitFor(() => expect(screen.getByText("R16 账号")).toBeTruthy());
     await waitFor(() => expect(traySettingsHandler).not.toBeNull());
     traySettingsHandler?.();
-    await waitFor(() => expect(screen.getByText("常驻与通知")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "常驻与通知" })).toBeTruthy());
   });
 
   /* ---- task-27：权限被拒提示的文案诚实性 ---- */
@@ -1597,7 +1597,7 @@ describe("更新渠道", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("DeepSeek 官方")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "设置" }));
-    await waitFor(() => expect(screen.getByText("关于与更新")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "关于与更新" })).toBeTruthy());
   }
 
   it("缺省使用稳定版，切到 nightly 后立即检查并自动保存", async () => {
@@ -1637,5 +1637,53 @@ describe("更新渠道", () => {
         timeout: 15_000,
       });
     });
+  });
+});
+
+describe("界面优化集成", () => {
+  it("主题选项立即生效并自动保存", async () => {
+    const cfg = makeConfig([dsAccount]);
+    cfg.settings.themeMode = "dark";
+    cfg.settings.autoCheckUpdate = false;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(cfg);
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      if (cmd === "save_config") return Promise.resolve(undefined);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "外观与主题" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("radio", { name: "浅色" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+        config: expect.objectContaining({
+          settings: expect.objectContaining({ themeMode: "light" }),
+        }),
+      });
+    });
+  });
+
+  it("异常卡片的编辑配置直接打开对应账号表单", async () => {
+    const cfg = makeConfig([dsAccount]);
+    cfg.settings.autoCheckUpdate = false;
+    const failed: RefreshOutcome = { accountId: dsAccount.id, ok: false, info: null, error: "请求超时" };
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(cfg);
+      if (cmd === "get_last_results") return Promise.resolve([failed]);
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("请求超时")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "编辑配置" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "编辑账号" })).toBeTruthy());
+    expect((screen.getByRole("textbox", { name: "名称 *" }) as HTMLInputElement).value).toBe("DeepSeek 官方");
   });
 });

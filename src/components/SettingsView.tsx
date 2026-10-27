@@ -4,6 +4,8 @@ import { DEFAULT_BASE_URLS, newAccountId } from "../types";
 import AccountTable from "./AccountTable";
 import AccountForm from "./AccountForm";
 import ThresholdSlider from "./ui/ThresholdSlider";
+import ThemeSettings from "./ThemeSettings";
+import { validateThemeSettings } from "../theme";
 import { InlineNotice, SegmentedControl, SettingRow } from "./ui";
 import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notifications";
 import { isSystemNotifyEnabled, resolveQuotaDetailDisplay } from "../residentSettings";
@@ -38,6 +40,9 @@ interface Props {
   addRequest?: { kind: ProviderKind; nonce: number } | null;
   /** 请求被消费后调用，App 据此清除（防重挂载复开表单） */
   onAddRequestHandled?: () => void;
+  /** 从看板异常卡片打开指定账号的编辑表单 */
+  editRequest?: { accountId: string; nonce: number } | null;
+  onEditRequestHandled?: () => void;
   /** 自动保存状态（App 层驱动）：saving / saved（短暂浮现）/ error（可重试） */
   saveState: "idle" | "saving" | "saved" | "error";
   saveError?: string;
@@ -73,6 +78,8 @@ interface Props {
  * 判定用非法值优先：组件层面已钳制，这里是「保存前最后一道闸」（AC-9）。
  */
 export function validateSettings(settings: Settings): { ok: true } | { ok: false; message: string } {
+  const themeResult = validateThemeSettings(settings);
+  if (!themeResult.ok) return themeResult;
   const { notifyLowBalanceUsd: usd, notifyLowBalanceCny: cny, notifyQuotaPercent: quota, insightWindowDays: days } =
     settings;
   if (usd != null && (!Number.isFinite(usd) || usd < 0 || usd > 10000))
@@ -106,6 +113,8 @@ export default function SettingsView({
   onRefresh,
   addRequest,
   onAddRequestHandled,
+  editRequest,
+  onEditRequestHandled,
   saveState,
   saveError,
   onRetrySave,
@@ -201,6 +210,14 @@ export default function SettingsView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addRequest, onAddRequestHandled]);
+
+  // 消费看板「编辑配置」请求：定位到对应账号，而不是只打开设置首页。
+  useEffect(() => {
+    if (!editRequest) return;
+    const target = accounts.find((account) => account.id === editRequest.accountId);
+    if (target) setEditing(target);
+    onEditRequestHandled?.();
+  }, [editRequest, accounts, onEditRequestHandled]);
 
   const upsertAccount = (acc: AccountConfig) => {
     const i = accounts.findIndex((a) => a.id === acc.id);
@@ -335,6 +352,17 @@ export default function SettingsView({
         </p>
       )}
 
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分区">
+          <a href="#settings-accounts">账号管理</a>
+          <a href="#settings-appearance">外观</a>
+          <a href="#settings-general">通用</a>
+          <a href="#settings-resident">常驻与通知</a>
+          <a href="#settings-insights">提醒与洞察</a>
+          <a href="#settings-about">关于与更新</a>
+        </nav>
+        <div className="settings-content">
+          <section className="settings-accounts" id="settings-accounts" aria-label="账号列表">
       {accounts.length === 0 ? (
         <div className="empty-state">
           <p className="muted">还没有账号，点击「添加账号」开始。</p>
@@ -356,8 +384,11 @@ export default function SettingsView({
           <kbd>↑</kbd><kbd>↓</kbd> 移动，<kbd>Esc</kbd> 取消。
         </p>
       )}
+          </section>
 
-      <div className="settings-section">
+          <ThemeSettings settings={config.settings} onChange={updateSettings} />
+
+      <div className="settings-section" id="settings-general">
         <h3>通用设置</h3>
         <label className="setting-row column">
           <span>自动刷新间隔（秒，0 = 关闭）</span>
@@ -413,7 +444,7 @@ export default function SettingsView({
       </div>
 
       {/* R16：常驻与通知 —— 自启/托盘/系统通知/自动重试同组归置；改动即时自动保存 */}
-      <div className="settings-section">
+      <div className="settings-section" id="settings-resident">
         <h3>常驻与通知</h3>
         <div className="set-rows">
           {/* §2 开机自启：真值以系统为准（查询中禁用），失败回滚由 App 层执行 */}
@@ -529,7 +560,7 @@ export default function SettingsView({
       </div>
 
       {/* R14：提醒与洞察 —— 阈值从硬编码改为可配置，改动即时自动保存并在下一轮刷新生效 */}
-      <div className="settings-section">
+      <div className="settings-section" id="settings-insights">
         <h3>提醒与洞察</h3>
         <label className="setting-row">
           <span>启用余额 / 配额提醒</span>
@@ -603,7 +634,7 @@ export default function SettingsView({
 
       {/* R22：关于与更新 —— 版本号 + 一键更新。状态由 App 层驱动，本区块只读渲染 + 发起动作；
           文案诚实性：Windows 安装器接管后本应用会被重启，「待重启」提示在 macOS 才是主路径（已注明）。 */}
-      <div className="settings-section">
+      <div className="settings-section" id="settings-about">
         <h3>关于与更新</h3>
         <div className="set-rows">
           <SettingRow
@@ -746,6 +777,8 @@ export default function SettingsView({
             </span>
           </InlineNotice>
         )}
+      </div>
+        </div>
       </div>
     </main>
   );

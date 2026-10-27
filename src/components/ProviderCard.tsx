@@ -17,6 +17,10 @@ import { mainSubscriptionWindow } from "../quotaHistory";
 import { useQuotaHistory } from "../useQuotaHistory";
 import { pickPrimaryMetric, readBalanceCredits } from "../primaryMetric";
 import { drawerDataFlags } from "../drawerSections";
+import { MiniSparkline } from "./ui";
+import { providerBrand } from "../providerBrand";
+import { accountCostForDate } from "../dashboardData";
+import { toLocalDateKey } from "../usageHistory";
 
 /** 外部「跳转到账号」请求（命令面板 / 数字键 1-9），由 App 经 Dashboard 透传 */
 export interface FocusRequest {
@@ -34,6 +38,12 @@ interface Props {
   now?: number;
   /** 外部请求打开本卡详情抽屉（匹配 accountId 且 nonce 变化时生效） */
   focusRequest?: FocusRequest | null;
+  /** 看板统一本地日期，用于卡片今日消耗 */
+  todayKey?: string;
+  /** 异常卡片重试：复用看板整轮刷新 */
+  onRetry?: () => void;
+  /** 打开当前账号的编辑表单 */
+  onEdit?: () => void;
 }
 
 function statusClass(outcome?: RefreshOutcome, refreshing?: boolean): "ok" | "error" | "pending" | "unknown" {
@@ -90,7 +100,7 @@ async function copyText(text: string): Promise<boolean> {
 const EXTRAS_COLLAPSE_AT = 6;
 const EXTRAS_PREVIEW = 5;
 
-export default function ProviderCard({ account, outcome, refreshing, snapshots, now, focusRequest }: Props) {
+export default function ProviderCard({ account, outcome, refreshing, snapshots, now, focusRequest, todayKey, onRetry, onEdit }: Props) {
   // 详情抽屉：图表与原始数据都放入右侧浮层，卡片高度不再随展开变化（grid 行稳定）
   const [detailOpen, setDetailOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
@@ -103,12 +113,22 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const info = outcome?.info ?? null;
   const err = outcome?.error ?? null;
   const st = statusClass(outcome, refreshing);
+  const brand = providerBrand(account.kind);
   const subscription = account.kind === "openAiSubscription";
   // 当前刷新失败时，历史视图仍使用本账号最近一次已识别工作区的成功信息。
   const historyInfoRef = useRef<{ accountId: string; info: AccountInfo } | null>(null);
+  const lastSuccessRef = useRef<{ accountId: string; info: AccountInfo } | null>(null);
   const cachedHistoryInfo = historyInfoRef.current?.accountId === account.id ? historyInfoRef.current.info : null;
   const historyInfo = outcome?.ok && info?.quotaScope ? info : cachedHistoryInfo;
   const quotaHistory = useQuotaHistory(account.id, subscription ? historyInfo?.quotaScope : null, historyInfo?.fetchedAt);
+
+  useEffect(() => {
+    if (outcome?.ok && info) {
+      lastSuccessRef.current = { accountId: account.id, info };
+    } else if (lastSuccessRef.current?.accountId !== account.id) {
+      lastSuccessRef.current = null;
+    }
+  }, [account.id, info, outcome?.ok]);
 
   useEffect(() => {
     if (outcome?.ok && info?.quotaScope) {
@@ -178,6 +198,62 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
 
   const ago = info ? formatTimeAgo(info.fetchedAt, now ?? Date.now()) : null;
 
+  const todayCost = accountCostForDate(info, todayKey ?? toLocalDateKey());
+  const todayCostParts = todayCost
+    ? formatMoneyParts({ amount: Math.abs(todayCost.amount), currency: todayCost.currency })
+    : null;
+  const todayCostText = todayCost && todayCostParts
+    ? `今日 ${todayCost.amount > 0 ? "-" : todayCost.amount < 0 ? "+" : ""}${
+        todayCost.currency === "USD"
+          ? `$${todayCostParts.num}`
+          : todayCost.currency === "CNY"
+            ? `¥${todayCostParts.num}`
+            : `${todayCostParts.num} ${todayCost.currency}`
+      }`
+    : null;
+
+  const balanceTrend = useMemo(() => {
+    if (metric.kind === "quota" || !balance) return [] as number[];
+    return snapshots
+      .filter((s) =>
+        s.accountId === account.id &&
+        s.currency === balance.currency &&
+        Number.isFinite(Date.parse(s.ts)) &&
+        Number.isFinite(s.balance),
+      )
+      .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+      .slice(-24)
+      .map((s) => s.balance);
+  }, [snapshots, account.id, balance, metric.kind]);
+
+  const latestSnapshot = useMemo(() => {
+    const sorted = snapshots
+      .filter((s) => s.accountId === account.id && Number.isFinite(Date.parse(s.ts)) && Number.isFinite(s.balance))
+      .sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+    return sorted[sorted.length - 1] ?? null;
+  }, [snapshots, account.id]);
+  const cachedSuccessInfo = lastSuccessRef.current?.accountId === account.id ? lastSuccessRef.current.info : null;
+  const lastSuccessAt = cachedSuccessInfo?.fetchedAt ?? latestSnapshot?.ts ?? null;
+  const lastSuccessBalance = cachedSuccessInfo?.balance ?? (latestSnapshot
+    ? { amount: latestSnapshot.balance, currency: latestSnapshot.currency }
+    : null);
+  const lastSuccessText = lastSuccessAt
+    ? `上次成功：${new Date(lastSuccessAt).toLocaleString("zh-CN", { hour12: false })}${
+        lastSuccessBalance ? ` · 余额 ${formatMoney(lastSuccessBalance)}` : ""
+      }`
+    : null;
+
+  const showUsedRow = !subscription && info?.used != null;
+  const showTotalRow = !subscription && info?.total != null;
+  const showRequestsRow = info?.requests !== null && info?.requests !== undefined;
+  const hasCardRows =
+    (metric.kind === "quota" && balance !== null && balance.amount > 0) ||
+    (metric.kind === "quota" && credits !== null && !extrasHasCreditsRow) ||
+    showUsedRow ||
+    showTotalRow ||
+    showRequestsRow ||
+    visibleExtras.length > 0;
+
   const handleCopyError = async () => {
     if (!err) return;
     if (!(await copyText(err))) return;
@@ -194,10 +270,15 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       {flashTick > 0 && <span key={flashTick} className="card-flash" aria-hidden="true" />}
       <div className="card-head">
         <div className="card-title">
-          <span className={`dot ${st}`} role="img" aria-label={`账号状态：${STATUS_LABEL[st]}`} />
-          <span className="card-name" title={account.name}>
-            {account.name}
+          <span className={`provider-brand provider-brand-${brand.tone}`} title={brand.label} aria-hidden="true">
+            {brand.letter}
           </span>
+          <div className="card-heading-copy">
+            <span className="card-name" title={account.name}>
+              {account.name}
+            </span>
+            <span className="kind-badge">{kindLabel(account.kind)}</span>
+          </div>
         </div>
         <div className="card-head-meta">
           {ago !== null && (
@@ -205,11 +286,12 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
               {ago}
             </span>
           )}
-          <span className="kind-badge">{kindLabel(account.kind)}</span>
+          <span className={`dot ${st}`} role="img" aria-label={`账号状态：${STATUS_LABEL[st]}`} />
         </div>
       </div>
 
-      <div className="card-balance">
+      <div className="balance-layout">
+        <div className="card-balance">
         {metric.kind === "quota" ? (
           <>
             <span className="balance-label">{subscription && (mainWindow?.windowSeconds === 604800 || mainWindow?.window?.includes("每周")) ? "周额度剩余" : "订阅剩余"}</span>
@@ -249,6 +331,8 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
             </span>
           </>
         )}
+        </div>
+        {todayCostText && <span className="balance-delta">{todayCostText}</span>}
       </div>
 
       {pct !== null && (
@@ -267,6 +351,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
         <QuotaWindowBars windows={info.quotaWindows} />
       )}
 
+      {hasCardRows && (
       <div className="card-rows">
         {/* R19 次级口径：订阅主指标时，余额 >0 才显示钱包余额；raw.balance_credits >0 显示充值余额
             （若 extras 里已有后端下发的「充值余额」，则不重复渲染同一口径） */}
@@ -282,15 +367,15 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
             <span className="row-value">{formatNumber(credits)}</span>
           </div>
         )}
-        {!subscription && <><div className="card-row">
+        {showUsedRow && <div className="card-row">
           <span className="row-label">已用</span>
           <span className="row-value">{formatMoney(info?.used)}</span>
-        </div>
-        <div className="card-row">
+        </div>}
+        {showTotalRow && <div className="card-row">
           <span className="row-label">总额度</span>
           <span className="row-value">{formatMoney(info?.total)}</span>
-        </div></>}
-        {info?.requests !== null && info?.requests !== undefined && (
+        </div>}
+        {showRequestsRow && (
           <div className="card-row">
             <span className="row-label">请求数</span>
             <span className="row-value">{formatNumber(info.requests)}</span>
@@ -316,6 +401,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           </button>
         )}
       </div>
+      )}
 
       {subscription && <QuotaMini samples={quotaHistory.samples} info={historyInfo} error={quotaHistory.error} now={now} />}
 
@@ -331,22 +417,49 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       )}
 
       {err && (
-        <button
-          type="button"
-          className={`error-text error-copy${copied ? " copied" : ""}`}
-          onClick={handleCopyError}
-          title="点击复制错误信息"
-        >
-          <span className="error-msg">{err}</span>
-          <span className="copy-hint" aria-hidden="true">
-            {copied ? "已复制" : "点击复制"}
-          </span>
-        </button>
+        <div className="card-error-panel">
+          <div className="card-error-line">
+            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 4.5v4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <circle cx="8" cy="11.2" r=".8" fill="currentColor" />
+            </svg>
+            <button
+              type="button"
+              className={`card-error-message${copied ? " copied" : ""}`}
+              onClick={handleCopyError}
+              title={`${err}\n点击复制错误信息`}
+            >
+              {copied ? "已复制错误信息" : err}
+            </button>
+          </div>
+          {(onRetry || onEdit) && (
+            <div className="card-error-actions">
+              {onRetry && <button type="button" className="btn error-retry" onClick={onRetry} disabled={refreshing} title="重新刷新全部账号">重试</button>}
+              {onEdit && <button type="button" className="btn ghost" onClick={onEdit}>编辑配置</button>}
+            </div>
+          )}
+        </div>
       )}
+
+      {balanceTrend.length >= 2 && (
+        <div className="card-sparkline">
+          <MiniSparkline
+            data={balanceTrend}
+            width={400}
+            height={42}
+            tone="accent"
+            fill={false}
+            ariaLabel={`${account.name} 最近余额趋势`}
+          />
+        </div>
+      )}
+
+      {err && lastSuccessText && <div className="card-last-success muted small">{lastSuccessText}</div>}
 
       <div className="card-foot">
         <span className="muted small">
-          {info ? `更新于 ${formatTime(info.fetchedAt)}` : refreshing && !outcome ? "等待数据…" : "尚未刷新"}
+          {err ? "本次刷新失败" : info ? `更新于 ${formatTime(info.fetchedAt)}` : refreshing && !outcome ? "等待数据…" : "尚未刷新"}
         </span>
         <div className="card-actions">
           {info?.raw !== undefined && info?.raw !== null && (

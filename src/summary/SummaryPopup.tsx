@@ -12,6 +12,8 @@ import SummaryCard, { type SummaryStatus } from "./SummaryCard";
 import { buildSummary, type SummaryData } from "./summaryData";
 import { loadSummarySize, saveSummarySize } from "./summarySize";
 import { hideSummaryPopup, setSummaryPointerInside, summaryOpenAccount } from "./ipc";
+import { useTheme } from "../useTheme";
+import type { Settings } from "../types";
 
 /** 失败只影响本浮层交互：静默降级（错误已由界面文案兜底） */
 function fireAndForget(p: Promise<unknown>): void {
@@ -21,10 +23,13 @@ function fireAndForget(p: Promise<unknown>): void {
 export default function SummaryPopup() {
   const [status, setStatus] = useState<SummaryStatus>("loading");
   const [data, setData] = useState<SummaryData | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  useTheme(settings);
 
   const load = useCallback(async () => {
     try {
       const [config, outcomes, history] = await Promise.all([getConfig(), getLastResults(), getUsageHistory()]);
+      setSettings(config.settings);
       const enabled = config.accounts.filter((a) => a.enabled);
       if (enabled.length === 0) {
         setData(null);

@@ -1,5 +1,7 @@
 // 与 Rust 侧 serde 序列化结构一一对应（camelCase）
 
+import type { ThemeMode } from "./theme";
+
 export type ProviderKind =
   | "oneApi"
   | "newApi"
@@ -102,6 +104,17 @@ export interface Settings {
   /* ---- R23 托盘额度可视化 ---- */
   /** R23：限额窗口明细显示方式；缺省（undefined/null）视为 "percent"（原始数字 = "raw"） */
   quotaDetailDisplay?: "percent" | "raw" | null;
+  /* ---- 主题 ---- */
+  /** 主题模式；缺省视为 system */
+  themeMode?: ThemeMode | null;
+  /** 固定时间模式的浅色开始时间；24 小时制 HH:mm，缺省为 07:00 */
+  themeLightTime?: string | null;
+  /** 固定时间模式的深色开始时间；24 小时制 HH:mm，缺省为 19:00 */
+  themeDarkTime?: string | null;
+  /** 日出日落模式的纬度；缺省为 0，合法范围 -90–90 */
+  themeLatitude?: number | null;
+  /** 日出日落模式的经度；缺省为 0，合法范围 -180–180 */
+  themeLongitude?: number | null;
 }
 
 export interface AppConfig {
