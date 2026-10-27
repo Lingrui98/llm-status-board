@@ -414,7 +414,7 @@ describe("日出日落模式解析", () => {
       themeLatitude: 21.3,
       themeLongitude: -157.8,
     };
-    const beforeSunrise = new Date(2026, 0, 1, 0, 0, 0);
+    const beforeSunrise = new Date("2025-12-31T16:00:00Z");
     expect(resolveThemeMode(honolulu, beforeSunrise, "light")).toBe("dark");
   });
 

@@ -227,12 +227,6 @@ pub const NOTIFY_QUOTA_PERCENT_RANGE: (f64, f64) = (1.0, 100.0);
 pub const INSIGHT_WINDOW_DAYS_RANGE: (u32, u32) = (3, 90);
 /// R16 §1：自动重试次数范围（0 = 不重试）
 pub const REFRESH_RETRY_MAX_RANGE: (u32, u32) = (0, 3);
-/// 主题字段的缺省值。Option 为 None 时由前端使用这些值。
-pub const DEFAULT_THEME_MODE: &str = "system";
-pub const DEFAULT_THEME_LIGHT_TIME: &str = "07:00";
-pub const DEFAULT_THEME_DARK_TIME: &str = "19:00";
-pub const DEFAULT_THEME_LATITUDE: f64 = 0.0;
-pub const DEFAULT_THEME_LONGITUDE: f64 = 0.0;
 pub const THEME_MODES: [&str; 5] = ["dark", "light", "system", "scheduled", "sunrise"];
 pub const THEME_LATITUDE_RANGE: (f64, f64) = (-90.0, 90.0);
 pub const THEME_LONGITUDE_RANGE: (f64, f64) = (-180.0, 180.0);
