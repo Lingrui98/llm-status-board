@@ -1,3 +1,5 @@
+import type { Settings, UpdateChannel } from "./types";
+
 // R22 一键更新：纯逻辑（状态类型 / 错误文案 / 进度与日期格式化），不依赖 Tauri 插件，便于单测。
 //
 // 设计见 docs/round-22-updater-plan.md §4：
@@ -37,8 +39,8 @@ export type UpdateState =
  * 与 R16 AutostartApi / SystemNotifyApi 同一模式。
  */
 export interface UpdaterApi {
-  /** 检查更新；null = 已是最新。proxy 为 null/空串 → 走系统默认（与「通用设置」的代理共用同一输入） */
-  check(proxy: string | null): Promise<UpdateInfo | null>;
+  /** 检查指定渠道的更新；null = 已是最新。proxy 为空时走系统默认 */
+  check(proxy: string | null, channel: UpdateChannel): Promise<UpdateInfo | null>;
   /**
    * 下载并安装已发现的更新（进度回调；total 未知为 null）。
    * 注意：Windows 上 NSIS 安装器接管后**进程直接退出**，本 Promise 可能永远不再返回——
@@ -47,12 +49,25 @@ export interface UpdaterApi {
   downloadAndInstall(onProgress: (received: number, total: number | null) => void): Promise<void>;
   /** 安装完成后重启进新版本（macOS 必须；Windows 一般已被安装器自动重启） */
   relaunch(): Promise<void>;
-  /** 兜底：系统浏览器打开 GitHub 发布页（opener 插件，capability 已限定本仓库 releases） */
-  openReleasePage(): Promise<void>;
+  /** 兜底：系统浏览器打开所选渠道的 GitHub 发布页 */
+  openReleasePage(channel: UpdateChannel): Promise<void>;
 }
 
-/** 「前往发布页」统一入口（手滑改 URL 只改这里） */
-export const RELEASES_PAGE_URL = "https://github.com/Lingrui98/llm-status-board/releases/latest";
+export const STABLE_RELEASES_PAGE_URL = "https://github.com/Lingrui98/llm-status-board/releases/latest";
+export const NIGHTLY_RELEASES_PAGE_URL = "https://github.com/Lingrui98/llm-status-board/releases/tag/nightly";
+
+/** 缺省或未知值使用稳定版；设置保存路径只接受 stable / nightly。 */
+export function resolveUpdateChannel(settings?: Pick<Settings, "updateChannel"> | null): UpdateChannel {
+  return settings?.updateChannel === "nightly" ? "nightly" : "stable";
+}
+
+export function updateChannelLabel(channel: UpdateChannel): string {
+  return channel === "nightly" ? "nightly" : "稳定版";
+}
+
+export function releasePageUrl(channel: UpdateChannel): string {
+  return channel === "nightly" ? NIGHTLY_RELEASES_PAGE_URL : STABLE_RELEASES_PAGE_URL;
+}
 
 /**
  * 把插件/网络错误转成可读中文（与 autostartErrorMessage 同风格：不泄露堆栈，且给出下一步）。

@@ -99,6 +99,12 @@ describe("validateSettings：缺省与旧配置兼容", () => {
     expect(validateSettings(settings({ notifyEnabled: false }))).toEqual({ ok: true });
   });
 
+  it("更新渠道只接受 stable / nightly", () => {
+    expect(validateSettings(settings({ updateChannel: "stable" }))).toEqual({ ok: true });
+    expect(validateSettings(settings({ updateChannel: "nightly" }))).toEqual({ ok: true });
+    expectRejected(settings({ updateChannel: "beta" as never }), "更新渠道", "stable / nightly");
+  });
+
   it("其它字段越界不影响 R14 校验结果（仅校验 R14 阈值）", () => {
     expect(validateSettings(settings({ autoRefreshSec: -5 }))).toEqual({ ok: true });
   });

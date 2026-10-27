@@ -5,10 +5,34 @@ import {
   formatBytes,
   formatProgress,
   isUpdateBusy,
+  releasePageUrl,
+  resolveUpdateChannel,
   shortUpdateDate,
+  updateChannelLabel,
   updaterErrorMessage,
   type UpdateState,
 } from "./updater";
+
+describe("更新渠道", () => {
+  it("旧配置与空值默认使用稳定版", () => {
+    expect(resolveUpdateChannel(null)).toBe("stable");
+    expect(resolveUpdateChannel({})).toBe("stable");
+    expect(resolveUpdateChannel({ updateChannel: null })).toBe("stable");
+  });
+
+  it("仅显式 nightly 选择夜间渠道", () => {
+    expect(resolveUpdateChannel({ updateChannel: "nightly" })).toBe("nightly");
+    expect(resolveUpdateChannel({ updateChannel: "stable" })).toBe("stable");
+    expect(resolveUpdateChannel({ updateChannel: "beta" as never })).toBe("stable");
+  });
+
+  it("渠道名称与发布页一一对应", () => {
+    expect(updateChannelLabel("stable")).toBe("稳定版");
+    expect(updateChannelLabel("nightly")).toBe("nightly");
+    expect(releasePageUrl("stable")).toBe("https://github.com/Lingrui98/llm-status-board/releases/latest");
+    expect(releasePageUrl("nightly")).toBe("https://github.com/Lingrui98/llm-status-board/releases/tag/nightly");
+  });
+});
 
 describe("updaterErrorMessage", () => {
   it("空错误 → 阶段前缀 + 未知原因", () => {

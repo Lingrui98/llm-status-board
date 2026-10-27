@@ -9,7 +9,7 @@
 import type { AutostartApi } from "./autostart";
 import type { SystemNotifyApi } from "./systemNotifyApi";
 import type { UpdaterApi } from "./updater";
-import { RELEASES_PAGE_URL } from "./updater";
+import { releasePageUrl } from "./updater";
 import type { Update } from "@tauri-apps/plugin-updater";
 
 /** 真实自启 API（§2）：enable / disable / isEnabled */
@@ -104,16 +104,37 @@ async function releasePendingUpdate(handle: Update | null): Promise<void> {
   }
 }
 
-/** 真实更新 API（§4.1）：check → downloadAndInstall → relaunch；失败一律抛给调用方做文案化 */
+/** Rust check_channel_update 返回的插件 Update 构造参数。 */
+interface ChannelUpdateMetadata {
+  rid: number;
+  currentVersion: string;
+  version: string;
+  date?: string | null;
+  body?: string | null;
+  rawJson: Record<string, unknown>;
+}
+
+/** 真实更新 API：Rust 选择渠道端点，官方 JS Update 继续负责下载、签名校验和安装。 */
 export const pluginUpdater: UpdaterApi = {
-  async check(proxy) {
-    const mod = await import("@tauri-apps/plugin-updater");
-    // 上一次检查若有遗留句柄先释放（用户连点「检查更新」的正常路径）
+  async check(proxy, channel) {
+    const [mod, core] = await Promise.all([
+      import("@tauri-apps/plugin-updater"),
+      import("@tauri-apps/api/core"),
+    ]);
+    // 切换渠道或再次检查时，先释放旧渠道的待安装句柄。
     await releasePendingUpdate(pendingUpdate);
     pendingUpdate = null;
-    // proxy 与「通用设置」的网络代理共用同一输入：空串/空白 → 走系统默认
-    const update = await mod.check({ proxy: proxy?.trim() || undefined, timeout: 15_000 });
-    if (!update) return null;
+    const metadata = await core.invoke<ChannelUpdateMetadata | null>("check_channel_update", {
+      channel,
+      proxy: proxy?.trim() || null,
+      timeout: 15_000,
+    });
+    if (!metadata) return null;
+    const update = new mod.Update({
+      ...metadata,
+      date: metadata.date ?? undefined,
+      body: metadata.body ?? undefined,
+    });
     pendingUpdate = update;
     return { version: update.version, notes: update.body ?? "", date: update.date ?? "" };
   },
@@ -146,9 +167,9 @@ export const pluginUpdater: UpdaterApi = {
     await mod.relaunch();
   },
 
-  async openReleasePage() {
+  async openReleasePage(channel) {
     const mod = await import("@tauri-apps/plugin-opener");
-    await mod.openUrl(RELEASES_PAGE_URL);
+    await mod.openUrl(releasePageUrl(channel));
   },
 };
 

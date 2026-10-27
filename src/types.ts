@@ -69,6 +69,8 @@ export interface AccountConfig {
   custom?: CustomQuery | null;
 }
 
+export type UpdateChannel = "stable" | "nightly";
+
 export interface Settings {
   autoRefreshSec: number;
   refreshOnStart: boolean;
@@ -95,6 +97,8 @@ export interface Settings {
   /* ---- R22 一键更新 ---- */
   /** R22：启动时自动检查更新（静默，只提示不下载）；缺省（undefined/null）视为 true */
   autoCheckUpdate?: boolean | null;
+  /** 更新渠道；缺省（undefined/null）视为 stable */
+  updateChannel?: UpdateChannel | null;
   /* ---- R23 托盘额度可视化 ---- */
   /** R23：限额窗口明细显示方式；缺省（undefined/null）视为 "percent"（原始数字 = "raw"） */
   quotaDetailDisplay?: "percent" | "raw" | null;

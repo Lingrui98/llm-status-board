@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AccountConfig, AppConfig, ProviderKind, Settings } from "../types";
+import type { AccountConfig, AppConfig, ProviderKind, Settings, UpdateChannel } from "../types";
 import { DEFAULT_BASE_URLS, newAccountId } from "../types";
 import AccountTable from "./AccountTable";
 import AccountForm from "./AccountForm";
@@ -9,7 +9,13 @@ import { DEFAULT_NOTIFY_THRESHOLDS, resolveAlertSettings } from "../notification
 import { isSystemNotifyEnabled, resolveQuotaDetailDisplay } from "../residentSettings";
 import { NOTIFY_PERMISSION_RETRY_LABEL, notificationManualPath } from "../pluginRuntime";
 import { exportUsageCsv } from "../exportReport";
-import { formatProgress, isUpdateBusy, shortUpdateDate, type UpdateState } from "../updater";
+import {
+  formatProgress,
+  isUpdateBusy,
+  resolveUpdateChannel,
+  shortUpdateDate,
+  type UpdateState,
+} from "../updater";
 import * as api from "../api";
 
 /** R16 自启状态（§2）：真值以系统为准，查询中禁用开关 */
@@ -52,6 +58,8 @@ interface Props {
   appVersion?: string;
   /** 手动「检查更新」 */
   onCheckUpdate?: () => void;
+  /** 切换更新渠道；App 保存设置并检查新渠道 */
+  onUpdateChannelChange?: (channel: UpdateChannel) => void;
   /** 「立即更新」：下载并安装已发现的更新 */
   onInstallUpdate?: () => void;
   /** 安装完成后重启进新版 */
@@ -75,6 +83,9 @@ export function validateSettings(settings: Settings): { ok: true } | { ok: false
     return { ok: false, message: "配额用量提醒线需为 1–100 的整数" };
   if (days != null && (!Number.isFinite(days) || days < 3 || days > 90 || !Number.isInteger(days)))
     return { ok: false, message: "洞察统计窗口需为 3–90 的整数天" };
+  const updateChannel = settings.updateChannel;
+  if (updateChannel != null && updateChannel !== "stable" && updateChannel !== "nightly")
+    return { ok: false, message: "更新渠道只支持 stable / nightly" };
   // R16：自动重试次数 0–3 整数（Rust 侧 validate_settings 同步）
   const retryMax = settings.refreshRetryMax;
   if (retryMax != null && (!Number.isFinite(retryMax) || retryMax < 0 || retryMax > 3 || !Number.isInteger(retryMax)))
@@ -105,6 +116,7 @@ export default function SettingsView({
   updateState,
   appVersion,
   onCheckUpdate,
+  onUpdateChannelChange,
   onInstallUpdate,
   onRelaunchAfterUpdate,
   onOpenReleasePage,
@@ -613,8 +625,27 @@ export default function SettingsView({
             )}
           />
           <SettingRow
+            label="更新渠道"
+            hint="稳定版用于日常使用，nightly 包含最新主线改动。切换后立即检查，可安装另一渠道版本"
+            control={
+              <SegmentedControl
+                options={[
+                  { value: "stable", label: "稳定版" },
+                  { value: "nightly", label: "nightly" },
+                ]}
+                value={resolveUpdateChannel(config.settings)}
+                onChange={(channel) => {
+                  if (onUpdateChannelChange) onUpdateChannelChange(channel);
+                  else updateSettings({ updateChannel: channel });
+                }}
+                ariaLabel="更新渠道"
+                disabled={updateBusy}
+              />
+            }
+          />
+          <SettingRow
             label="启动时自动检查更新"
-            hint="启动约 5 秒后静默检查一次；发现新版本只在顶栏提示（及系统通知，若已开启），不会自动下载"
+            hint="配置加载约 5 秒后静默检查一次；发现新版本只在顶栏提示（及系统通知，若已开启），不会自动下载"
             control={(a) => (
               <input
                 type="checkbox"

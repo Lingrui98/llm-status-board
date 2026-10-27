@@ -175,6 +175,8 @@ pub struct Settings {
     // ---- R22 一键更新 ----
     /// 启动时是否静默检查更新（只提示不下载）；None 视为 true
     pub auto_check_update: Option<bool>,
+    /// 更新渠道："stable" / "nightly"；None 视为 stable
+    pub update_channel: Option<String>,
     // ---- R23 托盘额度可视化 ----
     /// 限额窗口明细显示方式："percent"（默认，百分比条）/ "raw"（原始数字）；None 视为 percent
     pub quota_detail_display: Option<String>,
@@ -196,6 +198,7 @@ impl Default for Settings {
             refresh_retry_enabled: None,
             refresh_retry_max: None,
             auto_check_update: None,
+            update_channel: None,
             quota_detail_display: None,
         }
     }
@@ -246,6 +249,10 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
         if v < min || v > max {
             return Err(format!("刷新重试次数必须在 {min}–{max} 之间，当前为 {v}"));
         }
+    }
+    // R22：更新渠道白名单（None = 默认 stable）
+    if let Some(channel) = settings.update_channel.as_deref() {
+        crate::updater::UpdateChannel::parse(channel)?;
     }
     // R23：限额窗口明细显示方式白名单（None = 默认 percent）
     if let Some(v) = settings.quota_detail_display.as_deref() {
@@ -845,5 +852,39 @@ mod tests {
     #[test]
     fn r16_retry_max_range_matches_spec() {
         assert_eq!(REFRESH_RETRY_MAX_RANGE, (0, 3));
+    }
+
+    #[test]
+    fn update_channel_defaults_to_none_and_round_trips_camel_case() {
+        let legacy: Settings = serde_json::from_str("{}").expect("旧配置应可加载");
+        assert_eq!(legacy.update_channel, None);
+        assert_eq!(Settings::default().update_channel, None);
+        assert!(validate_settings(&legacy).is_ok());
+
+        let settings: Settings = serde_json::from_str(r#"{"updateChannel":"nightly"}"#)
+            .expect("updateChannel 应可反序列化");
+        assert_eq!(settings.update_channel.as_deref(), Some("nightly"));
+        let json = serde_json::to_string(&settings).expect("设置应可序列化");
+        assert!(json.contains("\"updateChannel\":\"nightly\""));
+        assert!(!json.contains("update_channel"));
+    }
+
+    #[test]
+    fn update_channel_validation_accepts_only_stable_or_nightly() {
+        for channel in ["stable", "nightly"] {
+            let settings = Settings {
+                update_channel: Some(channel.to_string()),
+                ..Default::default()
+            };
+            assert!(validate_settings(&settings).is_ok());
+        }
+        for channel in ["", "Stable", "beta", " nightly", "nightly "] {
+            let settings = Settings {
+                update_channel: Some(channel.to_string()),
+                ..Default::default()
+            };
+            let error = validate_settings(&settings).expect_err("非法更新渠道必须被拒绝");
+            assert!(error.contains("stable / nightly"), "实际错误: {error}");
+        }
     }
 }

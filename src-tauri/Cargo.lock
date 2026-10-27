@@ -2150,6 +2150,7 @@ dependencies = [
  "futures",
  "rand",
  "reqwest 0.12.28",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
@@ -2162,7 +2163,9 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "time",
  "tokio",
+ "url",
  "windows-sys 0.61.2",
 ]
 

@@ -8,7 +8,9 @@
     "notifyLowBalanceUsd": 1,
     "notifyLowBalanceCny": 7,
     "notifyQuotaPercent": 85,
-    "insightWindowDays": 14
+    "insightWindowDays": 14,
+    "autoCheckUpdate": true,
+    "updateChannel": "stable"
   },
   "accounts": [
     {

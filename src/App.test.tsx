@@ -52,6 +52,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 // R22：更新 / 进程 / 打开链接插件 + 运行时版本（默认「无更新」、版本查询失败回退；用例按需替换）
 vi.mock("@tauri-apps/plugin-updater", () => ({
   check: vi.fn(),
+  Update: vi.fn(),
 }));
 vi.mock("@tauri-apps/plugin-process", () => ({
   relaunch: vi.fn(),
@@ -1576,5 +1577,65 @@ describe("R16 常驻与自动化：设置页与托盘（§1/§2/§6）", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新请求授权" }));
     await waitFor(() => expect(screen.queryByText("系统通知已被系统拒绝")).toBeNull());
     expect(screen.getByText("已授权")).toBeTruthy();
+  });
+});
+
+describe("更新渠道", () => {
+  async function openUpdateSettings(initialChannel?: "stable" | "nightly") {
+    const cfg = makeConfig([dsAccount]);
+    cfg.settings.autoCheckUpdate = false;
+    cfg.settings.updateChannel = initialChannel;
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "get_config") return Promise.resolve(cfg);
+      if (cmd === "config_path") return Promise.resolve("C:/fake/config.json");
+      if (cmd === "check_channel_update") return Promise.resolve(null);
+      if (cmd === "save_config") return Promise.resolve(undefined);
+      if (cmd === "get_usage_history") return Promise.resolve({ version: 1, records: [] });
+      return Promise.resolve([]);
+    });
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("DeepSeek 官方")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(screen.getByText("关于与更新")).toBeTruthy());
+  }
+
+  it("缺省使用稳定版，切到 nightly 后立即检查并自动保存", async () => {
+    await openUpdateSettings();
+    expect((screen.getByRole("radio", { name: "稳定版" }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "nightly" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("check_channel_update", {
+        channel: "nightly",
+        proxy: null,
+        timeout: 15_000,
+      });
+    });
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("save_config", {
+        config: expect.objectContaining({
+          settings: expect.objectContaining({ updateChannel: "nightly" }),
+        }),
+      });
+    });
+    expect((screen.getByRole("radio", { name: "nightly" }) as HTMLInputElement).checked).toBe(true);
+    await waitFor(() => expect(screen.getByText("已是最新版本。")).toBeTruthy());
+  });
+
+  it("已保存 nightly 时可切回稳定版并检查稳定渠道", async () => {
+    await openUpdateSettings("nightly");
+    expect((screen.getByRole("radio", { name: "nightly" }) as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "稳定版" }));
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("check_channel_update", {
+        channel: "stable",
+        proxy: null,
+        timeout: 15_000,
+      });
+    });
   });
 });

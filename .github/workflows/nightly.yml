@@ -1,0 +1,161 @@
+name: Nightly Release
+
+# GitHub cron 使用 UTC。每天 18:00 UTC 运行，即北京时间 02:00。
+# schedule 只在仓库默认分支运行。本仓库当前主线为 master，非 master 手动触发会跳过。
+on:
+  schedule:
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 排队执行，避免多个运行同时删除、上传或发布同一个滚动 release。
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+# nightly 固定使用 prerelease tag 和名称 nightly：
+# https://github.com/Lingrui98/llm-status-board/releases/download/nightly/latest.json
+# 稳定版仍由 release.yml 创建 draft，并保留原端点：
+# https://github.com/Lingrui98/llm-status-board/releases/latest/download/latest.json
+# build 通过 secrets: inherit 复用 TAURI_SIGNING_PRIVATE_KEY 及其密码。
+jobs:
+  check:
+    # workflow_dispatch 也不能从其他分支或 tag 构建 nightly。
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.compare.outputs.should_build }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare with last published nightly
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          # 只读取已发布的 prerelease。失败运行留下的 draft 不参与比较。
+          # API 错误会让本步骤失败，不会把未知状态误判为可以构建。
+          gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "nightly" and .draft == false and .prerelease == true) | (.body // "") | try (capture("<!-- nightly-commit:(?<sha>[0-9a-f]{40}) -->") | .sha) catch empty' \
+            > "${RUNNER_TEMP}/published-nightly-shas"
+          published_commit="$(sed -n '1p' "${RUNNER_TEMP}/published-nightly-shas")"
+          if [ "$published_commit" = "$CURRENT_SHA" ]; then
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            echo "Published nightly already contains ${CURRENT_SHA}; skipping build."
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            echo "Current master commit ${CURRENT_SHA} needs a nightly build."
+          fi
+
+      - name: Calculate nightly version
+        id: version
+        if: steps.compare.outputs.should_build == 'true'
+        run: |
+          base_version="$(jq -er '.version | select(type == "string" and length > 0)' src-tauri/tauri.conf.json)"
+          utc_date="$(date -u +%Y%m%d)"
+          nightly_version="${base_version}-nightly.${utc_date}.${GITHUB_RUN_NUMBER}"
+          echo "version=${nightly_version}" >> "$GITHUB_OUTPUT"
+          echo "Nightly version: ${nightly_version}"
+
+  prepare:
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.recreate.outputs.release_id }}
+    steps:
+      - name: Recreate rolling nightly draft
+        id: recreate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          # 删除旧 nightly（包括失败留下的 draft），确保没有旧资产混入新清单。
+          # REST 删除 release 不删除 tag，下一步会强制把 tag 移到当前 SHA。
+          gh api --paginate "repos/${REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.tag_name == "nightly") | .id' \
+            > "${RUNNER_TEMP}/nightly-release-ids"
+          while IFS= read -r release_id; do
+            if [[ "$release_id" =~ ^[0-9]+$ ]]; then
+              gh api "repos/${REPOSITORY}/releases/${release_id}" -X DELETE --silent
+            elif [ -n "$release_id" ]; then
+              echo "Invalid nightly release ID." >&2
+              exit 1
+            fi
+          done < "${RUNNER_TEMP}/nightly-release-ids"
+
+          if ! gh api "repos/${REPOSITORY}/git/refs/tags/nightly" \
+            -X PATCH -f sha="$CURRENT_SHA" -F force=true --silent; then
+            gh api "repos/${REPOSITORY}/git/refs" \
+              -f ref="refs/tags/nightly" -f sha="$CURRENT_SHA" --silent
+          fi
+
+          release_body="$(printf 'Automated nightly build for %s.\n\n<!-- nightly-commit:%s -->' "$CURRENT_SHA" "$CURRENT_SHA")"
+          id="$(gh api "repos/${REPOSITORY}/releases" \
+            -f tag_name="nightly" \
+            -f name="nightly" \
+            -f target_commitish="$CURRENT_SHA" \
+            -f body="$release_body" \
+            -F draft=true -F prerelease=true --jq .id)"
+          if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+            echo "Invalid new nightly release ID." >&2
+            exit 1
+          fi
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [check, prepare]
+    if: needs.check.outputs.should_build == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      release_id: ${{ needs.prepare.outputs.release_id }}
+      version: ${{ needs.check.outputs.version }}
+    secrets: inherit
+
+  publish:
+    # needs.build 失败会阻止发布，并让 draft 保留到下次运行前清理。
+    needs: [check, prepare, build]
+    if: success() && needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify merged three-platform manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          NIGHTLY_VERSION: ${{ needs.check.outputs.version }}
+          MANIFEST_PATH: ${{ runner.temp }}/latest.json
+        run: |
+          asset_id="$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}" \
+            --jq '.assets[] | select(.name == "latest.json") | .id')"
+          if [[ ! "$asset_id" =~ ^[0-9]+$ ]]; then
+            echo "Expected exactly one latest.json asset." >&2
+            exit 1
+          fi
+          gh api "repos/${REPOSITORY}/releases/assets/${asset_id}" \
+            -H "Accept: application/octet-stream" > "$MANIFEST_PATH"
+          node -e 'const fs = require("fs"); const manifest = JSON.parse(fs.readFileSync(process.env.MANIFEST_PATH, "utf8")); if (!manifest || typeof manifest !== "object") throw new Error("Invalid latest.json"); if (manifest.version !== process.env.NIGHTLY_VERSION) throw new Error(`Unexpected manifest version: ${manifest.version}`); const required = ["windows-x86_64", "darwin-aarch64", "darwin-x86_64"]; for (const name of required) { const item = manifest.platforms && manifest.platforms[name]; if (!item || typeof item.url !== "string" || item.url.length === 0 || typeof item.signature !== "string" || item.signature.length === 0) throw new Error(`latest.json is missing a signed ${name} updater artifact`); } console.log(`Verified ${required.length} platforms in latest.json.`);'
+
+      - name: Publish nightly prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          # 三个平台全部成功且清单验证通过后，才统一发布滚动 prerelease。
+          gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}" -X PATCH \
+            -f tag_name="nightly" -f name="nightly" \
+            -F draft=false -F prerelease=true --silent
+          published_commit="$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}" \
+            --jq 'select(.draft == false and .prerelease == true and .tag_name == "nightly") | (.body // "") | capture("<!-- nightly-commit:(?<sha>[0-9a-f]{40}) -->") | .sha')"
+          if [ "$published_commit" != "$CURRENT_SHA" ]; then
+            echo "Published nightly commit marker does not match ${CURRENT_SHA}." >&2
+            exit 1
+          fi

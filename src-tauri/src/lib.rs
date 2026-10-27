@@ -10,6 +10,7 @@ mod quota_history;
 mod summary;
 mod tray;
 mod types;
+mod updater;
 
 #[cfg(test)]
 mod net_tests;
@@ -134,6 +135,7 @@ pub fn run() {
             chatgpt_auth::cancel_chatgpt_login,
             chatgpt_auth::open_chatgpt_login,
             chatgpt_auth::discard_chatgpt_auth,
+            updater::check_channel_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
