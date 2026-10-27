@@ -41,6 +41,7 @@ export const LazyGlobalBalanceTrendChart = withSuspense(lazy(() => import("./Glo
 export const LazyCostBreakdownChart = withSuspense(lazy(() => import("./CostBreakdownChart")));
 /** R15 分析视图逐日趋势：同样必须走懒加载边界 */
 export const LazyAnalysisTrendChart = withSuspense(lazy(() => import("./AnalysisTrendChart")));
+export const LazyQuotaHistoryChart = withSuspense(lazy(() => import("./QuotaHistoryChart")));
 
 /** pickTrendCurrency 是纯函数且已移到 shared（不引 recharts），同步导出不唤起图表 chunk */
 export { pickTrendCurrency, ChartSection, ChartEmpty } from "./shared";

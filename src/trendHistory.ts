@@ -1,6 +1,6 @@
 import type { BalanceSnapshot } from "./types";
 
-export type TrendRange = "1h" | "24h" | "7d" | "30d" | "all" | "custom";
+export type TrendRange = "cycle" | "1h" | "24h" | "7d" | "30d" | "90d" | "all" | "custom";
 export interface TrendSelection { preset: TrendRange; from: string; to: string }
 export interface TrendWindow { from: number; to: number; error?: string }
 export const TREND_RANGES: { value: TrendRange; label: string }[] = [
@@ -29,11 +29,11 @@ export function resolveTrendWindow(selection: TrendSelection, bounds: [number, n
     if (from >= to) return { from, to, error: "开始时间必须早于结束时间" };
     return { from, to };
   }
-  if (selection.preset === "all") {
+  if (selection.preset === "all" || selection.preset === "cycle") {
     const [from, to] = bounds ?? [now - 24 * HOUR, now];
     return from === to ? { from: from - 30_000, to: to + 30_000 } : { from, to };
   }
-  const duration = { "1h": HOUR, "24h": 24 * HOUR, "7d": 7 * 24 * HOUR, "30d": 30 * 24 * HOUR }[selection.preset];
+  const duration = { "1h": HOUR, "24h": 24 * HOUR, "7d": 7 * 24 * HOUR, "30d": 30 * 24 * HOUR, "90d": 90 * 24 * HOUR }[selection.preset];
   return { from: now - duration, to: now };
 }
 

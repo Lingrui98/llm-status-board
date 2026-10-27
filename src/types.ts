@@ -8,6 +8,7 @@ export type ProviderKind =
   | "aiHubMix"
   | "deepSeek"
   | "openAi"
+  | "openAiSubscription"
   | "siliconFlow"
   | "moonshot"
   | "zhipu"
@@ -22,7 +23,8 @@ export const PROVIDER_KINDS: { value: ProviderKind; label: string; group: string
   { value: "aiHubMix", label: "AiHubMix", group: "中转站" },
   { value: "custom", label: "自定义 HTTP 查询", group: "中转站" },
   { value: "deepSeek", label: "DeepSeek 官方", group: "官方" },
-  { value: "openAi", label: "OpenAI 官方", group: "官方" },
+  { value: "openAi", label: "OpenAI API 官方", group: "官方" },
+  { value: "openAiSubscription", label: "OpenAI 订阅（Codex）", group: "官方" },
   { value: "siliconFlow", label: "硅基流动 SiliconFlow", group: "官方" },
   { value: "moonshot", label: "月之暗面 Kimi/Moonshot", group: "官方" },
   { value: "zhipu", label: "智谱 GLM", group: "官方" },
@@ -57,6 +59,9 @@ export interface AccountConfig {
   apiKey: string;
   token: string;
   refreshToken?: string;
+  codexAuthPath?: string | null;
+  chatgptAccountId?: string | null;
+  chatgptAuthId?: string | null;
   userId?: number | null;
   username: string;
   password: string;
@@ -130,6 +135,24 @@ export interface QuotaWindow {
   usedAmount?: Money | null;
   /** R23：数字限额窗口的原始上限（limit>0 才产出窗口，故存在即正数） */
   limitAmount?: Money | null;
+  historyKey?: string | null;
+  windowSeconds?: number | null;
+}
+
+export type QuotaBoundary = "reset" | "scheduleChanged" | "usageDecreased" | "windowReturned" | "expired";
+export interface QuotaHistoryPoint {
+  key: string;
+  label: string;
+  usedPercent: number;
+  resetsAt: string | null;
+  windowSeconds: number | null;
+  segment: number;
+  boundary: QuotaBoundary | null;
+}
+export interface QuotaSample {
+  ts: string;
+  scope: string;
+  windows: QuotaHistoryPoint[];
 }
 
 /** 余额与总额度历史快照（旧记录没有 total） */
@@ -196,6 +219,8 @@ export interface AccountInfo {
   modelUsage?: UsagePoint[] | null;
   /** 配额窗口（进度条） */
   quotaWindows?: QuotaWindow[] | null;
+  quotaScope?: string | null;
+  quotaHistoryError?: string | null;
 }
 
 export interface RefreshOutcome {
@@ -216,6 +241,7 @@ export const DEFAULT_BASE_URLS: Record<ProviderKind, string> = {
   custom: "https://your-relay-site.com",
   deepSeek: "https://api.deepseek.com",
   openAi: "https://api.openai.com",
+  openAiSubscription: "https://chatgpt.com",
   siliconFlow: "https://api.siliconflow.cn",
   moonshot: "https://api.moonshot.cn",
   zhipu: "https://open.bigmodel.cn",

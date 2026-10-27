@@ -1,10 +1,12 @@
 mod balance_usage;
+mod chatgpt_auth;
 mod commands;
 mod config;
 mod http;
 mod jsonpath;
 mod primary_metric;
 mod providers;
+mod quota_history;
 mod summary;
 mod tray;
 mod types;
@@ -87,6 +89,7 @@ pub fn run() {
         // 必须排在 window-state 之后（见函数注释）
         .plugin(window_geometry_guard_plugin())
         .setup(|app| {
+            chatgpt_auth::init(app.path().app_config_dir()?.join("chatgpt-auth"));
             tray::setup(app)?;
             Ok(())
         })
@@ -116,6 +119,7 @@ pub fn run() {
             commands::refresh_all,
             commands::get_last_results,
             commands::get_history,
+            quota_history::get_quota_history,
             commands::get_usage_history,
             commands::upsert_usage_history,
             commands::show_summary_popup,
@@ -125,6 +129,11 @@ pub fn run() {
             commands::export_csv,
             commands::export_config,
             commands::import_config,
+            chatgpt_auth::start_chatgpt_login,
+            chatgpt_auth::chatgpt_login_status,
+            chatgpt_auth::cancel_chatgpt_login,
+            chatgpt_auth::open_chatgpt_login,
+            chatgpt_auth::discard_chatgpt_auth,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

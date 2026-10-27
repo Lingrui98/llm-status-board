@@ -98,6 +98,7 @@ export function kindLabel(kind: string): string {
     aiHubMix: "AiHubMix",
     deepSeek: "DeepSeek",
     openAi: "OpenAI",
+    openAiSubscription: "Codex 订阅",
     siliconFlow: "SiliconFlow",
     moonshot: "Moonshot",
     zhipu: "智谱",

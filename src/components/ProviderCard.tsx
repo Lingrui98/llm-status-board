@@ -12,6 +12,9 @@ import QuotaWindowBars from "./charts/QuotaWindowBars";
 import DetailDrawer from "./DetailDrawer";
 import DrawerSection from "./DrawerSection";
 import AccountTrends from "./AccountTrends";
+import QuotaHistory, { QuotaMini } from "./QuotaHistory";
+import { mainSubscriptionWindow } from "../quotaHistory";
+import { useQuotaHistory } from "../useQuotaHistory";
 import { pickPrimaryMetric, readBalanceCredits } from "../primaryMetric";
 import { drawerDataFlags } from "../drawerSections";
 
@@ -100,6 +103,8 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const info = outcome?.info ?? null;
   const err = outcome?.error ?? null;
   const st = statusClass(outcome, refreshing);
+  const subscription = account.kind === "openAiSubscription";
+  const quotaHistory = useQuotaHistory(account.id, subscription ? info?.quotaScope : null, info?.fetchedAt);
 
   useEffect(
     () => () => {
@@ -142,7 +147,9 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const lowBalance = balance !== null && balance.amount >= 0 && balance.amount < 1 && (balance.currency === "USD" || balance.currency === "CNY");
 
   // R19 主指标：订阅制（有窗口且余额为 0/null）以「订阅剩余百分比」为主；否则余额为主（§1）
-  const metric = useMemo(() => pickPrimaryMetric(info), [info]);
+  const mainWindow = useMemo(() => mainSubscriptionWindow(info), [info]);
+  const metric = useMemo(() => pickPrimaryMetric(subscription && info
+    ? { ...info, quotaWindows: mainWindow ? [mainWindow] : [] } : info), [info, subscription, mainWindow]);
   // R19 次级：钱包充值额度（raw.balance_credits，>0 才显示；口径裁定不用「加油包」）
   const credits = useMemo(() => readBalanceCredits(info?.raw), [info?.raw]);
 
@@ -193,7 +200,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       <div className="card-balance">
         {metric.kind === "quota" ? (
           <>
-            <span className="balance-label">订阅剩余</span>
+            <span className="balance-label">{subscription && (mainWindow?.windowSeconds === 604800 || mainWindow?.window?.includes("每周")) ? "周额度剩余" : "订阅剩余"}</span>
             <span className={`balance-value ${usageLevel(metric.usedPercent)}`}>
               {/* 读屏播报完整口径（窗口名 + 已用/剩余 + 重置倒计时） */}
               <span className="sr-only">{metric.summary}</span>
@@ -211,7 +218,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           </>
         ) : (
           <>
-            <span className="balance-label">余额</span>
+            <span className="balance-label">{subscription ? "订阅剩余" : "余额"}</span>
             <span className={`balance-value${lowBalance ? " low" : ""}`}>
               {balanceParts ? (
                 <>
@@ -263,14 +270,14 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
             <span className="row-value">{formatNumber(credits)}</span>
           </div>
         )}
-        <div className="card-row">
+        {!subscription && <><div className="card-row">
           <span className="row-label">已用</span>
           <span className="row-value">{formatMoney(info?.used)}</span>
         </div>
         <div className="card-row">
           <span className="row-label">总额度</span>
           <span className="row-value">{formatMoney(info?.total)}</span>
-        </div>
+        </div></>}
         {info?.requests !== null && info?.requests !== undefined && (
           <div className="card-row">
             <span className="row-label">请求数</span>
@@ -297,6 +304,8 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           </button>
         )}
       </div>
+
+      {subscription && <QuotaMini samples={quotaHistory.samples} info={info} error={quotaHistory.error} now={now} />}
 
       {info?.note && (
         <p className="note">
@@ -366,6 +375,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           onClose={() => setDetailOpen(false)}
         >
           <div className="drawer-charts">
+            {subscription ? <QuotaHistory key={`${account.id}:${info?.quotaScope ?? ""}`} samples={quotaHistory.samples} info={info} error={quotaHistory.error} now={now} /> : <>
             <AccountTrends accountId={account.id} snapshots={snapshots} info={info} now={now} balanceEmptyNote={chartEmptyNote("balance")} />
             <DrawerSection title="额度构成" hasData={flags.breakdown} emptyNote={chartEmptyNote("breakdown")}>
               <BalanceBreakdownChart info={info} emptyNote={chartEmptyNote("breakdown")} />
@@ -379,6 +389,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
             <DrawerSection title="Token 输入 / 输出构成" hasData={flags.token} emptyNote={chartEmptyNote("token")}>
               <TokenSplitChart data={info?.modelUsage} emptyNote={chartEmptyNote("token")} />
             </DrawerSection>
+            </>}
           </div>
           {info?.raw !== undefined && info?.raw !== null && (
             <div className="drawer-raw">
@@ -406,6 +417,9 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   /** 按账号类型与图表维度生成「无数据」说明（区分"不支持"与"暂无记录"） */
   function chartEmptyNote(dimension: "daily" | "model" | "balance" | "breakdown" | "token"): string | undefined {
     const kind = account.kind;
+    if (kind === "openAiSubscription") {
+      return "Codex 订阅提供当前配额窗口与重置时间，无美元余额、逐日费用或 Token 明细";
+    }
     if (kind === "aiHubMix" && dimension !== "balance" && dimension !== "breakdown") {
       return "AiHubMix 计费接口仅提供累计用量，无按日、按模型或 Token 明细";
     }

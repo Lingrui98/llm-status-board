@@ -306,6 +306,7 @@ fn subscription_quota_windows_at(
                 amount: limit,
                 currency: usd(),
             }),
+            ..Default::default()
         });
     }
     out

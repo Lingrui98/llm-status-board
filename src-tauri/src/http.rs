@@ -5,10 +5,22 @@ use std::time::Duration;
 /// 构建 HTTP 客户端。
 /// - proxy: 形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080；None 时回退到环境变量（http_proxy 等）
 pub fn make_client(proxy: Option<&str>) -> Result<Client, String> {
+    build_client(proxy, false)
+}
+
+/// Authorization codes and refresh tokens must never be forwarded by a redirect.
+pub(crate) fn make_oauth_client(proxy: Option<&str>) -> Result<Client, String> {
+    build_client(proxy, true)
+}
+
+fn build_client(proxy: Option<&str>, oauth: bool) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(15))
         .user_agent("llm-status-board/0.1");
+    if oauth {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
+    }
     if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {
         let proxy = Proxy::all(p).map_err(|e| format!("代理地址无效（{p}）: {e}"))?;
         builder = builder.proxy(proxy);
@@ -83,7 +95,7 @@ pub async fn send_json(
 
 /// reqwest 的 Display 只显示请求摘要，DNS / TLS / 代理等实际原因在 source 链中。
 /// URL 可能带有凭证或查询参数，展示原因时不包含 URL。
-fn describe_request_error(error: reqwest::Error) -> String {
+pub(crate) fn describe_request_error(error: reqwest::Error) -> String {
     let timed_out = error.is_timeout();
     let connect = error.is_connect();
     let error = error.without_url();

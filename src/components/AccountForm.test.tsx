@@ -5,7 +5,10 @@ import AccountForm from "./AccountForm";
 import * as api from "../api";
 import type { AccountConfig } from "../types";
 
-vi.mock("../api", () => ({ testAccount: vi.fn() }));
+vi.mock("../api", () => ({ testAccount: vi.fn(), pickCodexAuthFile: vi.fn(),
+  startChatgptLogin: vi.fn(), openChatgptLogin: vi.fn(), chatgptLoginStatus: vi.fn(),
+  cancelChatgptLogin: vi.fn(), discardChatgptAuth: vi.fn(),
+}));
 
 afterEach(cleanup);
 beforeEach(() => vi.resetAllMocks());
@@ -76,5 +79,75 @@ describe("AiHubMix account setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
     expect(await screen.findByText(/AiHubMix 查询用量失败: billing request rejected/)).toBeTruthy();
     expect(screen.queryByText(/连接成功/)).toBeNull();
+  });
+});
+
+describe("Codex subscription account setup", () => {
+  function setup() {
+    const result = renderForm();
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "openAiSubscription" } });
+    return result;
+  }
+
+  it("uses ChatGPT credentials and a separate provider from API billing", () => {
+    const { onSubmit } = setup();
+    const base = screen.getByLabelText(/^站点地址/) as HTMLInputElement;
+    expect(base.value).toBe("https://chatgpt.com");
+    expect(base.readOnly).toBe(true);
+    expect(screen.queryByLabelText(/^API Key/)).toBeNull();
+    const token = screen.getByLabelText("ChatGPT Access Token") as HTMLInputElement;
+    expect(token.type).toBe("password");
+    fireEvent.change(token, { target: { value: "own-chatgpt-access-token" } });
+    fireEvent.change(screen.getByLabelText(/^ChatGPT Account ID/), { target: { value: "workspace-account" } });
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ kind: "openAiSubscription", token: "own-chatgpt-access-token", chatgptAccountId: "workspace-account", apiKey: "", refreshToken: "" }));
+  });
+
+  it("stores only the chosen auth path and clears stale manual credentials", async () => {
+    vi.mocked(api.pickCodexAuthFile).mockResolvedValue("/home/example/.codex/auth.json");
+    const { onSubmit } = setup();
+    fireEvent.change(screen.getByLabelText("ChatGPT Access Token"), { target: { value: "stale-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择 auth.json" }));
+    await screen.findByRole("button", { name: "改用令牌" });
+    expect((screen.getByLabelText("Codex 登录文件路径") as HTMLInputElement).value).toBe("/home/example/.codex/auth.json");
+    expect(screen.queryByLabelText("ChatGPT Access Token")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ codexAuthPath: "/home/example/.codex/auth.json", token: "", chatgptAccountId: null }));
+    fireEvent.click(screen.getByRole("button", { name: "改用令牌" }));
+    expect((screen.getByLabelText("ChatGPT Access Token") as HTMLInputElement).value).toBe("");
+  });
+
+  it("reports quota percentages on test connection and explains session expiry", async () => {
+    vi.mocked(api.testAccount).mockResolvedValue({ extras: [], fetchedAt: "2026-10-26T08:00:00Z", quotaWindows: [
+      { window: "Codex · 5小时", usedPercent: 25 }, { window: "Codex · 每周", usedPercent: 60 },
+    ] });
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByText("Codex · 5小时 已用 25%，剩余 75% · Codex · 每周 已用 60%，剩余 40%")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "怎么获取凭证？" }));
+    expect(screen.getByText(/不自动刷新 OAuth 令牌/)).toBeTruthy();
+    expect(screen.getByText(/API 平台的 sk- Key 无法查询订阅额度/)).toBeTruthy();
+  });
+
+  it("cancelling the file picker preserves the manual token", async () => {
+    vi.mocked(api.pickCodexAuthFile).mockResolvedValue(null);
+    setup();
+    fireEvent.change(screen.getByLabelText("ChatGPT Access Token"), { target: { value: "keep-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择 auth.json" }));
+    await Promise.resolve();
+    expect((screen.getByLabelText("ChatGPT Access Token") as HTMLInputElement).value).toBe("keep-token");
+  });
+
+  it("saves a browser login reference while clearing stale tokens and file credentials", async () => {
+    vi.mocked(api.startChatgptLogin).mockResolvedValue({ attemptId: "flow", authUrl: "https://auth.openai.com/oauth/authorize" });
+    vi.mocked(api.openChatgptLogin).mockResolvedValue(undefined);
+    vi.mocked(api.chatgptLoginStatus).mockResolvedValue({ status: "complete", authId: "managed-session", accountId: "workspace" });
+    const { onSubmit } = setup();
+    fireEvent.change(screen.getByLabelText("ChatGPT Access Token"), { target: { value: "stale-token" } });
+    fireEvent.click(screen.getByRole("button", { name: "使用 ChatGPT 登录" }));
+    await screen.findByText(/ChatGPT 已连接/);
+    expect(screen.queryByLabelText("ChatGPT Access Token")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ chatgptAuthId: "managed-session", chatgptAccountId: "workspace", token: "", refreshToken: "", codexAuthPath: null }));
   });
 });

@@ -113,6 +113,19 @@ export const CREDENTIAL_GUIDES: Record<ProviderKind, CredentialGuide> = {
     copyables: [{ label: "开放平台", value: "https://platform.openai.com" }],
     note: "访问 OpenAI 接口通常需要代理：在「设置 → 通用设置」里填写网络代理（http:// 或 socks5://）。",
   },
+  openAiSubscription: {
+    need: "ChatGPT Plus/Pro/团队等套餐的 Codex 登录凭据；API 平台的 sk- Key 无法查询订阅额度。",
+    steps: [
+      "点击「使用 ChatGPT 登录」，在此电脑的浏览器完成官方授权，再返回面板保存；无需安装 Codex",
+      "登录未自动打开时，可点击「打开登录页面」或复制登录链接；面板最多等待 5 分钟，可随时取消",
+      "已有 Codex 登录时，也可点击「选择 auth.json」；通常在用户目录的 .codex/auth.json，使用 CODEX_HOME 时在对应目录",
+      "macOS 可在文件选择器按 Cmd+Shift+G 输入路径；Windows 可在地址栏输入 %USERPROFILE%\\.codex",
+      "没有可读取的登录文件或使用系统钥匙串时，可手动填写自己的 ChatGPT Access Token；团队多工作区可填写对应的 Account ID",
+      "点击测试连接，确认返回订阅窗口；之后显示已用/剩余比例及重置时间",
+    ],
+    copyables: [{ label: "Codex 用量页", value: "https://chatgpt.com/codex/settings/usage" }],
+    note: "浏览器登录的凭据仅保存在本机，由面板自动续期；配置导出不含这组令牌，换电脑需重新登录。断开登录后保存生效。外部 auth.json 和手动令牌不自动刷新 OAuth 令牌，仍需在 Codex 更新或手动替换。查询比例不代表消息数、美元费用或 ChatGPT 网页聊天额度。",
+  },
   siliconFlow: {
     need: "硅基流动的 API Key（sk- 开头）。",
     steps: [

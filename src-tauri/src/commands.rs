@@ -14,7 +14,9 @@ pub async fn get_config(app: AppHandle) -> Result<AppConfig, String> {
 pub async fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
     // R14 AC-9 的服务端保障：越界阈值拒绝落盘（前端也有同样的即时校验，这里是兜底）
     crate::types::validate_settings(&config.settings)?;
+    let previous = config::load(&app).unwrap_or_default();
     config::save(&app, &config)?;
+    crate::chatgpt_auth::remove_detached(&previous, &config).await;
     // R23：配额显示模式等托盘相关设置变更后即时重建菜单（重建失败不阻塞保存结果）
     crate::tray::rebuild_menu_now(&app);
     Ok(())
@@ -166,7 +168,19 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save(&app, &cfg);
     }
 
-    let mut outcomes: Vec<RefreshOutcome> = results.into_iter().map(|(_, o)| o).collect();
+    let mut outcomes: Vec<RefreshOutcome> = results
+        .into_iter()
+        .map(|(account, mut outcome)| {
+            if account.kind == crate::types::ProviderKind::OpenAiSubscription {
+                if let Some(info) = &mut outcome.info {
+                    if let Err(error) = crate::quota_history::record(&app, &account.id, info) {
+                        info.quota_history_error = Some(error);
+                    }
+                }
+            }
+            outcome
+        })
+        .collect();
     // 同秒内连续刷新也有独立游标，避免秒级时间戳漏记差分。
     let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let snapshots = balance_snapshots(&outcomes, &now);
