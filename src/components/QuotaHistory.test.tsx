@@ -3,8 +3,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import QuotaHistory from "./QuotaHistory";
 import type { AccountInfo, QuotaSample } from "../types";
 
-vi.mock("./charts/lazy", () => ({ LazyQuotaHistoryChart: ({ samples, window, metric }: { samples: QuotaSample[]; window: unknown; metric: string }) =>
-  <div data-testid="quota-chart" data-samples={JSON.stringify(samples)} data-window={JSON.stringify(window)} data-metric={metric} /> }));
+vi.mock("./charts/lazy", () => ({ LazyQuotaHistoryChart: ({ rows, count, events, window, metric }: {
+  rows: unknown; count: number; events: unknown; window: unknown; metric: string;
+}) => <div data-testid="quota-chart" data-rows={JSON.stringify(rows)} data-count={count}
+  data-events={JSON.stringify(events)} data-window={JSON.stringify(window)} data-metric={metric} /> }));
 afterEach(cleanup);
 const ts = (hour: number) => `2026-10-01T0${hour}:00:00Z`;
 const samples: QuotaSample[] = [80, 0, 20].map((usedPercent, i) => ({ ts: ts(i), scope: "workspace", windows: [{ key: "codex:604800", label: "Codex · 每周",
@@ -15,7 +17,9 @@ describe("subscription quota history layout", () => {
   it("defaults to the actual latest segment, including an early ad-hoc reset", () => {
     render(<QuotaHistory samples={samples} info={info} now={Date.parse(ts(3))} />);
     const chart = screen.getByTestId("quota-chart");
-    expect(JSON.parse(chart.getAttribute("data-samples")!)).toHaveLength(2);
+    expect(chart.getAttribute("data-count")).toBe("2");
+    expect(JSON.parse(chart.getAttribute("data-rows")!).map((row: { value: number | null }) => row.value)).toEqual([0, 20]);
+    expect(JSON.parse(chart.getAttribute("data-events")!)).toHaveLength(1);
     expect(JSON.parse(chart.getAttribute("data-window")!).from).toBe(Date.parse(ts(1)));
     expect(screen.getByText(/周期长度不固定/)).toBeTruthy();
     expect(screen.queryByText("余额趋势")).toBeNull();
@@ -25,7 +29,7 @@ describe("subscription quota history layout", () => {
   it("allows full history, 90-day/custom ranges and remaining-percent display", () => {
     render(<QuotaHistory samples={samples} info={info} now={Date.parse(ts(3))} />);
     fireEvent.click(screen.getByRole("button", { name: "全部" }));
-    expect(JSON.parse(screen.getByTestId("quota-chart").getAttribute("data-samples")!)).toHaveLength(3);
+    expect(screen.getByTestId("quota-chart").getAttribute("data-count")).toBe("3");
     fireEvent.click(screen.getByRole("button", { name: "90天" }));
     const range = JSON.parse(screen.getByTestId("quota-chart").getAttribute("data-window")!);
     expect(range.to - range.from).toBe(90 * 86400000);

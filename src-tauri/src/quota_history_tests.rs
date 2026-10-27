@@ -262,3 +262,118 @@ fn damaged_files_and_failed_writes_preserve_last_committed_history_and_segment_s
     assert_eq!(point(&restarted).used_percent, 0.0);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn unchanged_samples_within_thirty_seconds_skip_writes_without_hiding_boundaries() {
+    let t = base();
+    let reset = t + 10_000;
+    let mut file = File::default();
+    push(&mut file, t, 60.0, Some(reset));
+    assert!(!append(
+        &mut file,
+        &info(t + 1000, 60.0, Some(reset)),
+        t + 1000,
+        MAX_SAMPLES
+    )
+    .unwrap());
+    assert_eq!(file.samples.len(), 1);
+
+    // The deadline still creates a boundary even though the percentage is unchanged.
+    push(&mut file, reset, 60.0, Some(reset));
+    assert_eq!(point(&file).boundary, Some(Boundary::Expired));
+    assert_eq!(file.samples.len(), 2);
+
+    // Keep one ordinary sample after a boundary so later samples can skip again.
+    push(&mut file, reset + 1000, 60.0, Some(reset));
+    assert_eq!(point(&file).boundary, None);
+    assert!(!append(
+        &mut file,
+        &info(reset + 2000, 60.0, Some(reset)),
+        reset + 2000,
+        MAX_SAMPLES
+    )
+    .unwrap());
+    assert_eq!(file.samples.len(), 3);
+    push(&mut file, reset + 31_000, 60.0, Some(reset));
+    assert_eq!(file.samples.len(), 4);
+}
+
+#[test]
+fn incremental_queries_are_scope_isolated_and_strictly_after_the_cursor() {
+    let t = base();
+    let mut file = File::default();
+    push(&mut file, t, 10.0, None);
+    push(&mut file, t + 1000, 20.0, None);
+    let mut other = info(t + 2000, 30.0, None);
+    other.quota_scope = Some("workspace-b".into());
+    append(&mut file, &other, t + 2000, MAX_SAMPLES).unwrap();
+
+    let selected = select_samples(file.clone(), "workspace-a", Some(&iso(t))).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].ts, iso(t + 1000));
+    assert_eq!(selected[0].windows[0].used_percent, 20.0);
+    assert_eq!(
+        select_samples(file.clone(), "workspace-a", None)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(select_samples(file, "workspace-a", Some("not-a-time")).is_err());
+}
+
+#[test]
+fn incremental_queries_preserve_sub_millisecond_samples() {
+    let t = base();
+    let mut file = File::default();
+    let mut first = info(t, 10.0, None);
+    first.fetched_at = "2026-10-01T00:00:00.000000001Z".into();
+    append(&mut file, &first, t, MAX_SAMPLES).unwrap();
+    let mut second = first.clone();
+    second.fetched_at = "2026-10-01T00:00:00.000000002Z".into();
+    second.quota_windows[0].used_percent = Some(11.0);
+    append(&mut file, &second, t, MAX_SAMPLES).unwrap();
+
+    let selected = select_samples(file, "workspace-a", Some(&first.fetched_at)).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].ts, second.fetched_at);
+}
+
+#[test]
+fn skipped_samples_persist_the_high_water_without_rewriting_history() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "llm-quota-history-cursor-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("history.json");
+    let t = base();
+    record_at(&path, &info(t, 60.0, None), t, MAX_SAMPLES).unwrap();
+    let committed = std::fs::read(&path).unwrap();
+
+    record_at(&path, &info(t + 2000, 60.0, None), t + 2000, MAX_SAMPLES).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), committed);
+    assert_eq!(
+        std::fs::read_to_string(cursor_path(&path)).unwrap(),
+        iso(t + 2000)
+    );
+    let restarted = load(&path).unwrap();
+    assert_eq!(restarted.last_observed, Some(iso(t + 2000)));
+
+    // A late response cannot rewind the checkpoint or create a usage-decrease boundary.
+    record_at(&path, &info(t + 1000, 0.0, None), t + 1000, MAX_SAMPLES).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), committed);
+    let conflict = record_at(&path, &info(t + 2000, 0.0, None), t + 2000, MAX_SAMPLES);
+    assert!(conflict.is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), committed);
+
+    // The next real sample follows the last retained sample, not a fabricated window return.
+    record_at(&path, &info(t + 3000, 61.0, None), t + 3000, MAX_SAMPLES).unwrap();
+    let updated = load(&path).unwrap();
+    assert_eq!(point(&updated).boundary, None);
+    assert_eq!(point(&updated).used_percent, 61.0);
+    std::fs::remove_dir_all(root).unwrap();
+}

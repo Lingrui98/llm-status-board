@@ -29,13 +29,43 @@ pub async fn config_path(app: AppHandle) -> Result<String, String> {
         .into_owned())
 }
 
+fn clear_device_login_references(config: &mut AppConfig) {
+    for account in &mut config.accounts {
+        account.chatgpt_auth_id = None;
+        account.codex_auth_path = None;
+    }
+}
+
+fn config_export_copy(config: &AppConfig) -> AppConfig {
+    let mut exported = config.clone();
+    clear_device_login_references(&mut exported);
+    exported
+}
+
+fn merge_imported_config(previous: &AppConfig, mut imported: AppConfig) -> AppConfig {
+    // 旧版导出文件也可能含有其他设备的登录引用，合并前必须移除。
+    clear_device_login_references(&mut imported);
+    let mut current = previous.clone();
+    // 设置整体替换
+    current.settings = imported.settings;
+    // 账号按 id 合并：导入的覆盖同 id 的旧账号，其余追加
+    for acc in imported.accounts {
+        match current.accounts.iter_mut().find(|a| a.id == acc.id) {
+            Some(old) => *old = acc,
+            None => current.accounts.push(acc),
+        }
+    }
+    current.version = 1;
+    current
+}
+
 /// 导出当前配置到指定路径（含 API Key，前端已提示用户注意文件安全）
 #[tauri::command]
 pub async fn export_config(app: AppHandle, path: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Err("导出路径为空".into());
     }
-    let cfg = config::load(&app)?;
+    let cfg = config_export_copy(&config::load(&app)?);
     config::save_to_path(std::path::Path::new(&path), &cfg)
 }
 
@@ -56,18 +86,10 @@ pub async fn import_config(app: AppHandle, path: String) -> Result<AppConfig, St
     // 导入的 settings 会整体替换本地设置，因此同样要过范围校验
     crate::types::validate_settings(&imported.settings).map_err(|e| format!("导入失败: {e}"))?;
 
-    let mut current = config::load(&app)?;
-    // 设置整体替换
-    current.settings = imported.settings;
-    // 账号按 id 合并：导入的覆盖同 id 的旧账号，其余追加
-    for acc in imported.accounts {
-        match current.accounts.iter_mut().find(|a| a.id == acc.id) {
-            Some(old) => *old = acc,
-            None => current.accounts.push(acc),
-        }
-    }
-    current.version = 1;
+    let previous = config::load(&app)?;
+    let current = merge_imported_config(&previous, imported);
     config::save(&app, &current)?;
+    crate::chatgpt_auth::remove_detached(&previous, &current).await;
     Ok(current)
 }
 
@@ -168,19 +190,17 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
         let _ = config::save(&app, &cfg);
     }
 
-    let mut outcomes: Vec<RefreshOutcome> = results
-        .into_iter()
-        .map(|(account, mut outcome)| {
-            if account.kind == crate::types::ProviderKind::OpenAiSubscription {
-                if let Some(info) = &mut outcome.info {
-                    if let Err(error) = crate::quota_history::record(&app, &account.id, info) {
-                        info.quota_history_error = Some(error);
-                    }
+    let mut outcomes = Vec::with_capacity(results.len());
+    for (account, mut outcome) in results {
+        if account.kind == crate::types::ProviderKind::OpenAiSubscription {
+            if let Some(info) = &mut outcome.info {
+                if let Err(error) = crate::quota_history::record(&app, &account.id, info).await {
+                    info.quota_history_error = Some(error);
                 }
             }
-            outcome
-        })
-        .collect();
+        }
+        outcomes.push(outcome);
+    }
     // 同秒内连续刷新也有独立游标，避免秒级时间戳漏记差分。
     let now = chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let snapshots = balance_snapshots(&outcomes, &now);
@@ -381,6 +401,168 @@ mod tests {
             .amount = f64::NAN;
         assert!(
             balance_snapshots(&[failed, no_balance, no_info, invalid_balance], "now").is_empty()
+        );
+    }
+
+    #[test]
+    fn export_copy_clears_only_device_bound_login_references() {
+        let source = AppConfig {
+            accounts: vec![
+                AccountConfig {
+                    id: "chatgpt".into(),
+                    name: "ChatGPT".into(),
+                    token: "manual-token".into(),
+                    refresh_token: "manual-refresh".into(),
+                    codex_auth_path: Some(r"C:\device\chatgpt-auth.json".into()),
+                    chatgpt_account_id: Some("workspace".into()),
+                    chatgpt_auth_id: Some("local-chatgpt-auth".into()),
+                    ..Default::default()
+                },
+                AccountConfig {
+                    id: "codex".into(),
+                    codex_auth_path: Some(r"C:\device\codex-auth.json".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let exported = config_export_copy(&source);
+
+        assert!(exported.accounts.iter().all(|account| {
+            account.chatgpt_auth_id.is_none() && account.codex_auth_path.is_none()
+        }));
+        assert_eq!(
+            source.accounts[0].chatgpt_auth_id.as_deref(),
+            Some("local-chatgpt-auth")
+        );
+        assert_eq!(
+            source.accounts[0].codex_auth_path.as_deref(),
+            Some(r"C:\device\chatgpt-auth.json")
+        );
+        assert_eq!(
+            source.accounts[1].codex_auth_path.as_deref(),
+            Some(r"C:\device\codex-auth.json")
+        );
+
+        let mut expected = source.clone();
+        for account in &mut expected.accounts {
+            account.chatgpt_auth_id = None;
+            account.codex_auth_path = None;
+        }
+        assert_eq!(
+            serde_json::to_value(exported).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn export_copy_preserves_manual_tokens_and_chatgpt_account_id() {
+        let source = AppConfig {
+            accounts: vec![AccountConfig {
+                api_key: "manual-api-key".into(),
+                token: "manual-token".into(),
+                refresh_token: "manual-refresh-token".into(),
+                chatgpt_account_id: Some("manual-workspace".into()),
+                chatgpt_auth_id: Some("local-auth".into()),
+                codex_auth_path: Some("local-auth.json".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let exported = config_export_copy(&source);
+        let account = &exported.accounts[0];
+        assert_eq!(account.api_key, "manual-api-key");
+        assert_eq!(account.token, "manual-token");
+        assert_eq!(account.refresh_token, "manual-refresh-token");
+        assert_eq!(
+            account.chatgpt_account_id.as_deref(),
+            Some("manual-workspace")
+        );
+        assert_eq!(account.chatgpt_auth_id, None);
+        assert_eq!(account.codex_auth_path, None);
+    }
+
+    #[test]
+    fn import_merge_detaches_overwritten_local_auth_and_clears_legacy_references() {
+        let previous = AppConfig {
+            accounts: vec![
+                AccountConfig {
+                    id: "replace".into(),
+                    token: "old-local-token".into(),
+                    chatgpt_auth_id: Some("local-replaced".into()),
+                    codex_auth_path: Some("old-local-auth.json".into()),
+                    ..Default::default()
+                },
+                AccountConfig {
+                    id: "keep".into(),
+                    chatgpt_auth_id: Some("local-kept".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let imported = AppConfig {
+            accounts: vec![
+                AccountConfig {
+                    id: "replace".into(),
+                    token: "imported-manual-token".into(),
+                    refresh_token: "imported-manual-refresh".into(),
+                    chatgpt_account_id: Some("imported-workspace".into()),
+                    chatgpt_auth_id: Some("legacy-exported-auth".into()),
+                    codex_auth_path: Some("legacy-exported-auth.json".into()),
+                    ..Default::default()
+                },
+                AccountConfig {
+                    id: "append".into(),
+                    chatgpt_auth_id: Some("other-device-auth".into()),
+                    codex_auth_path: Some("other-device-auth.json".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let current = merge_imported_config(&previous, imported);
+
+        assert_eq!(current.accounts.len(), 3);
+        let replaced = &current.accounts[0];
+        assert_eq!(replaced.id, "replace");
+        assert_eq!(replaced.token, "imported-manual-token");
+        assert_eq!(replaced.refresh_token, "imported-manual-refresh");
+        assert_eq!(
+            replaced.chatgpt_account_id.as_deref(),
+            Some("imported-workspace")
+        );
+        assert_eq!(replaced.chatgpt_auth_id, None);
+        assert_eq!(replaced.codex_auth_path, None);
+        assert_eq!(
+            current.accounts[1].chatgpt_auth_id.as_deref(),
+            Some("local-kept")
+        );
+        assert_eq!(current.accounts[2].chatgpt_auth_id, None);
+        assert_eq!(current.accounts[2].codex_auth_path, None);
+        assert_eq!(
+            previous.accounts[0].chatgpt_auth_id.as_deref(),
+            Some("local-replaced")
+        );
+
+        // remove_detached 使用这两个纯数据集合确定需要删除的本机凭据。
+        let referenced: std::collections::HashSet<_> = current
+            .accounts
+            .iter()
+            .filter_map(|account| account.chatgpt_auth_id.as_deref())
+            .collect();
+        let detached: std::collections::HashSet<_> = previous
+            .accounts
+            .iter()
+            .filter_map(|account| account.chatgpt_auth_id.as_deref())
+            .filter(|id| !referenced.contains(id))
+            .collect();
+        assert_eq!(
+            detached,
+            std::collections::HashSet::from(["local-replaced"])
         );
     }
 }

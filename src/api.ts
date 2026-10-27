@@ -53,8 +53,8 @@ export async function getHistory(): Promise<BalanceSnapshot[]> {
   return invoke<BalanceSnapshot[]>("get_history");
 }
 
-export const getQuotaHistory = (accountId: string, scope: string) =>
-  invoke<QuotaSample[]>("get_quota_history", { accountId, scope });
+export const getQuotaHistory = (accountId: string, scope: string, since?: string) =>
+  invoke<QuotaSample[]>("get_quota_history", { accountId, scope, since });
 
 /// R15 本地用量历史（逐日总账，带版本封套）；文件缺失时后端返回空记录集
 export async function getUsageHistory(): Promise<UsageHistoryFile> {

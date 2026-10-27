@@ -1,7 +1,6 @@
-import { useMemo } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import type { QuotaSample } from "../../types";
-import { boundaryLabels, buildQuotaRows, type QuotaRow } from "../../quotaHistory";
+import type { QuotaBoundary } from "../../types";
+import { boundaryLabels, type QuotaRow } from "../../quotaHistory";
 import { trendTick, trendTicks, type TrendWindow } from "../../trendHistory";
 import { trimNumberText } from "../../primaryMetric";
 import { ChartEmpty } from "./shared";
@@ -17,10 +16,10 @@ function QuotaTip({ active, payload }: { active?: boolean; payload?: { payload: 
   </div>;
 }
 
-export default function QuotaHistoryChart({ samples, windowKey, window, metric = "used" }: {
-  samples: QuotaSample[]; windowKey: string; window: TrendWindow; metric?: "used" | "remaining";
+export default function QuotaHistoryChart({ rows, count, events, window, metric = "used" }: {
+  rows: QuotaRow[]; count: number; events: { timestamp: number; boundary: QuotaBoundary }[];
+  window: TrendWindow; metric?: "used" | "remaining";
 }) {
-  const { rows, count, events } = useMemo(() => buildQuotaRows(samples, windowKey, window, metric), [samples, windowKey, window, metric]);
   if (count < 2) return <ChartEmpty text={window.error ?? (count === 1 ? "已有 1 个采样，再成功刷新一次即可形成趋势" : "此范围暂无额度记录")} />;
   const maximum = Math.max(100, ...rows.map(r => r.value ?? 0));
   return <div>

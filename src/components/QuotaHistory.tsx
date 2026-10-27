@@ -58,7 +58,7 @@ export default function QuotaHistory({ samples, info, error, now = Date.now() }:
   const [metric, setMetric] = useState<"used" | "remaining">("used");
   const source = useMemo(() => selection.preset === "cycle" ? currentSegment(scoped, key) : scoped, [scoped, key, selection.preset]);
   const window = resolveTrendWindow(selection, quotaBounds(source), now);
-  const { events, count } = useMemo(() => buildQuotaRows(source, key, window, metric), [source, key, window.from, window.to, window.error, metric]);
+  const { rows, events, count } = useMemo(() => buildQuotaRows(source, key, window, metric), [source, key, window.from, window.to, window.error, metric]);
   return <section className="quota-history">
     <h3>额度使用历史</h3>
     <div className="quota-history-selectors">
@@ -72,7 +72,7 @@ export default function QuotaHistory({ samples, info, error, now = Date.now() }:
     <TrendRangeControls selection={selection} onChange={setSelection} bounds={quotaBounds(scoped)} window={window} ranges={ranges} />
     {(error || info?.quotaHistoryError) && <p className="quota-history-error" role="status">{error || info?.quotaHistoryError}</p>}
     {!info?.quotaScope && <p className="muted">登录并成功刷新后开始记录；已有登录需刷新一次以识别工作区。</p>}
-    <LazyQuotaHistoryChart samples={source} windowKey={key} window={window} metric={metric} />
+    <LazyQuotaHistoryChart rows={rows} count={count} events={events} window={window} metric={metric} />
     <p className="trend-history-note">本周期按观测到的重置或调整分段，周期长度不固定。虚线是首次观测到变化的时间，实际重置可能更早。</p>
     {events.length > 0 && <ul className="quota-history-events">{events.slice(-5).map((event, i) => <li key={`${event.timestamp}-${i}`}>
       {new Date(event.timestamp).toLocaleString("zh-CN", { hour12: false })} · {boundaryLabels[event.boundary]}

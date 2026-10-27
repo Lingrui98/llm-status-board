@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountConfig, BalanceSnapshot, KeyValue, RefreshOutcome } from "../types";
+import type { AccountConfig, AccountInfo, BalanceSnapshot, KeyValue, RefreshOutcome } from "../types";
 import { formatMoney, formatMoneyParts, formatNumber, formatTime, formatTimeAgo, kindLabel } from "../format";
 // recharts 图表统一走懒加载（拆出首屏主包）；QuotaWindowBars 纯 CSS 保持同步
 import {
@@ -104,7 +104,19 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const err = outcome?.error ?? null;
   const st = statusClass(outcome, refreshing);
   const subscription = account.kind === "openAiSubscription";
-  const quotaHistory = useQuotaHistory(account.id, subscription ? info?.quotaScope : null, info?.fetchedAt);
+  // 当前刷新失败时，历史视图仍使用本账号最近一次已识别工作区的成功信息。
+  const historyInfoRef = useRef<{ accountId: string; info: AccountInfo } | null>(null);
+  const cachedHistoryInfo = historyInfoRef.current?.accountId === account.id ? historyInfoRef.current.info : null;
+  const historyInfo = outcome?.ok && info?.quotaScope ? info : cachedHistoryInfo;
+  const quotaHistory = useQuotaHistory(account.id, subscription ? historyInfo?.quotaScope : null, historyInfo?.fetchedAt);
+
+  useEffect(() => {
+    if (outcome?.ok && info?.quotaScope) {
+      historyInfoRef.current = { accountId: account.id, info };
+    } else if (historyInfoRef.current?.accountId !== account.id) {
+      historyInfoRef.current = null;
+    }
+  }, [account.id, info, outcome?.ok]);
 
   useEffect(
     () => () => {
@@ -305,7 +317,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
         )}
       </div>
 
-      {subscription && <QuotaMini samples={quotaHistory.samples} info={info} error={quotaHistory.error} now={now} />}
+      {subscription && <QuotaMini samples={quotaHistory.samples} info={historyInfo} error={quotaHistory.error} now={now} />}
 
       {info?.note && (
         <p className="note">
@@ -375,7 +387,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           onClose={() => setDetailOpen(false)}
         >
           <div className="drawer-charts">
-            {subscription ? <QuotaHistory key={`${account.id}:${info?.quotaScope ?? ""}`} samples={quotaHistory.samples} info={info} error={quotaHistory.error} now={now} /> : <>
+            {subscription ? <QuotaHistory key={`${account.id}:${historyInfo?.quotaScope ?? ""}`} samples={quotaHistory.samples} info={historyInfo} error={quotaHistory.error} now={now} /> : <>
             <AccountTrends accountId={account.id} snapshots={snapshots} info={info} now={now} balanceEmptyNote={chartEmptyNote("balance")} />
             <DrawerSection title="额度构成" hasData={flags.breakdown} emptyNote={chartEmptyNote("breakdown")}>
               <BalanceBreakdownChart info={info} emptyNote={chartEmptyNote("breakdown")} />

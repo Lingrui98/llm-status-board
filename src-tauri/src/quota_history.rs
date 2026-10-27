@@ -13,6 +13,7 @@ use tauri::Manager;
 
 const VERSION: u32 = 1;
 const MAX_SAMPLES: usize = 150_000;
+const UNCHANGED_SAMPLE_MIN_MS: i64 = 30_000;
 const RESET_JITTER_MS: i64 = 60_000;
 const DROP_EPSILON: f64 = 0.000001;
 static LOCK: Mutex<()> = Mutex::new(());
@@ -94,15 +95,40 @@ fn file_path(app: &tauri::AppHandle, account_id: &str) -> Result<PathBuf, String
         .join(format!("{:x}.json", Sha256::digest(account_id))))
 }
 
+fn cursor_path(path: &Path) -> PathBuf {
+    let mut value = path.as_os_str().to_os_string();
+    value.push(".cursor");
+    PathBuf::from(value)
+}
+
 fn load(path: &Path) -> Result<File, String> {
-    if !path.exists() {
-        return Ok(File::default());
-    }
-    let data = std::fs::read(path).map_err(|_| "读取订阅额度历史失败".to_string())?;
-    let file: File = serde_json::from_slice(&data)
-        .map_err(|_| "订阅额度历史文件损坏，原文件已保留".to_string())?;
-    if file.version != VERSION {
-        return Err("订阅额度历史版本不受支持，原文件已保留".into());
+    let mut file = if path.exists() {
+        let data = std::fs::read(path).map_err(|_| "读取订阅额度历史失败".to_string())?;
+        let file: File = serde_json::from_slice(&data)
+            .map_err(|_| "订阅额度历史文件损坏，原文件已保留".to_string())?;
+        if file.version != VERSION {
+            return Err("订阅额度历史版本不受支持，原文件已保留".into());
+        }
+        file
+    } else {
+        File::default()
+    };
+    let cursor = match std::fs::read_to_string(cursor_path(path)) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(file),
+        Err(_) => return Err("读取订阅额度历史游标失败".into()),
+    };
+    let observed = cursor.trim();
+    let cursor_time = DateTime::parse_from_rfc3339(observed)
+        .map_err(|_| "订阅额度历史游标格式无效".to_string())?;
+    let current = file
+        .last_observed
+        .as_deref()
+        .map(DateTime::parse_from_rfc3339)
+        .transpose()
+        .map_err(|_| "订阅历史时间格式无效".to_string())?;
+    if current.is_none_or(|current| cursor_time > current) {
+        file.last_observed = Some(observed.into());
     }
     Ok(file)
 }
@@ -144,6 +170,52 @@ fn boundary(
         return Some(Boundary::Expired);
     }
     None
+}
+
+fn can_skip_unchanged(file: &File, info: &AccountInfo, scope: &str, at: i64) -> bool {
+    let Some(previous_sample) = file.samples.last() else {
+        return false;
+    };
+    if previous_sample.scope != scope
+        || previous_sample.windows.len() != info.quota_windows.len()
+        || previous_sample.windows.iter().any(|w| w.boundary.is_some())
+    {
+        return false;
+    }
+    let Ok(previous_at) = timestamp(&previous_sample.ts) else {
+        return false;
+    };
+    let elapsed = i128::from(at) - i128::from(previous_at);
+    if elapsed < 0 || elapsed >= i128::from(UNCHANGED_SAMPLE_MIN_MS) {
+        return false;
+    }
+    for (old, new) in previous_sample.windows.iter().zip(&info.quota_windows) {
+        if new.history_key.as_deref() != Some(old.key.as_str())
+            || new.window.as_deref().unwrap_or("额度窗口") != old.label.as_str()
+            || new.used_percent != Some(old.used_percent)
+            || new.resets_at.as_deref() != old.resets_at.as_deref()
+            || new.window_seconds != old.window_seconds
+        {
+            return false;
+        }
+        let Some(key) = new.history_key.as_deref().filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        let Some(used) = new.used_percent.filter(|p| p.is_finite() && *p >= 0.0) else {
+            return false;
+        };
+        let Ok(reset) = new.resets_at.as_deref().map(timestamp).transpose() else {
+            return false;
+        };
+        let tracker_key = format!("{:x}", Sha256::digest(format!("{scope}\0{key}")));
+        let Some(tracker) = file.trackers.get(&tracker_key) else {
+            return false;
+        };
+        if boundary(tracker, at, reset, used, Some(previous_sample.ts.as_str())).is_some() {
+            return false;
+        }
+    }
+    true
 }
 
 fn append(
@@ -189,6 +261,17 @@ fn append(
             };
         }
     }
+    if can_skip_unchanged(file, info, scope, at) {
+        file.last_observed = Some(info.fetched_at.clone());
+        return Ok(false);
+    }
+    // The high-water mark rejects late responses. Segment continuity instead follows
+    // the last retained sample, so skipped identical responses do not invent a return.
+    let previous_sample = file
+        .samples
+        .last()
+        .map(|sample| sample.ts.clone())
+        .or(last.clone());
     let mut keys = HashSet::new();
     let mut windows = Vec::new();
     for window in &info.quota_windows {
@@ -207,7 +290,7 @@ fn append(
         let reset = window.resets_at.as_deref().map(timestamp).transpose()?;
         let tracker_key = format!("{:x}", Sha256::digest(format!("{scope}\0{key}")));
         let previous = file.trackers.get(&tracker_key);
-        let event = previous.and_then(|p| boundary(p, at, reset, used, last.as_deref()));
+        let event = previous.and_then(|p| boundary(p, at, reset, used, previous_sample.as_deref()));
         let segment = previous
             .map(|p| {
                 if event.is_some() {
@@ -273,21 +356,64 @@ fn record_at(
 ) -> Result<(), String> {
     let _guard = LOCK.lock().map_err(|_| "订阅历史锁不可用")?;
     let mut file = load(path)?;
+    let previous_observed = file.last_observed.clone();
     if append(&mut file, info, now_ms, max_samples)? {
         let bytes = serde_json::to_vec(&file).map_err(|_| "序列化订阅历史失败")?;
         crate::config::write_bytes_atomic(path, &bytes)
             .map_err(|_| "保存订阅额度历史失败；查询结果仍可用，已有历史未覆盖".to_string())?;
     }
+    if file.last_observed != previous_observed {
+        let observed = file
+            .last_observed
+            .as_deref()
+            .ok_or("订阅历史时间格式无效")?;
+        crate::config::write_bytes_atomic(&cursor_path(path), observed.as_bytes())
+            .map_err(|_| "保存订阅额度历史游标失败；查询结果仍可用".to_string())?;
+    }
     Ok(())
 }
 
-pub fn record(app: &tauri::AppHandle, account_id: &str, info: &AccountInfo) -> Result<(), String> {
-    record_at(
-        &file_path(app, account_id)?,
-        info,
-        Utc::now().timestamp_millis(),
-        MAX_SAMPLES,
-    )
+pub async fn record(
+    app: &tauri::AppHandle,
+    account_id: &str,
+    info: &AccountInfo,
+) -> Result<(), String> {
+    let app = app.clone();
+    let account_id = account_id.to_owned();
+    let info = info.clone();
+    tokio::task::spawn_blocking(move || {
+        record_at(
+            &file_path(&app, &account_id)?,
+            &info,
+            Utc::now().timestamp_millis(),
+            MAX_SAMPLES,
+        )
+    })
+    .await
+    .map_err(|_| "订阅历史记录任务失败".to_string())?
+}
+
+fn select_samples(
+    file: File,
+    scope: &str,
+    since: Option<&str>,
+) -> Result<Vec<QuotaSample>, String> {
+    let since = since
+        .map(|value| {
+            DateTime::parse_from_rfc3339(value).map_err(|_| "订阅历史时间格式无效".to_string())
+        })
+        .transpose()?;
+    Ok(file
+        .samples
+        .into_iter()
+        .filter(|sample| {
+            sample.scope == scope
+                && since.as_ref().is_none_or(|since| {
+                    DateTime::parse_from_rfc3339(&sample.ts)
+                        .is_ok_and(|sample_at| sample_at > *since)
+                })
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -295,13 +421,15 @@ pub async fn get_quota_history(
     app: tauri::AppHandle,
     account_id: String,
     scope: String,
+    since: Option<String>,
 ) -> Result<Vec<QuotaSample>, String> {
-    let _guard = LOCK.lock().map_err(|_| "订阅历史锁不可用")?;
-    Ok(load(&file_path(&app, &account_id)?)?
-        .samples
-        .into_iter()
-        .filter(|sample| sample.scope == scope)
-        .collect())
+    tokio::task::spawn_blocking(move || {
+        let _guard = LOCK.lock().map_err(|_| "订阅历史锁不可用")?;
+        let file = load(&file_path(&app, &account_id)?)?;
+        select_samples(file, &scope, since.as_deref())
+    })
+    .await
+    .map_err(|_| "订阅历史读取任务失败".to_string())?
 }
 
 #[cfg(test)]

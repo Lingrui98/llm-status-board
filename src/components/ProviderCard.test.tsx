@@ -4,10 +4,13 @@
 // 图表一律替身（不引 recharts），QuotaWindowBars 走真实现。
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import React from "react";
 import ProviderCard from "./ProviderCard";
-import type { AccountConfig, AccountInfo, BalanceSnapshot, RefreshOutcome } from "../types";
+import * as api from "../api";
+import type { AccountConfig, AccountInfo, BalanceSnapshot, QuotaSample, RefreshOutcome } from "../types";
+
+vi.mock("../api", () => ({ getQuotaHistory: vi.fn() }));
 
 vi.mock("./charts/lazy", () => ({
   LazyDailyUsageChart: () => <div data-testid="daily-chart" />,
@@ -21,6 +24,7 @@ vi.mock("./charts/lazy", () => ({
 afterEach(cleanup);
 beforeEach(() => {
   window.localStorage.clear();
+  vi.mocked(api.getQuotaHistory).mockReset().mockResolvedValue([]);
 });
 
 const FUTURE = new Date(Date.now() + 3 * 3600_000).toISOString();
@@ -221,6 +225,72 @@ describe("ProviderCard：订阅主指标（AC-4）", () => {
     expect(screen.queryByText("订阅剩余")).toBeNull();
     expect(screen.getByText("余额")).toBeTruthy();
     expect(tileText(".balance-value")).toContain("—");
+  });
+});
+
+describe("ProviderCard：订阅历史信息缓存", () => {
+  const historySample: QuotaSample = {
+    ts: "2026-10-23T04:11:36Z",
+    scope: "workspace-a",
+    windows: [{ key: "codex:604800", label: "Codex · 每周", usedPercent: 20, resetsAt: null, windowSeconds: 604800, segment: 1, boundary: null }],
+  };
+  const successInfo = () => info({
+    balance: null,
+    quotaScope: "workspace-a",
+    quotaWindows: [{ window: "Codex · 每周", historyKey: "codex:604800", usedPercent: 20, windowSeconds: 604800 }],
+  });
+
+  it("keeps the failed card current while an in-flight history read still uses cached info", async () => {
+    let resolveHistory!: (samples: QuotaSample[]) => void;
+    vi.mocked(api.getQuotaHistory).mockReturnValue(new Promise(resolve => { resolveHistory = resolve; }));
+    const acc = account("codex-cache", "openAiSubscription", "Codex 缓存账号");
+    const success: RefreshOutcome = { accountId: acc.id, ok: true, info: successInfo(), error: null };
+    const failure: RefreshOutcome = { accountId: acc.id, ok: false, info: null, error: "刷新失败" };
+    const view = render(<ProviderCard account={acc} outcome={success} refreshing={false} snapshots={[]} now={Date.now()} />);
+    expect(api.getQuotaHistory).toHaveBeenCalledWith(acc.id, "workspace-a", undefined);
+
+    view.rerender(<ProviderCard account={acc} outcome={failure} refreshing={false} snapshots={[]} now={Date.now()} />);
+    expect(document.querySelector(".card.status-error")).toBeTruthy();
+    expect(tileText(".balance-value")).toBe("—");
+    expect(screen.getByText("刷新失败")).toBeTruthy();
+    expect(tileText(".quota-mini")).toContain("Codex · 每周");
+
+    await act(async () => resolveHistory([historySample]));
+    expect(screen.getByText("已记录 1 次，再刷新后显示曲线")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "详情" }));
+    expect(screen.getByText("额度使用历史")).toBeTruthy();
+    expect(screen.getByTestId("quota-history-chart")).toBeTruthy();
+    expect(screen.queryByText(/已有登录需刷新一次以识别工作区/)).toBeNull();
+  });
+
+  it("uses cached history info when the current result has no workspace", () => {
+    const acc = account("codex-cache-missing-scope", "openAiSubscription", "Codex 缓存账号");
+    const success: RefreshOutcome = { accountId: acc.id, ok: true, info: successInfo(), error: null };
+    const view = render(<ProviderCard account={acc} outcome={success} refreshing={false} snapshots={[]} now={Date.now()} />);
+    const missingScope = successInfo();
+    missingScope.quotaScope = null;
+    view.rerender(<ProviderCard account={acc}
+      outcome={{ accountId: acc.id, ok: true, info: missingScope, error: null }}
+      refreshing={false} snapshots={[]} now={Date.now()} />);
+    expect(tileText(".quota-mini")).toContain("Codex · 每周");
+    expect(screen.queryByText(/已有登录需刷新一次以识别工作区/)).toBeNull();
+  });
+
+  it("does not reuse cached history info after the account changes", async () => {
+    vi.mocked(api.getQuotaHistory).mockResolvedValue([historySample]);
+    const first = account("codex-a", "openAiSubscription", "Codex A");
+    const second = account("codex-b", "openAiSubscription", "Codex B");
+    const view = render(<ProviderCard account={first}
+      outcome={{ accountId: first.id, ok: true, info: successInfo(), error: null }}
+      refreshing={false} snapshots={[]} now={Date.now()} />);
+    await waitFor(() => expect(screen.getByText("已记录 1 次，再刷新后显示曲线")).toBeTruthy());
+
+    view.rerender(<ProviderCard account={second}
+      outcome={{ accountId: second.id, ok: false, info: null, error: "B 刷新失败" }}
+      refreshing={false} snapshots={[]} now={Date.now()} />);
+    expect(screen.queryByText("已记录 1 次，再刷新后显示曲线")).toBeNull();
+    expect(tileText(".quota-mini")).toContain("订阅额度");
+    expect(api.getQuotaHistory).toHaveBeenCalledTimes(1);
   });
 });
 

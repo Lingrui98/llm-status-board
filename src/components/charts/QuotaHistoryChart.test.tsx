@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { QuotaSample } from "../../types";
 import QuotaHistoryChart from "./QuotaHistoryChart";
+import { buildQuotaRows } from "../../quotaHistory";
 
 vi.mock("recharts", () => ({
   ResponsiveContainer: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -23,7 +24,8 @@ const window = { from: Date.parse(samples[0].ts), to: Date.parse(samples[2].ts) 
 
 describe("quota chart reset rendering", () => {
   it("uses actual time, steps, explicit gaps and observation markers without hiding over-limit values", () => {
-    render(<QuotaHistoryChart samples={samples} windowKey="codex:604800" window={window} />);
+    const history = buildQuotaRows(samples, "codex:604800", window);
+    render(<QuotaHistoryChart {...history} window={window} />);
     expect(screen.getByTestId("x").getAttribute("data-type")).toBe("number");
     expect(screen.getByTestId("x").getAttribute("data-scale")).toBe("time");
     expect(screen.getByTestId("line").getAttribute("data-type")).toBe("stepAfter");
@@ -35,7 +37,8 @@ describe("quota chart reset rendering", () => {
   });
 
   it("shows a single-sample explanation rather than drawing a made-up period", () => {
-    render(<QuotaHistoryChart samples={samples.slice(0, 1)} windowKey="codex:604800" window={window} />);
+    const history = buildQuotaRows(samples.slice(0, 1), "codex:604800", window);
+    render(<QuotaHistoryChart {...history} window={window} />);
     expect(screen.queryByTestId("chart")).toBeNull();
     expect(screen.getByText("已有 1 个采样，再成功刷新一次即可形成趋势")).toBeTruthy();
   });

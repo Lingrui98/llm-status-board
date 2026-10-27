@@ -13,6 +13,7 @@ fn authorization_url_has_pkce_and_unpredictable_state_without_a_client_secret() 
     assert_eq!(url.host_str(), Some("auth.openai.com"));
     let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
     assert_eq!(pairs["client_id"], CLIENT_ID);
+    assert_eq!(pairs["originator"], "codex_cli_rs");
     assert_eq!(pairs["redirect_uri"], "http://127.0.0.1:1455/auth/callback");
     assert_eq!(pairs["scope"], "openid profile email offline_access");
     assert_eq!(pairs["code_challenge_method"], "S256");
