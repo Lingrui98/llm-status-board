@@ -67,10 +67,17 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 仓库带三个工作流（`.github/workflows/`）：
 
 - **ci.yml**：push / PR 时自动跑前端测试（vitest + tsc + build）与 Rust 检查（fmt / clippy / 单测，Windows + macOS 双矩阵）
-- **release.yml**：push 一个 tag（如 `v0.1.0`）自动构建 Windows + macOS（Apple Silicon / Intel）安装包并发布到 GitHub Release；macOS 签名相关变量见工作流注释。配置了更新签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个 Secrets）后，会额外生成 `latest.json` 与签名文件供软件内一键更新使用（见「使用」第 7 条）
+- **release.yml**：push 一个 tag（如 `v0.1.0`）自动构建 Windows + macOS（Apple Silicon / Intel）安装包并创建 GitHub Release 草稿；macOS 签名相关变量见工作流注释。配置了更新签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个 Secrets）后，会额外生成 `latest.json` 与签名文件供软件内一键更新使用（见「使用」第 7 条）
 - **nightly.yml**：每天 18:00 UTC（北京时间 02:00）检查主线。只有主线出现新提交时才构建并发布 nightly 预发布版。该工作流复用稳定版的三平台构建和更新签名密钥
 
 > 注意：本仓库根目录就是项目本身（package.json / src-tauri 在根下），工作流按此布局配置。
+
+#### 稳定版发布规则
+
+1. 在 `docs/releases/<tag>.md` 编写发布说明。第一行使用 `# <tag> — <功能摘要>`，第二行留空，后续内容为 Release 正文。
+2. 提交发布说明后创建并推送同名 tag。工作流从该文件读取标题和正文，再创建 Release 草稿。
+3. 三平台构建完成后，检查草稿并手动发布。标题和正文不需要再通过本地命令修改。
+4. 手动运行 `release.yml` 时，选择包含发布说明的分支，并在 `tag_name` 中输入准备创建的新 tag。
 
 #### nightly 发布规则
 

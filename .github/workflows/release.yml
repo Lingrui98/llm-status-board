@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "New v* tag; the selected ref must contain docs/releases/<tag>.md."
+        required: true
+        type: string
   workflow_call:
     inputs:
       release_id:
@@ -33,21 +38,47 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.release_id }}
     steps:
+      - name: Checkout stable release metadata
+        if: ${{ ! inputs.release_id }}
+        uses: actions/checkout@v4
+
       - name: Resolve release
         id: create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPOSITORY: ${{ github.repository }}
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ inputs.tag_name || github.ref_name }}
           INPUT_RELEASE_ID: ${{ inputs.release_id }}
         run: |
           if [ -n "$INPUT_RELEASE_ID" ]; then
             id="$INPUT_RELEASE_ID"
           else
+            if [[ ! "$TAG_NAME" =~ ^v[0-9A-Za-z._-]+$ ]]; then
+              echo "Stable releases require a v* tag name." >&2
+              exit 1
+            fi
+            notes_file="docs/releases/${TAG_NAME}.md"
+            if [ ! -f "$notes_file" ]; then
+              echo "Missing release notes: ${notes_file}" >&2
+              exit 1
+            fi
+            first_line="$(sed -n '1p' "$notes_file")"
+            second_line="$(sed -n '2p' "$notes_file")"
+            if [[ "$first_line" != "# ${TAG_NAME} "* ]] || [ -n "$second_line" ]; then
+              echo "Expected '# <tag> — <summary>', a blank second line, and Markdown body." >&2
+              exit 1
+            fi
+            release_name="${first_line#\# }"
+            release_body="$(tail -n +3 "$notes_file")"
+            if [ -z "$release_body" ]; then
+              echo "Release notes body is empty." >&2
+              exit 1
+            fi
             id="$(gh api "repos/${REPOSITORY}/releases" \
               -f tag_name="$TAG_NAME" \
-              -f name="LLM Status Board ${TAG_NAME}" \
-              -f body="Win / macOS 安装包见 Assets。" \
+              -f name="$release_name" \
+              -f body="$release_body" \
+              -f target_commitish="$GITHUB_SHA" \
               -F draft=true -F prerelease=false --jq .id)"
           fi
           if [[ ! "$id" =~ ^[0-9]+$ ]]; then
