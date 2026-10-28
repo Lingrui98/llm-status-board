@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import QuotaHistory from "./QuotaHistory";
 import type { AccountInfo, QuotaSample } from "../types";
+import { localDateTimeInput } from "../trendHistory";
 
 vi.mock("./charts/lazy", () => ({ LazyQuotaHistoryChart: ({ rows, count, events, window, metric }: {
   rows: unknown; count: number; events: unknown; window: unknown; metric: string;
@@ -39,6 +40,41 @@ describe("subscription quota history layout", () => {
     fireEvent.change(screen.getByLabelText("开始时间"), { target: { value: "2026-10-03T00:00" } });
     fireEvent.change(screen.getByLabelText("结束时间"), { target: { value: "2026-10-01T00:00" } });
     expect(screen.getByText("开始时间必须早于结束时间")).toBeTruthy();
+  });
+
+  it("keeps a custom start while following now and refreshed samples, and restores the manual end", () => {
+    const view = render(<QuotaHistory samples={samples} info={info} now={Date.parse(ts(3))} />);
+    fireEvent.click(screen.getByRole("button", { name: "自定义" }));
+    const start = screen.getByLabelText<HTMLInputElement>("开始时间");
+    const end = screen.getByLabelText<HTMLInputElement>("结束时间");
+    const originalEnd = end.value;
+    fireEvent.change(start, { target: { value: localDateTimeInput(Date.parse(ts(1))) } });
+    const fixedStart = start.value;
+    fireEvent.click(screen.getByRole("checkbox", { name: "到现在" }));
+    expect(end.disabled).toBe(true);
+    const chart = () => screen.getByTestId("quota-chart");
+    const range = () => JSON.parse(chart().getAttribute("data-window")!);
+    expect(range()).toEqual({ from: Date.parse(ts(1)), to: Date.parse(ts(3)) });
+    expect(chart().getAttribute("data-count")).toBe("2");
+
+    view.rerender(<QuotaHistory samples={samples} info={info} now={Date.parse(ts(4))} />);
+    expect(range().to).toBe(Date.parse(ts(4)));
+    expect(Date.parse(end.value)).toBe(Date.parse(ts(4)));
+    const refreshed = [...samples, { ...samples[2], ts: ts(4) }];
+    view.rerender(<QuotaHistory samples={refreshed} info={info} now={Date.parse(ts(5))} />);
+    expect(range()).toEqual({ from: Date.parse(ts(1)), to: Date.parse(ts(5)) });
+    expect(start.value).toBe(fixedStart);
+    expect(chart().getAttribute("data-count")).toBe("3");
+
+    fireEvent.click(screen.getByRole("button", { name: "7天" }));
+    expect(screen.queryByRole("checkbox", { name: "到现在" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "自定义" }));
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "到现在" }).checked).toBe(true);
+    expect(screen.getByLabelText<HTMLInputElement>("开始时间").value).toBe(fixedStart);
+    fireEvent.click(screen.getByRole("checkbox", { name: "到现在" }));
+    expect(screen.getByLabelText<HTMLInputElement>("结束时间").disabled).toBe(false);
+    expect(screen.getByLabelText<HTMLInputElement>("结束时间").value).toBe(originalEnd);
+    expect(chart().getAttribute("data-count")).toBe("2");
   });
 
   it("shows local-history errors without inventing an empty allowance", () => {

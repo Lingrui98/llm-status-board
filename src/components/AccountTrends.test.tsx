@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import AccountTrends from "./AccountTrends";
 import type { BalanceSnapshot } from "../types";
+import { localDateTimeInput } from "../trendHistory";
 
 vi.mock("./charts/lazy", () => ({
   LazyBalanceTrendChart: ({ snapshots, metric = "balance", window }: { snapshots: BalanceSnapshot[]; metric?: string; window: unknown }) => (
@@ -36,6 +37,22 @@ describe("账号共用趋势筛选", () => {
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByTestId("balance-chart").getAttribute("data-points")).toBe("3");
     expect(screen.getByTestId("total-chart").getAttribute("data-points")).toBe("3");
+  });
+
+  it("到现在同步延长余额和总额度的时间范围并纳入新采样", () => {
+    const view = setup();
+    fireEvent.click(screen.getByRole("button", { name: "自定义" }));
+    const from = now - 3 * hour;
+    fireEvent.change(screen.getByLabelText("开始时间"), { target: { value: localDateTimeInput(from) } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "到现在" }));
+    const refreshed = [...snapshots, { ...snapshots[3], ts: new Date(now + hour).toISOString() },
+      { ...snapshots[3], ts: new Date(now + 2 * hour).toISOString() }];
+    view.rerender(<AccountTrends accountId="a1" snapshots={refreshed} info={{ fetchedAt: "", extras: [] }} now={now + hour} />);
+    for (const metric of ["balance", "total"]) {
+      const chart = screen.getByTestId(`${metric}-chart`);
+      expect(chart.getAttribute("data-points")).toBe("4");
+      expect(JSON.parse(chart.getAttribute("data-window")!)).toEqual({ from, to: now + hour });
+    }
   });
 
   it("近期没有数据时显示范围说明，切换全部后自动展开历史图", () => {

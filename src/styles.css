@@ -1045,8 +1045,16 @@ button.error-copy.copied .copy-hint {
   outline-offset: 2px;
 }
 .trend-custom-range { display: flex; flex-wrap: wrap; gap: 10px; }
-.trend-custom-range label { display: flex; flex: 1 1 190px; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); }
-.trend-custom-range input { min-width: 0; width: 100%; box-sizing: border-box; font: inherit; }
+.trend-custom-range > label, .trend-end-range { display: flex; flex: 1 1 190px; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text-2); }
+.trend-custom-range input[type="datetime-local"] {
+  min-width: 0; width: 100%; box-sizing: border-box; padding: 7px 9px; font: inherit;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--bg-2); color: var(--text);
+}
+.trend-end-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 18px; }
+.trend-to-now { display: inline-flex; align-items: center; gap: 5px; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.trend-to-now:has(input:checked) { color: var(--accent); }
+.trend-to-now input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.trend-end-range input:disabled { color: var(--text-2); -webkit-text-fill-color: var(--text-2); opacity: 1; background: var(--bg-1); cursor: default; }
 .trend-history-note { margin: 0; color: var(--text-3); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .trend-range-error { margin: 0; color: var(--err); font-size: 12px; }
 .trend-unit { color: var(--text-3); font-size: 11px; padding-left: 8px; }

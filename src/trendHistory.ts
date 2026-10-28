@@ -1,7 +1,7 @@
 import type { BalanceSnapshot } from "./types";
 
 export type TrendRange = "cycle" | "1h" | "24h" | "7d" | "30d" | "90d" | "all" | "custom";
-export interface TrendSelection { preset: TrendRange; from: string; to: string }
+export interface TrendSelection { preset: TrendRange; from: string; to: string; toNow?: boolean }
 export interface TrendWindow { from: number; to: number; error?: string }
 export const TREND_RANGES: { value: TrendRange; label: string }[] = [
   { value: "1h", label: "1小时" }, { value: "24h", label: "24小时" },
@@ -24,9 +24,9 @@ export function historyBounds(snapshots: readonly BalanceSnapshot[]): [number, n
 export function resolveTrendWindow(selection: TrendSelection, bounds: [number, number] | null, now: number): TrendWindow {
   if (selection.preset === "custom") {
     const from = Date.parse(selection.from);
-    const to = Date.parse(selection.to);
-    if (!Number.isFinite(from) || !Number.isFinite(to)) return { from: 0, to: 0, error: "请选择完整的起止时间" };
-    if (from >= to) return { from, to, error: "开始时间必须早于结束时间" };
+    const to = selection.toNow ? now : Date.parse(selection.to);
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return { from: 0, to: Number.isFinite(to) ? to : 0, error: selection.toNow ? "请选择有效的开始时间" : "请选择完整的起止时间" };
+    if (from >= to) return { from, to, error: selection.toNow ? "开始时间必须早于当前时间" : "开始时间必须早于结束时间" };
     return { from, to };
   }
   if (selection.preset === "all" || selection.preset === "cycle") {
