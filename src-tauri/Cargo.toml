@@ -1,6 +1,6 @@
 [package]
 name = "llm-status-board"
-version = "0.2.13"
+version = "0.2.14"
 description = "LLM 提供商余额与用量聚合看板"
 authors = ["Steve Gou"]
 edition = "2021"

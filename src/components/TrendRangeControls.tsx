@@ -41,10 +41,24 @@ export default function TrendRangeControls({ selection, onChange, bounds, window
           <label>开始时间<input type="datetime-local" step="1" value={selection.from}
             aria-invalid={!!window.error} aria-describedby={window.error ? id : undefined}
             onChange={(e) => onChange({ ...selection, from: e.target.value })} /></label>
-          <label>结束时间<input type="datetime-local" step="1" value={selection.to}
-            aria-invalid={!!window.error} aria-describedby={window.error ? id : undefined}
-            onChange={(e) => onChange({ ...selection, to: e.target.value })} /></label>
+          <div className="trend-end-range">
+            <div className="trend-end-heading">
+              <label htmlFor={`${id}-end`}>结束时间</label>
+              <label className="trend-to-now">
+                <input type="checkbox" checked={!!selection.toNow}
+                  onChange={(e) => onChange({ ...selection, toNow: e.target.checked })} />
+                到现在
+              </label>
+            </div>
+            <input id={`${id}-end`} type="datetime-local" step="1"
+              value={selection.toNow ? localDateTimeInput(window.to) : selection.to} disabled={!!selection.toNow}
+              aria-invalid={!selection.toNow && !!window.error} aria-describedby={window.error ? id : undefined}
+              onChange={(e) => onChange({ ...selection, to: e.target.value })} />
+          </div>
         </div>
+      )}
+      {selection.preset === "custom" && selection.toNow && (
+        <p className="trend-history-note">结束时间随当前时间更新，新采样会自动纳入。</p>
       )}
       {window.error && <p id={id} className="trend-range-error" role="status">{window.error}</p>}
       <p className="trend-history-note">本地时间（{timezone}） · {bounds

@@ -36,6 +36,27 @@ describe("趋势时间范围", () => {
     }
   });
 
+  it("到现在固定开始时间并随时钟延长，忽略保存的结束时间且排除未来采样", () => {
+    const from = now - 2 * hour;
+    const selection = { preset: "custom" as const, from: localDateTimeInput(from), to: "", toNow: true };
+    const first = resolveTrendWindow(selection, null, now);
+    const later = resolveTrendWindow(selection, null, now + hour);
+    expect(first).toEqual({ from, to: now });
+    expect(later).toEqual({ from, to: now + hour });
+    const snapshots = [snap(from - 1), snap(from), snap(now), snap(now + hour), snap(now + hour + 1)];
+    expect(filterTrendSnapshots(snapshots, first)).toEqual(snapshots.slice(1, 3));
+    expect(filterTrendSnapshots(snapshots, later)).toEqual(snapshots.slice(1, 4));
+  });
+
+  it("到现在校验缺失或未来的开始时间，其他预设不受开关影响", () => {
+    const selection = { preset: "custom" as const, from: "", to: localDateTimeInput(now + hour), toNow: true };
+    expect(resolveTrendWindow(selection, null, now)).toEqual({ from: 0, to: now, error: "请选择有效的开始时间" });
+    for (const from of [now, now + hour]) {
+      expect(resolveTrendWindow({ ...selection, from: localDateTimeInput(from) }, null, now).error).toBe("开始时间必须早于当前时间");
+    }
+    expect(resolveTrendWindow({ ...selection, preset: "24h" }, null, now)).toEqual({ from: now - 24 * hour, to: now });
+  });
+
   it("同日刻度只显示时分，跨日显示日期", () => {
     const start = new Date(2026, 9, 22, 8, 30).getTime();
     expect(trendTick(start, { from: start, to: start + hour })).toBe("08:30");
