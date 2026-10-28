@@ -39,6 +39,19 @@ export const chatgptLoginStatus = (attemptId: string) => invoke<ChatgptLoginStat
 export const cancelChatgptLogin = (attemptId: string) => invoke<void>("cancel_chatgpt_login", { attemptId });
 export const discardChatgptAuth = (authId: string) => invoke<void>("discard_chatgpt_auth", { authId });
 
+export interface ModelServerLoginStart { attemptId: string; authUrl: string }
+export type ModelServerLoginStatus = { status: "pending" } |
+  { status: "complete"; refreshToken: string } |
+  { status: "failed"; message: string };
+export const startModelServerLogin = (baseUrl: string) =>
+  invoke<ModelServerLoginStart>("start_modelserver_login", { baseUrl });
+export const openModelServerLogin = (attemptId: string) =>
+  invoke<void>("open_modelserver_login", { attemptId });
+export const modelserverLoginStatus = (attemptId: string) =>
+  invoke<ModelServerLoginStatus>("modelserver_login_status", { attemptId });
+export const cancelModelServerLogin = (attemptId: string) =>
+  invoke<void>("cancel_modelserver_login", { attemptId });
+
 export async function refreshAll(): Promise<RefreshOutcome[]> {
   return invoke<RefreshOutcome[]>("refresh_all");
 }
@@ -87,7 +100,7 @@ export async function configPath(): Promise<string> {
 /// 导出配置：弹保存对话框 → 返回所选路径（用户取消返回 null）
 export async function pickExportPath(): Promise<string | null> {
   return save({
-    title: "导出配置（包含 API Key，请妥善保管文件）",
+    title: "导出配置（包含 API Key / Token / refresh_token，请妥善保管文件）",
     defaultPath: "llm-status-board-config.json",
     filters: [{ name: "JSON", extensions: ["json"] }],
   });

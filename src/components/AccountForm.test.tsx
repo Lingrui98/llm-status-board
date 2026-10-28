@@ -3,15 +3,20 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import React from "react";
 import AccountForm from "./AccountForm";
 import * as api from "../api";
-import type { AccountConfig } from "../types";
+import type { AccountConfig, AccountInfo } from "../types";
 
 vi.mock("../api", () => ({ testAccount: vi.fn(), pickCodexAuthFile: vi.fn(),
   startChatgptLogin: vi.fn(), openChatgptLogin: vi.fn(), chatgptLoginStatus: vi.fn(),
   cancelChatgptLogin: vi.fn(), discardChatgptAuth: vi.fn(),
+  startModelServerLogin: vi.fn(), openModelServerLogin: vi.fn(),
+  modelserverLoginStatus: vi.fn(), cancelModelServerLogin: vi.fn(),
 }));
 
 afterEach(cleanup);
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  vi.mocked(api.cancelModelServerLogin).mockResolvedValue(undefined);
+});
 
 function renderForm() {
   const initial: AccountConfig = {
@@ -149,5 +154,77 @@ describe("Codex subscription account setup", () => {
     expect(screen.queryByLabelText("ChatGPT Access Token")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "确定" }));
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ chatgptAuthId: "managed-session", chatgptAccountId: "workspace", token: "", refreshToken: "", codexAuthPath: null }));
+  });
+});
+
+describe("ModelServer browser login account setup", () => {
+  const flow = { attemptId: "modelserver-flow", authUrl: "https://code.cs.ac.cn/" };
+  function setup() {
+    const result = renderForm();
+    fireEvent.change(screen.getByLabelText("类型"), { target: { value: "modelServer" } });
+    return result;
+  }
+
+  it("fills the rotated refresh token and clears the stale access token", async () => {
+    vi.mocked(api.startModelServerLogin).mockResolvedValue(flow);
+    vi.mocked(api.modelserverLoginStatus).mockResolvedValue({ status: "complete", refreshToken: "browser-refresh" });
+    const { onSubmit } = setup();
+    fireEvent.change(screen.getByLabelText(/^refresh_token/), { target: { value: "old-refresh" } });
+    fireEvent.change(screen.getByLabelText(/^access_token \(可选\)/), { target: { value: "old-access" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新网页登录" }));
+    await screen.findByText(/已填写 refresh_token/);
+    expect((screen.getByLabelText(/^refresh_token/) as HTMLInputElement).value).toBe("browser-refresh");
+    expect((screen.getByLabelText(/^access_token \(可选\)/) as HTMLInputElement).value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "modelServer", baseUrl: "https://codeapi.cs.ac.cn", refreshToken: "browser-refresh", token: "",
+    }));
+  });
+
+  it("preserves existing credentials when the native login fails", async () => {
+    vi.mocked(api.startModelServerLogin).mockResolvedValue(flow);
+    vi.mocked(api.modelserverLoginStatus).mockResolvedValue({ status: "failed", message: "登录窗口已关闭" });
+    const { onSubmit } = setup();
+    fireEvent.change(screen.getByLabelText(/^refresh_token/), { target: { value: "keep-refresh" } });
+    fireEvent.change(screen.getByLabelText(/^access_token \(可选\)/), { target: { value: "keep-access" } });
+    fireEvent.click(screen.getByRole("button", { name: "重新网页登录" }));
+    await screen.findByRole("alert");
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: "keep-refresh", token: "keep-access" }));
+  });
+
+  it("disables site changes, testing, and submission while login is pending", async () => {
+    vi.mocked(api.startModelServerLogin).mockResolvedValue(flow);
+    vi.mocked(api.modelserverLoginStatus).mockReturnValue(new Promise(() => {}));
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: "使用网页登录" }));
+    await screen.findByLabelText("ModelServer 面板地址");
+    expect((screen.getByLabelText(/^站点地址/) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "测试连接" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("serializes token tests with browser login and submission", async () => {
+    let resolve!: (value: AccountInfo) => void;
+    const response = new Promise<AccountInfo>((r) => { resolve = r; });
+    vi.mocked(api.testAccount).mockReturnValue(response);
+    const { onSubmit } = setup();
+    fireEvent.change(screen.getByLabelText(/^refresh_token/), { target: { value: "consumed-refresh" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect((screen.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "重新网页登录" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText(/^refresh_token/) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByLabelText("类型") as HTMLSelectElement).disabled).toBe(true);
+    resolve({ extras: [], fetchedAt: "2026-10-28T00:00:00Z", note: "连接成功",
+      newRefreshToken: "rotated-refresh", newToken: "rotated-access" });
+    await screen.findByText("连接成功");
+    expect((screen.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "重新网页登录" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByLabelText(/^refresh_token/) as HTMLInputElement).value).toBe("rotated-refresh");
+    expect((screen.getByLabelText(/^access_token \(可选\)/) as HTMLInputElement).value).toBe("rotated-access");
+    fireEvent.click(screen.getByRole("button", { name: "确定" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      refreshToken: "rotated-refresh", token: "rotated-access",
+    }));
   });
 });

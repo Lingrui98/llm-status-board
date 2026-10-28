@@ -39,8 +39,8 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
 
     if access.is_empty() && acc.refresh_token.is_empty() {
         return Err(
-            "请先在网页面板（code.cs.ac.cn）登录，然后 F12 → Application → Local Storage \
-             → 复制 refresh_token 的值填到下方「refresh_token」框"
+            "请先点击「使用网页登录」自动获取 refresh_token，或登录网页面板后从 \
+             Local Storage 手动复制该值"
                 .into(),
         );
     }

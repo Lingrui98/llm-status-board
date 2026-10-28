@@ -57,12 +57,13 @@ export const CREDENTIAL_GUIDES: Record<ProviderKind, CredentialGuide> = {
     copyables: [{ label: "Key 示例格式", value: "sk-..." }],
   },
   modelServer: {
-    need: "面板网页 localStorage 里的 refresh_token（access_token 一般留空）。",
+    need: "面板网页 localStorage 里的 refresh_token（access_token 一般留空）。推荐使用应用内网页登录自动获取。",
     steps: [
       "Base URL 填 API 后端地址 https://codeapi.cs.ac.cn（不是网页面板 code.cs.ac.cn；填错了会自动纠正）",
-      "在浏览器里登录网页面板，按 F12 打开开发者工具",
-      "切到「应用 / Application」→ 左侧 Local Storage → 点开面板域名",
-      "找到 refresh_token 条目，双击复制它的值，填入「refresh_token」",
+      "点击「使用网页登录」，在应用内窗口完成面板授权；返回面板后会自动回填 refresh_token",
+      "点击「测试连接」，确认余额和订阅窗口后保存；外部浏览器无法回填凭据",
+      "手动回退：登录网页面板，按 F12 → Application → Local Storage → 面板域名",
+      "找到 refresh_token 条目，复制它的值并填入「refresh_token」",
     ],
     copyables: [{ label: "API 后端地址", value: "https://codeapi.cs.ac.cn" }],
     note: "refresh_token 是一次性轮换的：每次查询后应用会自动保存新 token，无需手动更新。",

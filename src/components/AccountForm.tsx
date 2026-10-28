@@ -5,6 +5,7 @@ import * as api from "../api";
 import { formatMoney, formatNumber } from "../format";
 import CredentialHelp from "./CredentialHelp";
 import ChatgptLogin from "./ChatgptLogin";
+import ModelServerLogin from "./ModelServerLogin";
 
 interface Props {
   initial: AccountConfig;
@@ -34,7 +35,7 @@ const AUTH_FIELDS: Record<ProviderKind, AuthField[]> = {  oneApi: [
     { field: "password", label: "密码", placeholder: "", type: "password" },
   ],
   modelServer: [
-    { field: "refreshToken", label: "refresh_token", placeholder: "浏览器 localStorage 里导出", type: "password", hint: "在面板网页 F12 → Application → Local Storage → refresh_token 复制" },
+    { field: "refreshToken", label: "refresh_token", placeholder: "使用网页登录自动获取，或手动粘贴", type: "password", hint: "推荐使用上方网页登录；也可从面板 Local Storage 手动复制" },
     { field: "token", label: "access_token (可选)", placeholder: "短期有效，一般留空", type: "password" },
   ],
   aiHubMix: [
@@ -192,7 +193,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
           </svg>
           {credHelpOpen ? "收起凭证教程" : "怎么获取凭证？"}
         </button>
-        <span className="muted small">{acc.kind === "openAiSubscription" ? "可直接通过浏览器登录，也可使用已有凭证" : "不知道令牌 / Key 从哪来，点这里看当前类型的获取步骤"}</span>
+        <span className="muted small">{acc.kind === "openAiSubscription" ? "可直接通过浏览器登录，也可使用已有凭证" : acc.kind === "modelServer" ? "可使用网页登录，也可手动填写 refresh_token" : "不知道令牌 / Key 从哪来，点这里看当前类型的获取步骤"}</span>
       </div>
       {credHelpOpen && (
         <div className="form-cred-help">
@@ -211,7 +212,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
 
         <label className="form-field">
           <span>类型</span>
-          <select value={acc.kind} onChange={(e) => changeKind(e.target.value as ProviderKind)}>
+          <select value={acc.kind} disabled={testing || loginBusy} onChange={(e) => changeKind(e.target.value as ProviderKind)}>
             {kindGroups.map((group) => (
               <optgroup key={group} label={group}>
                 {PROVIDER_KINDS.filter((k) => k.group === group).map((k) => (
@@ -226,12 +227,14 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
 
         <label className="form-field wide">
           <span>站点地址 (Base URL)</span>
-          <input value={acc.baseUrl} readOnly={acc.kind === "openAiSubscription"} onChange={(e) => set({ baseUrl: e.target.value })} />
+          <input value={acc.baseUrl} readOnly={acc.kind === "openAiSubscription"}
+            disabled={testing || (acc.kind === "modelServer" && loginBusy)}
+            onChange={(e) => set({ baseUrl: e.target.value })} />
           {acc.kind === "modelServer" && (
             <em className="field-hint">
-              填 API 后端地址 <code>https://codeapi.cs.ac.cn</code>（不是网页面板的
-              code.cs.ac.cn；填错了会自动纠正）。凭证取法：网页面板登录后 F12 →
-              Application → Local Storage → 复制 <code>refresh_token</code> 的值填到下方
+              填 API 后端地址 <code>https://codeapi.cs.ac.cn</code>。如果填网页面板的
+              code.cs.ac.cn，查询时会自动纠正。点击「使用网页登录」可自动获取
+              <code>refresh_token</code>，无需 F12。
             </em>
           )}
         </label>
@@ -244,6 +247,14 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
               setTestResult(null);
             }}
             onDisconnect={() => { set({ chatgptAuthId: null, chatgptAccountId: null }); setTestResult(null); }} />
+        )}
+        {acc.kind === "modelServer" && (
+          <ModelServerLogin baseUrl={acc.baseUrl} hasCredential={Boolean(acc.refreshToken)} disabled={testing}
+            onBusyChange={setLoginBusy}
+            onConnected={(refreshToken) => {
+              set({ refreshToken, token: "" });
+              setTestResult(null);
+            }} />
         )}
         {acc.kind === "openAiSubscription" && !acc.chatgptAuthId && (
           <div className="form-field wide">
@@ -279,7 +290,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
             <span>{f.label}</span>
             <input
               type={f.type ?? "text"}
-              disabled={loginBusy}
+              disabled={loginBusy || testing}
               value={(acc as unknown as Record<string, unknown>)[f.field] as string | number | undefined ?? ""}
               onChange={(e) =>
                 set({ [f.field]: f.type === "number" ? Number(e.target.value) || null : e.target.value } as Partial<AccountConfig>)
@@ -341,7 +352,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
         <button className="btn ghost" onClick={onCancel}>
           取消
         </button>
-        <button className="btn primary" onClick={handleSubmit} disabled={!valid || loginBusy}>
+        <button className="btn primary" onClick={handleSubmit} disabled={!valid || loginBusy || testing}>
           确定
         </button>
       </div>

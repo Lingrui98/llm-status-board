@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod http;
 mod jsonpath;
+mod modelserver_auth;
 mod primary_metric;
 mod providers;
 mod quota_history;
@@ -74,9 +75,10 @@ pub fn run() {
         ))
         .plugin(
             // R18：summary 浮层位置每次悬停实时计算，**不参与** window-state 的保存/恢复
-            // （否则插件会把它当成普通窗口记忆位置，与定位逻辑打架）
+            // （否则插件会把它当成普通窗口记忆位置，与定位逻辑打架）。
+            // ModelServer 登录窗口也不保存，避免关闭后留下无意义状态。
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[summary::POPUP_LABEL])
+                .with_denylist(&[summary::POPUP_LABEL, modelserver_auth::WINDOW_LABEL])
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
@@ -96,6 +98,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             match event {
+                // ModelServer 登录窗口直接关闭，后台轮询按窗口是否存在结束等待。
+                tauri::WindowEvent::CloseRequested { .. }
+                    if window.label() == modelserver_auth::WINDOW_LABEL => {}
                 // 点 ✕ 默认隐藏到托盘（托盘菜单「退出」才是真退出）；
                 // 设置页「关闭窗口时」改为直接退出后，此处放行即可
                 tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -135,6 +140,10 @@ pub fn run() {
             chatgpt_auth::cancel_chatgpt_login,
             chatgpt_auth::open_chatgpt_login,
             chatgpt_auth::discard_chatgpt_auth,
+            modelserver_auth::start_modelserver_login,
+            modelserver_auth::open_modelserver_login,
+            modelserver_auth::modelserver_login_status,
+            modelserver_auth::cancel_modelserver_login,
             updater::check_channel_update,
         ])
         .run(tauri::generate_context!())
