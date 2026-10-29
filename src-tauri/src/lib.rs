@@ -16,6 +16,11 @@ mod updater;
 #[cfg(test)]
 mod net_tests;
 
+// Run the actual Windows protocol code with fake Shell calls on all CI platforms.
+#[cfg(test)]
+#[path = "../vendor/tray-icon/src/platform_impl/windows/notification.rs"]
+mod tray_notification_tests;
+
 use tauri::Manager;
 
 /// 默认窗口尺寸（R16 §3 越界降级时复位用；与 `tauri.conf.json` 保持一致）

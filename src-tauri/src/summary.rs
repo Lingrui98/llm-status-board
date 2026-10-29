@@ -9,7 +9,7 @@
 //! - **同一时刻最多一个待执行定时器**：用全局 generation 计数让旧定时器失效。
 //! - 浮层窗口由 `tauri.conf.json` 声明（启动即创建、`visible:false`），显示/隐藏用
 //!   `show()`/`hide()`，**不销毁**，避免每次悬停重建 WebView。
-//! - 与 R17 左键切换、右键菜单、tooltip 摘要互不干扰（浮层出现时不改 tooltip）。
+//! - 与 R17 左键切换、右键菜单互不干扰；不启用原生托盘 tooltip，以免遮挡浮层。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;

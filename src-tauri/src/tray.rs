@@ -6,7 +6,7 @@ use tauri::menu::{IsMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 
-/// 托盘图标 id（运行期通过 app.tray_by_id 取回以更新 tooltip / 替换菜单）
+/// 托盘图标 id（运行期通过 app.tray_by_id 取回并替换菜单）
 const TRAY_ID: &str = "main-tray";
 /// 托盘菜单项 id
 const MENU_SHOW: &str = "tray-show";
@@ -14,7 +14,7 @@ const MENU_SHOW: &str = "tray-show";
 /// （R21：与主面板刷新同源；前端 `App.tsx` 监听的就是 `tray-refresh`）
 const MENU_REFRESH: &str = "tray-refresh";
 /// R21：前端 `refresh()` 结束（成功/失败都发）事件——Rust 收到后恢复「立即刷新」可用态
-/// 并刷新账号状态区/tooltip
+/// 并刷新账号状态区
 const EVENT_REFRESH_SETTLED: &str = "frontend-refresh-settled";
 /// R21：置灰「刷新中…」的兜底超时——超过该时长仍未收到 settled（事件丢失：监听未就绪、
 /// 渲染进程异常/重载）就自行恢复菜单，避免「立即刷新」永久不可用。
@@ -45,16 +45,6 @@ const MENU_ACCOUNT_PREFIX: &str = "account:";
 const MAX_ACCOUNTS_IN_MENU: usize = 8;
 /// 失败原因在菜单里的最大字符数（超出截断并补省略号）
 const MAX_ERROR_CHARS: usize = 12;
-
-/// 托盘 tooltip 文案 —— 纯函数，便于单测。
-/// R21：只由「账号数 / 异常数」决定（原「暂停」态随暂停开关一并移除）。
-pub fn tooltip_text(total: usize, failed: usize) -> String {
-    if failed > 0 {
-        format!("LLM Status Board · {total} 个账号 · {failed} 个异常")
-    } else {
-        format!("LLM Status Board · {total} 个账号全部正常")
-    }
-}
 
 /// 显示并聚焦主窗口（菜单「显示看板」/ 点击账号项 / 左键切换的「显示」分支共用）
 fn show_main_window(app: &AppHandle) {
@@ -260,22 +250,10 @@ pub fn refresh_menu_item(refreshing: bool) -> (&'static str, bool) {
     }
 }
 
-/// 托盘 tooltip 摘要（R21：只反映账号数与异常数）
-fn update_tooltip(app: &AppHandle, outcomes: &[RefreshOutcome]) {
-    let total = outcomes.len();
-    let failed = outcomes.iter().filter(|o| !o.ok).count();
-    let tip = tooltip_text(total, failed);
-    if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(&tip));
-    }
-}
-
 /// R21：把托盘从「刷新中…」恢复——重建菜单（恢复可用态）+ 用最新 `results.json`
-/// 刷新账号状态区与 tooltip。**不推进代次**（由调用方负责）。
+/// 刷新账号状态区。**不推进代次**（由调用方负责）。
 fn restore_tray_after_refresh(app: &AppHandle) {
     rebuild_menu(app, false);
-    let (_, outcomes) = load_tray_data(app);
-    update_tooltip(app, &outcomes);
 }
 
 /// R21：前端 `refresh()` 结束（成功/失败都发）→ 作废在途看门狗并恢复托盘显示。
@@ -321,16 +299,17 @@ pub fn on_close_requested(window: &tauri::Window, api: &tauri::CloseRequestApi) 
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let menu = build_menu(app.handle(), false)?;
 
-    // R21：前端 refresh() 结束（成功/失败都发）→ 恢复「立即刷新」可用态 + 刷新账号区/tooltip。
+    // R21：前端 refresh() 结束（成功/失败都发）→ 恢复「立即刷新」可用态 + 刷新账号区。
     // 这样托盘点刷新后，主界面（转圈/更新时刻/卡片）与托盘菜单同时更新，双向同步。
     let handle = app.handle().clone();
     app.listen(EVENT_REFRESH_SETTLED, move |_event| {
         on_frontend_refresh_settled(&handle);
     });
 
+    // 悬停只显示自定义「用量总结」。Windows 由 vendor/tray-icon 使用 VERSION_4
+    // 并关闭 NIF_SHOWTIP；仅不设置文字仍可能让旧版协议显示空白系统提示框。
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .tooltip("LLM Status Board")
         // 左键不弹菜单（交给 on_tray_icon_event 做显示/聚焦），菜单只在右键弹出
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
@@ -538,7 +517,7 @@ mod tests {
             "托盘源码不应再出现暂停相关标识"
         );
         assert!(!source.contains(&needle_id), "被移除的菜单项 id 不应残留");
-        assert!(!source.contains(needle_zh), "tooltip 不应再有暂停后缀文案");
+        assert!(!source.contains(needle_zh), "托盘不应再有暂停后缀文案");
     }
 
     /// R21：菜单 id 集合恰好是移除后的那一套（右鍵其余项不动，左键切换/悬停不受影响）
@@ -551,15 +530,6 @@ mod tests {
         assert_eq!(MENU_EMPTY, "tray-empty");
         assert_eq!(MENU_MORE, "tray-more");
         assert_eq!(MENU_ACCOUNT_PREFIX, "account:");
-    }
-
-    /// R21：tooltip 只由「账号数 / 异常数」决定（已无暂停形参、无暂停后缀）
-    #[test]
-    fn tooltip_text_reflects_accounts_and_failures_only() {
-        assert_eq!(tooltip_text(3, 0), "LLM Status Board · 3 个账号全部正常");
-        assert_eq!(tooltip_text(3, 1), "LLM Status Board · 3 个账号 · 1 个异常");
-        assert_eq!(tooltip_text(0, 0), "LLM Status Board · 0 个账号全部正常");
-        assert_eq!(tooltip_text(5, 5), "LLM Status Board · 5 个账号 · 5 个异常");
     }
 
     /// R21：配置契约里也不存在暂停字段 —— 自动刷新只有 `autoRefreshSec` 这一个控制点（0 = 关闭）
