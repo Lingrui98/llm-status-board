@@ -306,7 +306,8 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         on_frontend_refresh_settled(&handle);
     });
 
-    // 悬停只显示自定义「用量总结」；不设置原生 tooltip，避免系统文字提示遮挡浮层。
+    // 悬停只显示自定义「用量总结」。Windows 由 vendor/tray-icon 使用 VERSION_4
+    // 并关闭 NIF_SHOWTIP；仅不设置文字仍可能让旧版协议显示空白系统提示框。
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         // 左键不弹菜单（交给 on_tray_icon_event 做显示/聚焦），菜单只在右键弹出

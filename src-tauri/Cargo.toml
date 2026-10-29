@@ -34,6 +34,14 @@ tauri-plugin-opener = "2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 
+[dev-dependencies]
+# Exercise the vendored Windows notification protocol with fake Shell calls on every OS.
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[patch.crates-io]
+# Windows must suppress the native tooltip, including its empty shell.
+tray-icon = { path = "vendor/tray-icon" }
+
 [profile.release]
 codegen-units = 1
 lto = true
