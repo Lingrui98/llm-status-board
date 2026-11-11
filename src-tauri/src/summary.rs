@@ -499,6 +499,9 @@ fn last_geometry() -> Option<(PhysRect, (f64, f64))> {
 }
 
 fn hide_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    crate::summary_macos::set_visible(app, false);
+    #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         let _ = window.hide();
     }
@@ -506,6 +509,9 @@ fn hide_window(app: &AppHandle) {
 
 fn show_window(app: &AppHandle) {
     position_window(app);
+    #[cfg(target_os = "macos")]
+    crate::summary_macos::set_visible(app, true);
+    #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         let _ = window.show();
     }
@@ -720,7 +726,7 @@ pub fn on_row_click(app: &AppHandle) {
     handle_hover_event(app, HoverEvent::RowClick);
 }
 
-/// 浮层内指针进入/离开（IPC `set_summary_pointer_inside`）
+/// 浮层内指针进入/离开。只更新悬停状态，禁止激活整个应用。
 pub fn set_pointer_inside(app: &AppHandle, inside: bool) {
     handle_hover_event(
         app,
@@ -750,6 +756,21 @@ pub fn show_now(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_accepts_first_click_without_focusing_on_creation() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let popup = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|window| window["label"] == POPUP_LABEL)
+            .unwrap();
+        assert_eq!(popup["acceptFirstMouse"], true);
+        assert_eq!(popup["focus"], false);
+        assert_eq!(popup["visible"], false);
+    }
 
     /// 一块 1920×1080 的完整显示器区域（物理像素）
     fn bounds_full() -> PhysRect {

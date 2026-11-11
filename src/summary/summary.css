@@ -37,7 +37,10 @@ body::before {
     linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 96%, var(--on-accent)), var(--bg-2));
   border: 1px solid var(--border-strong);
   border-radius: 16px;
-  box-shadow: var(--shadow-modal);
+  /* 浮层只有 8px 透明边距。短而柔和的阴影避免大模态阴影被底边裁成直线。 */
+  box-shadow:
+    var(--shadow-card),
+    0 2px 6px -2px color-mix(in srgb, var(--overlay) 55%, transparent);
   overflow: hidden;
   animation: summary-in 0.16s var(--ease-out);
 }
@@ -378,6 +381,8 @@ body::before {
   width: 20px;
   height: 20px;
   cursor: nwse-resize;
+  touch-action: none;
+  user-select: none;
   /* 斜纹手柄（悬停加深），不干扰卡片内容 */
   background:
     linear-gradient(135deg, transparent 0 55%, var(--text-3) 55% 65%, transparent 65% 75%, var(--text-3) 75% 85%, transparent 85%);

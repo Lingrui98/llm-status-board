@@ -5,7 +5,8 @@
 //   账号行点击 → summary_open_account（后端显示并聚焦主窗口，内部 emit tray-open-account）→ 隐藏浮层；
 // - 窗口由 Rust 常驻创建、show()/hide() 复用不销毁：重新获得焦点时重新拉取，避免陈旧数据。
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from "react";
+import { startSummaryResize } from "./summaryResize";
 import { getConfig, getLastResults, getUsageHistory } from "../api";
 import { resolveQuotaDetailDisplay } from "../residentSettings";
 import SummaryCard, { type SummaryStatus } from "./SummaryCard";
@@ -85,8 +86,13 @@ export default function SummaryPopup() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const resizeCleanup = useRef<(() => void) | null>(null);
   const handlePointerEnter = useCallback(() => fireAndForget(setSummaryPointerInside(true)), []);
-  const handlePointerLeave = useCallback(() => fireAndForget(setSummaryPointerInside(false)), []);
+  const handlePointerLeave = useCallback(() => {
+    // 捕获期间光标可以越过旧窗口边界，不能因此启动自动隐藏。
+    if (!resizeCleanup.current) fireAndForget(setSummaryPointerInside(false));
+  }, []);
+  useEffect(() => () => resizeCleanup.current?.(), []);
 
   // R24：尺寸调整 —— 启动时恢复上次拖拽的尺寸；调整结束时持久化。
   // 动态 import + catch：非 Tauri 环境（jsdom 测试）插件调用失败时静默降级，不影响浮层主体。
@@ -99,31 +105,35 @@ export default function SummaryPopup() {
   }, []);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let disposed = false;
-    void import("@tauri-apps/api/window")
-      .then((m) =>
-        // 拖拽调整过程中高频触发；写 localStorage 是同步小操作，开销可忽略
-        m.getCurrentWindow().onResized(() => {
-          saveSummarySize(window.innerWidth, window.innerHeight);
-        }),
-      )
-      .then((u) => {
-        if (disposed) u();
-        else unlisten = u;
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    // DOM resize 发生在视口更新之后；原生 onResized 回调可能读到上一帧尺寸。
+    const save = () => saveSummarySize(window.innerWidth, window.innerHeight);
+    window.addEventListener("resize", save);
+    return () => window.removeEventListener("resize", save);
   }, []);
 
-  // 右下角拖拽手柄 → 原生尺寸拖拽（无边框窗口的常规做法）
-  const handleStartResize = useCallback(() => {
-    void import("@tauri-apps/api/window")
-      .then((m) => m.getCurrentWindow().startResizeDragging("SouthEast"))
-      .catch(() => {});
+  const handleStartResize = useCallback((event: PointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || resizeCleanup.current) return;
+    if (/Mac/i.test(navigator.platform)) {
+      fireAndForget(setSummaryPointerInside(true));
+      resizeCleanup.current = startSummaryResize(
+        event.currentTarget,
+        event,
+        { width: window.innerWidth, height: window.innerHeight },
+        async (size) => {
+          const m = await import("@tauri-apps/api/window");
+          await m.getCurrentWindow().setSize(new m.LogicalSize(size.width, size.height));
+        },
+        () => {
+          resizeCleanup.current = null;
+          // 恢复隐藏复查；Rust 会在光标仍位于浮层内时继续保留窗口。
+          fireAndForget(setSummaryPointerInside(false));
+        },
+      );
+    } else {
+      void import("@tauri-apps/api/window")
+        .then((m) => m.getCurrentWindow().startResizeDragging("SouthEast"))
+        .catch((error) => console.warn("无法调整用量总结窗口大小", error));
+    }
   }, []);
 
   const handleSelectAccount = useCallback(async (accountId: string) => {

@@ -9,6 +9,10 @@ mod primary_metric;
 mod providers;
 mod quota_history;
 mod summary;
+#[cfg(target_os = "macos")]
+mod summary_cursor_macos;
+#[cfg(target_os = "macos")]
+mod summary_macos;
 mod tray;
 mod types;
 mod updater;
@@ -68,7 +72,10 @@ fn window_geometry_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlug
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         .plugin(tauri_plugin_dialog::init())
         // R16 常驻与自动化插件
         // - autostart：开机自启（macOS 用 LaunchAgent，Windows 走注册表默认实现）
@@ -98,6 +105,8 @@ pub fn run() {
         .plugin(window_geometry_guard_plugin())
         .setup(|app| {
             chatgpt_auth::init(app.path().app_config_dir()?.join("chatgpt-auth"));
+            #[cfg(target_os = "macos")]
+            summary_macos::setup(app.handle())?;
             tray::setup(app)?;
             Ok(())
         })

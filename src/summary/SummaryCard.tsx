@@ -3,6 +3,7 @@
 // 版式：头部（标题 + 最后刷新）→ 总览 2×2 数字（复用 StatTile 的紧凑样式）→
 // 账号行（状态点 + 名称/异常摘要 + 数值 + R23 配额窗口明细条，区段内滚动）→ 本地历史天数。
 
+import type { PointerEvent } from "react";
 import StatTile from "../components/ui/StatTile";
 import { formatTimeUntil } from "../format";
 import {
@@ -28,8 +29,8 @@ interface Props {
   /** 指针进入/离开浮层（用于取消/重建后端的待隐藏定时器） */
   onPointerEnter?: () => void;
   onPointerLeave?: () => void;
-  /** R24：按下右下角拖拽手柄 → 开始原生尺寸拖拽（无边框窗口的常规做法） */
-  onStartResize?: () => void;
+  /** 按下右下角手柄，按平台选择尺寸拖拽方式。 */
+  onStartResize?: (event: PointerEvent<HTMLElement>) => void;
 }
 
 const STATUS_LABEL: Record<SummaryRowStatus, string> = {
@@ -164,14 +165,15 @@ export default function SummaryCard({ status, data, onSelectAccount, onPointerEn
           </>
         )}
       </section>
-      {/* R24：右下角尺寸拖拽手柄（按下即进入原生尺寸拖拽；尺寸由 SummaryPopup 持久化） */}
+      {/* 右下角尺寸拖拽手柄；尺寸由 SummaryPopup 持久化。 */}
       <span
         className="summary-resize-grip"
         role="presentation"
         title="拖拽调整浮层大小"
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
           e.preventDefault();
-          onStartResize?.();
+          onStartResize?.(e);
         }}
       />
     </div>

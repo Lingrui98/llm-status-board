@@ -1,6 +1,6 @@
 [package]
 name = "llm-status-board"
-version = "0.2.15"
+version = "0.2.16"
 description = "LLM 提供商余额与用量聚合看板"
 authors = ["Steve Gou"]
 edition = "2021"
@@ -30,6 +30,10 @@ tauri-plugin-notification = "2.7.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-opener = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Pinned: preserves structural styles and synchronizes nonactivating-panel behavior.
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "3ffa93ed14e0f8e857e43619b4157f2a685d35a4" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
