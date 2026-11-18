@@ -115,6 +115,13 @@ pub fn run() {
                 // ModelServer 登录窗口直接关闭，后台轮询按窗口是否存在结束等待。
                 tauri::WindowEvent::CloseRequested { .. }
                     if window.label() == modelserver_auth::WINDOW_LABEL => {}
+                // summary 浮层若收到系统关闭请求（如 Alt+F4），走 summary 状态机隐藏，避免状态卡在 visible=true。
+                tauri::WindowEvent::CloseRequested { api, .. }
+                    if window.label() == summary::POPUP_LABEL =>
+                {
+                    api.prevent_close();
+                    summary::hide_now(window.app_handle());
+                }
                 // 点 ✕ 默认隐藏到托盘（托盘菜单「退出」才是真退出）；
                 // 设置页「关闭窗口时」改为直接退出后，此处放行即可
                 tauri::WindowEvent::CloseRequested { api, .. } => {

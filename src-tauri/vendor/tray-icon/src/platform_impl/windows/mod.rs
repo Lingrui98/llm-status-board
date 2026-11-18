@@ -16,7 +16,7 @@ use windows_sys::{
         UI::{
             Shell::{
                 Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_GUID, NIF_ICON, NIF_MESSAGE,
-                NIF_STATE, NIM_DELETE, NIM_MODIFY, NIS_HIDDEN, NOTIFYICONDATAW,
+                NIF_STATE, NIM_DELETE, NIM_MODIFY, NIN_POPUPOPEN, NIS_HIDDEN, NOTIFYICONDATAW,
                 NOTIFYICONIDENTIFIER,
             },
             WindowsAndMessaging::{
@@ -62,8 +62,8 @@ struct TrayUserData {
     hpopupmenu: Option<HMENU>,
     icon: Option<Icon>,
     tooltip: Option<String>,
-    entered: bool,
-    last_position: Option<PhysicalPosition<f64>>,
+    hover: notification::HoverTracker,
+    last_rect: Option<RECT>,
     menu_on_left_click: bool,
     menu_on_right_click: bool,
     visible: bool,
@@ -73,6 +73,10 @@ struct TrayUserData {
 impl TrayUserData {
     fn set_tray_visible(&mut self, visible: bool) {
         self.visible = visible;
+        if !visible && self.hover.entered {
+            self.hover.reset();
+            unsafe { KillTimer(self.hwnd, WM_USER_LEAVE_TIMER_ID as _) };
+        }
         let mut nid = NOTIFYICONDATAW {
             uFlags: NIF_STATE,
             hWnd: self.hwnd,
@@ -120,8 +124,8 @@ impl TrayIcon {
                 hpopupmenu: attrs.menu.as_ref().map(|m| m.hpopupmenu() as _),
                 icon: attrs.icon.clone(),
                 tooltip: attrs.tooltip.clone(),
-                entered: false,
-                last_position: None,
+                hover: notification::HoverTracker::default(),
+                last_rect: None,
                 menu_on_left_click: attrs.menu_on_left_click,
                 menu_on_right_click: attrs.menu_on_right_click,
                 visible: true,
@@ -355,6 +359,7 @@ unsafe extern "system" fn tray_proc(
 
     match msg {
         WM_DESTROY => {
+            KillTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _);
             drop(Box::from_raw(userdata_ptr));
             return 0;
         }
@@ -382,8 +387,8 @@ unsafe extern "system" fn tray_proc(
                 userdata.visible,
             );
             // The icon was recreated; its first move must generate Enter again.
-            userdata.entered = false;
-            userdata.last_position = None;
+            userdata.hover.reset();
+            userdata.last_rect = None;
             KillTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _);
         }
         WM_USER_SHOW_MENU_ON_LEFT_CLICK => {
@@ -407,23 +412,60 @@ unsafe extern "system" fn tray_proc(
                         | WM_RBUTTONDBLCLK
                         | WM_MBUTTONDBLCLK
                         | WM_MOUSEMOVE
+                        | NIN_POPUPOPEN
+                        | notification::NIN_POPUPCLOSE
                 )
             ) =>
         {
+            let message = notification::mouse_message(lparam, userdata.version_4).unwrap();
             let mut cursor = POINT { x: 0, y: 0 };
-            if GetCursorPos(&mut cursor as _) == 0 {
+            let has_cursor = GetCursorPos(&mut cursor as _) != 0;
+            let raw_rect = get_tray_rect(userdata.internal_id, userdata.guid, hwnd);
+            if let Some(r) = raw_rect {
+                userdata.last_rect = Some(r);
+            }
+
+            if message == notification::NIN_POPUPCLOSE {
+                let inside = has_cursor && raw_rect.is_some_and(|r| point_in_rect(cursor, r));
+                let fallback = if has_cursor {
+                    (cursor.x as f64, cursor.y as f64)
+                } else {
+                    (0.0, 0.0)
+                };
+                if let notification::HoverOutput::Leave {
+                    position,
+                    kill_timer,
+                } = userdata.hover.on_popup_close(fallback, inside)
+                {
+                    if kill_timer {
+                        KillTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _);
+                    }
+                    let rect = raw_rect
+                        .or(userdata.last_rect)
+                        .map(Into::into)
+                        .unwrap_or_default();
+                    TrayIconEvent::send(TrayIconEvent::Leave {
+                        id: userdata.id.clone(),
+                        rect,
+                        position: PhysicalPosition::new(position.0, position.1),
+                    });
+                }
                 return 0;
             }
 
-            let id = userdata.id.clone();
-            let position = PhysicalPosition::new(cursor.x as f64, cursor.y as f64);
+            if !has_cursor {
+                return 0;
+            }
 
-            let rect = match get_tray_rect(userdata.internal_id, userdata.guid, hwnd) {
-                Some(rect) => Rect::from(rect),
+            let raw_rect = match raw_rect {
+                Some(r) => r,
                 None => return 0,
             };
 
-            let message = notification::mouse_message(lparam, userdata.version_4).unwrap();
+            let id = userdata.id.clone();
+            let position = PhysicalPosition::new(cursor.x as f64, cursor.y as f64);
+            let rect = Rect::from(raw_rect);
+
             let event = match message {
                 WM_LBUTTONDOWN => TrayIconEvent::Click {
                     id,
@@ -485,23 +527,43 @@ unsafe extern "system" fn tray_proc(
                     position,
                     button: MouseButton::Middle,
                 },
-                WM_MOUSEMOVE if !userdata.entered => {
-                    userdata.entered = true;
-                    TrayIconEvent::Enter { id, rect, position }
-                }
-                WM_MOUSEMOVE if userdata.entered => {
-                    // handle extra WM_MOUSEMOVE events, ignore if position hasn't changed
-                    let cursor_moved = userdata.last_position != Some(position);
-                    userdata.last_position = Some(position);
-                    if cursor_moved {
-                        // Set or update existing timer, where we check if cursor left
-                        SetTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _, 15, Some(tray_timer_proc));
-
-                        TrayIconEvent::Move { id, rect, position }
-                    } else {
-                        return 0;
+                NIN_POPUPOPEN => {
+                    let inside = point_in_rect(cursor, raw_rect);
+                    match userdata
+                        .hover
+                        .on_popup_open((position.x, position.y), inside)
+                    {
+                        notification::HoverOutput::Enter { arm_leave_timer } => {
+                            if arm_leave_timer {
+                                SetTimer(
+                                    hwnd,
+                                    WM_USER_LEAVE_TIMER_ID as _,
+                                    15,
+                                    Some(tray_timer_proc),
+                                );
+                            }
+                            TrayIconEvent::Enter { id, rect, position }
+                        }
+                        _ => return 0,
                     }
                 }
+                WM_MOUSEMOVE => match userdata.hover.on_mouse_move((position.x, position.y)) {
+                    notification::HoverOutput::Enter { arm_leave_timer } => {
+                        if arm_leave_timer {
+                            SetTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _, 15, Some(tray_timer_proc));
+                        }
+                        TrayIconEvent::Enter { id, rect, position }
+                    }
+                    notification::HoverOutput::Move { arm_leave_timer } => {
+                        if arm_leave_timer {
+                            SetTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _, 15, Some(tray_timer_proc));
+                        }
+                        TrayIconEvent::Move { id, rect, position }
+                    }
+                    notification::HoverOutput::None | notification::HoverOutput::Leave { .. } => {
+                        return 0;
+                    }
+                },
 
                 _ => unreachable!(),
             };
@@ -518,30 +580,42 @@ unsafe extern "system" fn tray_proc(
         }
 
         WM_TIMER if wparam as u32 == WM_USER_LEAVE_TIMER_ID => {
-            if let Some(position) = userdata.last_position.take() {
-                let mut cursor = POINT { x: 0, y: 0 };
-                if GetCursorPos(&mut cursor as _) == 0 {
-                    return 0;
-                }
+            if !userdata.hover.entered {
+                KillTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _);
+                return 0;
+            }
 
-                let rect = match get_tray_rect(userdata.internal_id, userdata.guid, hwnd) {
-                    Some(r) => r,
-                    None => return 0,
-                };
+            let mut cursor = POINT { x: 0, y: 0 };
+            let has_cursor = GetCursorPos(&mut cursor as _) != 0;
+            let raw_rect = get_tray_rect(userdata.internal_id, userdata.guid, hwnd);
+            if let Some(r) = raw_rect {
+                userdata.last_rect = Some(r);
+            }
 
-                let in_x = (rect.left..rect.right).contains(&cursor.x);
-                let in_y = (rect.top..rect.bottom).contains(&cursor.y);
+            let inside = has_cursor && raw_rect.is_some_and(|r| point_in_rect(cursor, r));
+            let fallback = if has_cursor {
+                (cursor.x as f64, cursor.y as f64)
+            } else {
+                (0.0, 0.0)
+            };
 
-                if !in_x || !in_y {
+            if let notification::HoverOutput::Leave {
+                position,
+                kill_timer,
+            } = userdata.hover.on_leave_timer(fallback, inside)
+            {
+                if kill_timer {
                     KillTimer(hwnd, WM_USER_LEAVE_TIMER_ID as _);
-                    userdata.entered = false;
-
-                    TrayIconEvent::send(TrayIconEvent::Leave {
-                        id: userdata.id.clone(),
-                        rect: rect.into(),
-                        position,
-                    });
                 }
+                let rect = raw_rect
+                    .or(userdata.last_rect)
+                    .map(Into::into)
+                    .unwrap_or_default();
+                TrayIconEvent::send(TrayIconEvent::Leave {
+                    id: userdata.id.clone(),
+                    rect,
+                    position: PhysicalPosition::new(position.0, position.1),
+                });
             }
 
             return 0;
@@ -551,6 +625,11 @@ unsafe extern "system" fn tray_proc(
     }
 
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+#[inline]
+fn point_in_rect(cursor: POINT, rect: RECT) -> bool {
+    (rect.left..rect.right).contains(&cursor.x) && (rect.top..rect.bottom).contains(&cursor.y)
 }
 
 unsafe extern "system" fn tray_timer_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: u32) {

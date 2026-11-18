@@ -374,6 +374,14 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     crate::summary::on_tray_left_click(tray.app_handle());
                     toggle_main_window(tray.app_handle());
                 }
+                TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    button_state: MouseButtonState::Down,
+                    ..
+                } => {
+                    // 右键菜单弹出前隐藏浮层或取消待显示，避免菜单与浮层重叠
+                    crate::summary::on_tray_right_click(tray.app_handle());
+                }
                 _ => {}
             }
         });

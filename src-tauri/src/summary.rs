@@ -67,6 +67,8 @@ pub enum HoverEvent {
     RowClick,
     /// 托盘左键（R17 切换主窗口的同时必须隐藏浮层）
     TrayLeftClick,
+    /// 托盘右键（弹出右键菜单前隐藏/取消待显示，避免遮挡或卡住状态）
+    TrayRightClick,
     /// 主窗口获得焦点
     MainFocus,
 }
@@ -111,10 +113,10 @@ impl HoverState {
 
 /// 悬停状态机（规格 §1，纯函数）：返回新状态 + 要立刻执行的动作。
 ///
-/// - `Enter`：未显示 → 150ms 后显示；**已显示 → 不重置、不重放动画**。
+/// - `Enter`：未显示 → 150ms 后显示；**已显示 → 不重置、不重放动画（若有待隐藏则取消之）**。
 /// - `Leave`：已显示 → 250ms 后隐藏（期间可被 `PointerEnter` 取消）；未显示 → 取消待显示。
 /// - `PointerEnter`：取消待隐藏；`PointerLeave`：重新起 250ms 隐藏。
-/// - `Escape`/`Blur`/`RowClick`/`TrayLeftClick`/`MainFocus` → **立即隐藏（延迟 0）并清定时器**。
+/// - `Escape`/`Blur`/`RowClick`/`TrayLeftClick`/`TrayRightClick`/`MainFocus` → **立即隐藏（延迟 0）并清定时器**。
 pub fn next_hover_state(
     state: HoverState,
     event: HoverEvent,
@@ -123,7 +125,18 @@ pub fn next_hover_state(
     match event {
         HoverEvent::Enter => {
             if state.visible {
-                (state, PopupAction::None)
+                if state.pending.is_some() {
+                    (
+                        HoverState {
+                            visible: true,
+                            pointer_inside: state.pointer_inside,
+                            pending: None,
+                        },
+                        PopupAction::CancelPending,
+                    )
+                } else {
+                    (state, PopupAction::None)
+                }
             } else {
                 (
                     HoverState {
@@ -203,6 +216,7 @@ pub fn next_hover_state(
         | HoverEvent::Blur
         | HoverEvent::RowClick
         | HoverEvent::TrayLeftClick
+        | HoverEvent::TrayRightClick
         | HoverEvent::MainFocus => (HoverState::new(), PopupAction::HideNow),
     }
 }
@@ -489,6 +503,44 @@ fn with_state<R>(f: impl FnOnce(&mut HoverState) -> R) -> R {
     f(&mut guard)
 }
 
+/// 必须在持有 `HOVER_STATE` 锁时调用，保证状态变更与定时器代号原子一致。
+fn bump_timer_gen_locked() -> u64 {
+    TIMER_GEN.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+/// 定时器线程校验：只有 generation 未被新事件推进且状态机仍到点时才执行。
+pub(crate) fn timer_due_for_generation(
+    state: HoverState,
+    now_ms: u64,
+    kind: PendingTimer,
+    timer_gen: u64,
+    current_gen: u64,
+) -> Option<PopupAction> {
+    if current_gen != timer_gen {
+        return None;
+    }
+    let action = due_action(state, now_ms)?;
+    match (kind, action) {
+        (PendingTimer::Show, PopupAction::ShowNow) => Some(PopupAction::ShowNow),
+        (PendingTimer::Hide, PopupAction::HideNow) => Some(PopupAction::HideNow),
+        _ => None,
+    }
+}
+
+/// 非 macOS 平台容错：若状态机认为浮层可见但原生窗口实际已隐藏（如 Alt+F4/系统隐藏），
+/// 在新的 `Enter` 到来前先复位状态，避免后续 `Enter` 被误判为「已显示」。
+#[cfg(any(not(target_os = "macos"), test))]
+pub(crate) fn reconcile_hidden_window_state(
+    state: HoverState,
+    os_visible: Option<bool>,
+) -> HoverState {
+    if state.visible && os_visible == Some(false) {
+        HoverState::new()
+    } else {
+        state
+    }
+}
+
 fn remember_geometry(icon: PhysRect, cursor: (f64, f64)) {
     let mut guard = LAST_GEOMETRY.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some((icon, cursor));
@@ -514,6 +566,21 @@ fn show_window(app: &AppHandle) {
     #[cfg(not(target_os = "macos"))]
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         let _ = window.show();
+    }
+}
+
+/// 在主线程按当前权威 `HOVER_STATE.visible` 同步窗口显隐，杜绝跨线程显示/隐藏乱序。
+fn sync_window_visibility(app: &AppHandle) {
+    let handle = app.clone();
+    if let Err(err) = app.run_on_main_thread(move || {
+        let should_be_visible = with_state(|state| state.visible);
+        if should_be_visible {
+            show_window(&handle);
+        } else {
+            hide_window(&handle);
+        }
+    }) {
+        eprintln!("无法同步用量总结浮层显隐: {err}");
     }
 }
 
@@ -565,60 +632,74 @@ fn position_window(app: &AppHandle) {
     let _ = window.set_position(LogicalPosition::new(x, y));
 }
 
-/// 起一个待执行定时器（会先让同类型的旧定时器失效）
-fn schedule_timer(app: &AppHandle, kind: PendingTimer, delay_ms: u64) {
-    let generation = TIMER_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+/// 起一个待执行定时器（使用在 `HOVER_STATE` 锁内分配好的 `generation`）
+fn spawn_timer(app: &AppHandle, kind: PendingTimer, delay_ms: u64, generation: u64) {
     let deadline = now_ms() + delay_ms;
     let app = app.clone();
     std::thread::spawn(move || {
-        // 睡到截止时刻：循环 + 小步长，避免调度抖动导致提前唤醒
+        // 睡到截止时刻：循环 + 小步长，避免调度抖动导致提前唤醒并尽早退出作废定时器
         loop {
+            if TIMER_GEN.load(Ordering::SeqCst) != generation {
+                return;
+            }
             let now = now_ms();
             if now >= deadline {
                 break;
             }
             std::thread::sleep(Duration::from_millis((deadline - now).min(50)));
         }
-        // 期间若有新事件，本次定时器已被取消
-        if TIMER_GEN.load(Ordering::SeqCst) != generation {
-            return;
+
+        enum TimerStep {
+            Nothing,
+            ShowNow,
+            CheckHide,
         }
-        let now = now_ms();
-        let Some(action) = with_state(|state| due_action(*state, now)) else {
-            return;
-        };
-        // 只执行与本次定时器同类型的动作
-        let effective = match (kind, action) {
-            (PendingTimer::Show, PopupAction::ShowNow) => PopupAction::ShowNow,
-            (PendingTimer::Hide, PopupAction::HideNow) => PopupAction::HideNow,
-            _ => return,
-        };
-        match effective {
-            PopupAction::ShowNow => {
-                with_state(|state| {
+
+        let step = with_state(|state| {
+            let current_gen = TIMER_GEN.load(Ordering::SeqCst);
+            match timer_due_for_generation(*state, now_ms(), kind, generation, current_gen) {
+                Some(PopupAction::ShowNow) => {
+                    bump_timer_gen_locked();
                     state.visible = true;
                     state.pending = None;
-                });
-                show_window(&app);
+                    TimerStep::ShowNow
+                }
+                Some(PopupAction::HideNow) => TimerStep::CheckHide,
+                _ => TimerStep::Nothing,
             }
-            PopupAction::HideNow => {
+        });
+
+        match step {
+            TimerStep::Nothing => {}
+            TimerStep::ShowNow => sync_window_visibility(&app),
+            TimerStep::CheckHide => {
                 // R25：隐藏前的最后一道判定——光标仍在「图标 ∪ 浮层」范围内 → 不隐藏，续约复查。
                 // 覆盖场景：用户从图标缓慢移向浮层（中间有空隙）、系统误报 Leave 等。
-                if cursor_allows_stay_now(&app) {
-                    with_state(|state| {
-                        // 保持 visible，挂上下一次复查（新事件到来会替换掉它，见 generation 机制）
-                        state.pending = Some((PendingTimer::Hide, now + KEEPALIVE_RECHECK_MS));
-                    });
-                    schedule_timer(&app, PendingTimer::Hide, KEEPALIVE_RECHECK_MS);
-                } else {
-                    with_state(|state| {
+                let stay = cursor_allows_stay_now(&app);
+                let next_hide = with_state(|state| {
+                    // 复查期间若已有新事件（如 Enter / PointerEnter / Click）推进代号，必须放弃本次 Hide。
+                    if TIMER_GEN.load(Ordering::SeqCst) != generation {
+                        return None;
+                    }
+                    if stay {
+                        let next_gen = bump_timer_gen_locked();
+                        state.pending = Some((PendingTimer::Hide, now_ms() + KEEPALIVE_RECHECK_MS));
+                        Some((true, next_gen))
+                    } else {
+                        bump_timer_gen_locked();
                         state.visible = false;
                         state.pending = None;
-                    });
-                    hide_window(&app);
+                        Some((false, 0))
+                    }
+                });
+                match next_hide {
+                    Some((true, next_gen)) => {
+                        spawn_timer(&app, PendingTimer::Hide, KEEPALIVE_RECHECK_MS, next_gen);
+                    }
+                    Some((false, _)) => sync_window_visibility(&app),
+                    None => {}
                 }
             }
-            _ => {}
         }
     });
 }
@@ -626,26 +707,28 @@ fn schedule_timer(app: &AppHandle, kind: PendingTimer, delay_ms: u64) {
 /// 处理一次悬停事件：跑状态机 → 更新状态 → 执行动作
 pub fn handle_hover_event(app: &AppHandle, event: HoverEvent) {
     let now = now_ms();
-    let action = with_state(|state| {
+    let (action, generation) = with_state(|state| {
         let (next, action) = next_hover_state(*state, event, now);
         *state = next;
-        action
+        let gen_id = match action {
+            PopupAction::None => 0,
+            PopupAction::CancelPending
+            | PopupAction::ScheduleShow
+            | PopupAction::ScheduleHide
+            | PopupAction::ShowNow
+            | PopupAction::HideNow => bump_timer_gen_locked(),
+        };
+        (action, gen_id)
     });
     match action {
-        PopupAction::None => {}
-        PopupAction::CancelPending => {
-            TIMER_GEN.fetch_add(1, Ordering::SeqCst);
+        PopupAction::None | PopupAction::CancelPending => {}
+        PopupAction::ScheduleShow => {
+            spawn_timer(app, PendingTimer::Show, HOVER_SHOW_DELAY_MS, generation);
         }
-        PopupAction::ScheduleShow => schedule_timer(app, PendingTimer::Show, HOVER_SHOW_DELAY_MS),
-        PopupAction::ScheduleHide => schedule_timer(app, PendingTimer::Hide, HOVER_HIDE_DELAY_MS),
-        PopupAction::ShowNow => {
-            TIMER_GEN.fetch_add(1, Ordering::SeqCst);
-            show_window(app);
+        PopupAction::ScheduleHide => {
+            spawn_timer(app, PendingTimer::Hide, HOVER_HIDE_DELAY_MS, generation);
         }
-        PopupAction::HideNow => {
-            TIMER_GEN.fetch_add(1, Ordering::SeqCst);
-            hide_window(app);
-        }
+        PopupAction::ShowNow | PopupAction::HideNow => sync_window_visibility(app),
     }
 }
 
@@ -654,6 +737,17 @@ pub fn handle_hover_event(app: &AppHandle, event: HoverEvent) {
 /// 指针进入托盘图标（记录几何 + 起 150ms 显示定时器）
 pub fn on_tray_enter(app: &AppHandle, icon: PhysRect, cursor: (f64, f64)) {
     remember_geometry(icon, cursor);
+    #[cfg(not(target_os = "macos"))]
+    if let Some(window) = app.get_webview_window(POPUP_LABEL) {
+        let os_visible = window.is_visible().ok();
+        with_state(|state| {
+            let reconciled = reconcile_hidden_window_state(*state, os_visible);
+            if reconciled != *state {
+                bump_timer_gen_locked();
+                *state = reconciled;
+            }
+        });
+    }
     handle_hover_event(app, HoverEvent::Enter);
 }
 
@@ -681,6 +775,11 @@ pub fn on_tray_move(app: &AppHandle, icon: PhysRect, cursor: (f64, f64)) {
 /// 托盘左键：立即隐藏浮层（R17 的切换主窗口由 tray.rs 继续处理）
 pub fn on_tray_left_click(app: &AppHandle) {
     handle_hover_event(app, HoverEvent::TrayLeftClick);
+}
+
+/// 托盘右键：弹出右键菜单前立即取消待显示/隐藏浮层
+pub fn on_tray_right_click(app: &AppHandle) {
+    handle_hover_event(app, HoverEvent::TrayRightClick);
 }
 
 /// 主窗口获得焦点 → 立即隐藏浮层
@@ -745,12 +844,12 @@ pub fn hide_now(app: &AppHandle) {
 
 /// 立即显示（IPC `show_summary_popup`，兜底入口：不依赖悬停）
 pub fn show_now(app: &AppHandle) {
-    TIMER_GEN.fetch_add(1, Ordering::SeqCst);
     with_state(|state| {
+        bump_timer_gen_locked();
         state.visible = true;
         state.pending = None;
     });
-    show_window(app);
+    sync_window_visibility(app);
 }
 
 #[cfg(test)]
@@ -970,7 +1069,7 @@ mod tests {
         assert_eq!(state.pending, Some((PendingTimer::Show, 200)));
     }
 
-    /// §1：已显示时再次 Enter 不重置、不重放动画
+    /// §1：已显示时再次 Enter 不重置、不重放动画；若此时正有待隐藏定时器则顺带取消
     #[test]
     fn enter_while_visible_does_not_reset() {
         let visible = HoverState {
@@ -981,9 +1080,18 @@ mod tests {
         let (state, action) = next_hover_state(visible, HoverEvent::Enter, 9999);
         assert_eq!(action, PopupAction::None);
         assert_eq!(state, visible);
+
+        let leaving = HoverState {
+            visible: true,
+            pointer_inside: false,
+            pending: Some((PendingTimer::Hide, 10_250)),
+        };
+        let (restored, cancel_action) = next_hover_state(leaving, HoverEvent::Enter, 10_050);
+        assert_eq!(cancel_action, PopupAction::CancelPending);
+        assert_eq!(restored, visible);
     }
 
-    /// AC-4：Escape / blur / 行点击 / 托盘左键 / 主窗口获焦 → 立即隐藏并清定时器
+    /// AC-4：Escape / blur / 行点击 / 托盘左右键 / 主窗口获焦 → 立即隐藏并清定时器
     #[test]
     fn immediate_hide_events_clear_state() {
         for event in [
@@ -991,6 +1099,7 @@ mod tests {
             HoverEvent::Blur,
             HoverEvent::RowClick,
             HoverEvent::TrayLeftClick,
+            HoverEvent::TrayRightClick,
             HoverEvent::MainFocus,
         ] {
             let busy = HoverState {
@@ -1006,6 +1115,48 @@ mod tests {
             );
             assert_eq!(state, HoverState::new(), "{event:?} 应清空状态与定时器");
         }
+    }
+
+    #[test]
+    fn timer_due_for_generation_ignores_stale_generation_and_mismatched_kind() {
+        let show_due = HoverState {
+            visible: false,
+            pointer_inside: false,
+            pending: Some((PendingTimer::Show, 150)),
+        };
+        assert_eq!(
+            timer_due_for_generation(show_due, 150, PendingTimer::Show, 3, 4),
+            None
+        );
+        assert_eq!(
+            timer_due_for_generation(show_due, 150, PendingTimer::Hide, 3, 3),
+            None
+        );
+        assert_eq!(
+            timer_due_for_generation(show_due, 150, PendingTimer::Show, 3, 3),
+            Some(PopupAction::ShowNow)
+        );
+    }
+
+    #[test]
+    fn reconcile_hidden_window_state_self_heals_only_when_os_reports_hidden() {
+        let stuck_visible = HoverState {
+            visible: true,
+            pointer_inside: true,
+            pending: Some((PendingTimer::Hide, 500)),
+        };
+        assert_eq!(
+            reconcile_hidden_window_state(stuck_visible, Some(false)),
+            HoverState::new()
+        );
+        assert_eq!(
+            reconcile_hidden_window_state(stuck_visible, Some(true)),
+            stuck_visible
+        );
+        assert_eq!(
+            reconcile_hidden_window_state(stuck_visible, None),
+            stuck_visible
+        );
     }
 
     /// WebView 内部失焦但顶层仍有焦点时不隐藏；真实顶层失焦才隐藏。

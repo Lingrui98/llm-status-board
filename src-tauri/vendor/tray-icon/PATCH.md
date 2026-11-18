@@ -17,6 +17,16 @@ negotiation. If negotiation fails, callbacks retain the legacy interpretation.
 
 `notification.rs` accepts a fake Shell function so the app's unit tests exercise
 the actual registration and callback implementation on Linux, macOS and Windows.
+It also hosts `HoverTracker`, which fixes upstream `tray-icon` 0.25.1 Windows
+hover/leave state bugs that became critical without `NIF_SHOWTIP`:
+- Initial `Enter` now records `last_position` and arms the leave-poll timer,
+  and `WM_TIMER` keeps `last_position` intact while the cursor remains inside
+  the icon rect (instead of clearing it on the first 15ms tick).
+- Unavailable tray rects (e.g. closed Windows 11 overflow flyouts) emit
+  `Leave` and kill the timer instead of leaving `entered = true` stuck.
+- Version-4 `NIN_POPUPOPEN` / `NIN_POPUPCLOSE` notifications synchronize hover
+  state with cursor position and reset hover state when hiding the icon.
+
 The remaining platform backends and public API are unchanged.
 
 References:
@@ -24,4 +34,4 @@ References:
 - https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shell_notifyiconw
 
 Remove this patch when an upstream tray-icon release provides equivalent
-tooltip suppression and callback handling; update Cargo.lock at the same time.
+tooltip suppression, callback handling, and hover tracking; update Cargo.lock at the same time.
