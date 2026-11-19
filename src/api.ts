@@ -9,6 +9,8 @@ import type {
   UsageHistoryFile,
   UsageRecord,
   QuotaSample,
+  OpenAiFilterOption,
+  OpenAiUsageReport,
 } from "./types";
 
 export async function getConfig(): Promise<AppConfig> {
@@ -69,6 +71,11 @@ export async function getHistory(): Promise<BalanceSnapshot[]> {
 export const getQuotaHistory = (accountId: string, scope: string, since?: string) =>
   invoke<QuotaSample[]>("get_quota_history", { accountId, scope, since });
 
+export const getOpenAiUsageFilters = (accountId: string, projectId?: string) =>
+  invoke<OpenAiFilterOption[]>("get_openai_usage_filters", { accountId, projectId });
+
+export const getOpenAiUsageReport = (accountId: string, start: string, end: string, projectId?: string, apiKeyId?: string) =>
+  invoke<OpenAiUsageReport>("get_openai_usage_report", { accountId, start, end, projectId, apiKeyId });
 /// R15 本地用量历史（逐日总账，带版本封套）；文件缺失时后端返回空记录集
 export async function getUsageHistory(): Promise<UsageHistoryFile> {
   return invoke<UsageHistoryFile>("get_usage_history");

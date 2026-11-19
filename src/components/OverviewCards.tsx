@@ -14,6 +14,7 @@ interface Props {
   lastRefreshMs?: number | null;
   autoRefreshSec: number;
   todayKey?: string;
+  now?: number;
   onOpenNotifications?: () => void;
   onRefresh?: () => void;
 }
@@ -48,17 +49,22 @@ export default function OverviewCards({
   lastRefreshMs,
   autoRefreshSec,
   todayKey,
+  now = Date.now(),
   onOpenNotifications,
   onRefresh,
 }: Props) {
   const outcomes = useMemo(() => accounts.map((account) => statuses[account.id]).filter((o): o is RefreshOutcome => !!o), [accounts, statuses]);
   const okCount = outcomes.filter((o) => o.ok).length;
   const failCount = outcomes.length - okCount;
-  const today = todayKey ?? toLocalDateKey();
+  const today = todayKey ?? toLocalDateKey(new Date(now));
+  const utcToday = new Date(now).toISOString().slice(0, 10);
+  const costsDateHint = utcToday !== today && accounts.some((account) => account.kind === "openAi")
+    ? "OpenAI API 使用 UTC 日期，其他账号使用本地日期"
+    : undefined;
   const dailyCosts = useMemo(() => {
     const result: Record<string, { amount: number; accounts: number }> = {};
-    for (const outcome of outcomes) {
-      const costs = accountCostsForDate(outcome.info, today);
+    for (const account of accounts) {
+      const costs = accountCostsForDate(statuses[account.id]?.info, account.kind === "openAi" ? utcToday : today);
       for (const [rawCurrency, amount] of Object.entries(costs)) {
         const currency = dashboardCurrency(rawCurrency);
         const entry = result[currency] ?? { amount: 0, accounts: 0 };
@@ -68,7 +74,7 @@ export default function OverviewCards({
       }
     }
     return result;
-  }, [outcomes, today]);
+  }, [accounts, statuses, today, utcToday]);
 
   const balanceAccounts = (currency: "USD" | "CNY") =>
     outcomes.filter((o) => dashboardCurrency(o.info?.balance?.currency) === currency).length;
@@ -110,13 +116,13 @@ export default function OverviewCards({
       <article className="kpi-card">
         <span className="kpi-label">余额合计 · USD<KpiIcon kind="dollar" /></span>
         <span className="kpi-value kpi-money">${totals.usd.toFixed(2)}</span>
-        <span className="kpi-hint muted">{balanceAccounts("USD")} 个账号 · {costHint("USD")}</span>
+        <span className="kpi-hint muted" title={costsDateHint}>{balanceAccounts("USD")} 个账号 · {costHint("USD")}</span>
       </article>
 
       <article className="kpi-card">
         <span className="kpi-label">余额合计 · CNY<KpiIcon kind="yuan" /></span>
         <span className="kpi-value kpi-money">¥{totals.cny.toFixed(2)}</span>
-        <span className="kpi-hint muted">{balanceAccounts("CNY")} 个账号 · {costHint("CNY")}</span>
+        <span className="kpi-hint muted" title={costsDateHint}>{balanceAccounts("CNY")} 个账号 · {costHint("CNY")}</span>
       </article>
 
       {onRefresh ? (

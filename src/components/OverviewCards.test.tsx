@@ -33,6 +33,18 @@ function success(id: string, currency: "USD" | "CNY", balance: number, cost: num
 }
 
 describe("OverviewCards", () => {
+  it("跨 UTC 午夜后，总览与 OpenAI 卡片使用同一天的费用", () => {
+    const openai = { ...account("openai"), kind: "openAi" as const };
+    const status = success("openai", "USD", 0, 11);
+    status.info!.balance = null;
+    status.info!.dailyUsage!.push({ date: "2026-10-28", cost: 2, costUnit: "USD" });
+    render(<OverviewCards accounts={[openai]} statuses={{ openai: status }} totals={{ usd: 0, cny: 0 }}
+      refreshing={false} lastRefreshAt={null} autoRefreshSec={0} todayKey="2026-10-27"
+      now={Date.parse("2026-10-28T00:30:00Z")} />);
+    expect(screen.getByText(/今日 −\$2\.00/)).toBeTruthy();
+    expect(screen.queryByText(/今日 −\$11\.00/)).toBeNull();
+  });
+
   it("按启用账号汇总状态、今日费用，并提供异常与刷新入口", () => {
     const accounts = [account("a"), account("b"), account("c"), account("disabled", false)];
     const statuses: Record<string, RefreshOutcome> = {

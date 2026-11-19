@@ -45,7 +45,7 @@ const AUTH_FIELDS: Record<ProviderKind, AuthField[]> = {  oneApi: [
     { field: "apiKey", label: "API Key", placeholder: "sk-...", type: "password" },
   ],
   openAi: [
-    { field: "apiKey", label: "API Key（需要管理员权限）", placeholder: "sk-admin-... 或 sk-svcacct-...", type: "password", hint: "查询组织用量需要 admin 权限的 key" },
+    { field: "apiKey", label: "API Platform Admin Key", placeholder: "sk-admin-...", type: "password", hint: "用于只读查询组织费用和用量。站点地址使用 https://api.openai.com。" },
   ],
   openAiSubscription: [
     { field: "token", label: "ChatGPT Access Token", placeholder: "ChatGPT 登录访问令牌（不是 sk- API Key）", type: "password" },
@@ -156,7 +156,7 @@ export default function AccountForm({ initial, onSubmit, onCancel }: Props) {
       }
       const parts: string[] = [];
       if (info.balance) parts.push(`余额 ${formatMoney(info.balance)}`);
-      if (info.used) parts.push(`已用 ${formatMoney(info.used)}`);
+      if (info.used) parts.push(`${acc.kind === "openAi" ? "本月花费" : "已用"} ${formatMoney(info.used)}`);
       if (info.requests !== null && info.requests !== undefined) parts.push(`请求 ${formatNumber(info.requests)}`);
       if (acc.kind === "openAiSubscription") {
         for (const window of info.quotaWindows ?? []) {

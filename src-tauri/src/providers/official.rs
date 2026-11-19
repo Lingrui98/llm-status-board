@@ -11,13 +11,12 @@
 use crate::http;
 use crate::jsonpath::{lookup_number, lookup_string};
 use crate::types::{AccountConfig, AccountInfo, KeyValue, Money, ProviderKind};
-use chrono::Datelike;
 use serde_json::Value;
 
 pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
     match acc.kind {
         ProviderKind::DeepSeek => deepseek(client, acc).await,
-        ProviderKind::OpenAi => openai(client, acc).await,
+        ProviderKind::OpenAi => super::openai_api::fetch(client, acc).await,
         ProviderKind::SiliconFlow => siliconflow(client, acc).await,
         ProviderKind::Moonshot => moonshot(client, acc).await,
         ProviderKind::Zhipu => zhipu(client, acc).await,
@@ -30,20 +29,6 @@ pub async fn fetch(client: &reqwest::Client, acc: &AccountConfig) -> Result<Acco
 
 fn unsupported(msg: &str) -> Result<AccountInfo, String> {
     Err(msg.to_string())
-}
-
-/// URL 组件百分号编码（用于分页游标等不透明参数）
-fn encode_uri_component(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
 }
 
 fn need_key(acc: &AccountConfig) -> Result<String, String> {
@@ -517,90 +502,8 @@ async fn zhipu(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountI
     }
 }
 
-/// OpenAI: GET {base}/v1/organization/costs（本月成本，分页累计；需要 Admin key）
-async fn openai(client: &reqwest::Client, acc: &AccountConfig) -> Result<AccountInfo, String> {
-    let key = need_key(acc)?;
-    let base = acc.base();
-
-    let now = chrono::Utc::now();
-    let month_start =
-        chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, now.year(), now.month(), 1, 0, 0, 0)
-            .single()
-            .ok_or("计算月份失败")?;
-
-    let mut total = 0.0;
-    let mut page: Option<String> = None;
-    let mut currency = "usd".to_string();
-    let mut raw_sample: Option<Value> = None;
-
-    for _ in 0..12 {
-        let mut url = format!(
-            "{base}/v1/organization/costs?start_time={}&end_time={}&limit=31",
-            month_start.timestamp(),
-            now.timestamp()
-        );
-        if let Some(p) = &page {
-            // 分页游标是不透明字符串，必须做 URL 编码
-            url.push_str(&format!("&page={}", encode_uri_component(p)));
-        }
-        let (hk, hv) = http::bearer(&key);
-        let v = http::send_json(client, "GET", &url, &[(hk.as_str(), hv)], None).await?;
-        if raw_sample.is_none() {
-            raw_sample = Some(v.clone());
-        }
-        if let Some(items) = v.get("data").and_then(|d| d.as_array()) {
-            for item in items {
-                if let Some(results) = item.get("results").and_then(|r| r.as_array()) {
-                    for r in results {
-                        let name = r.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                        if name == "total" || name.is_empty() {
-                            if let Some(value) = lookup_number(r, "amount.value") {
-                                total += value;
-                            }
-                            if let Some(c) = lookup_string(r, "amount.currency") {
-                                currency = c;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let has_more = v.get("has_more").and_then(|h| h.as_bool()).unwrap_or(false);
-        if !has_more {
-            break;
-        }
-        page = v
-            .get("next_page")
-            .and_then(|p| p.as_str())
-            .map(|s| s.to_string());
-        if page.is_none() {
-            break;
-        }
-    }
-
-    Ok(AccountInfo {
-        balance: None,
-        used: Some(Money {
-            amount: total,
-            currency: currency.to_uppercase(),
-        }),
-        total: None,
-        requests: None,
-        note: Some(
-            "OpenAI 本月用量（需 Admin key；官方无余额查询接口，剩余额度请在平台后台查看）".into(),
-        ),
-        extras: Vec::new(),
-        raw: raw_sample,
-        fetched_at: crate::types::now_iso(),
-        new_token: None,
-        new_refresh_token: None,
-        ..Default::default()
-    })
-}
-
 #[cfg(test)]
 mod tests {
-    use super::encode_uri_component;
 
     /// Kimi 订阅形态 C（2026-09/10 起）：usages{limit_5h:{used_ratio,reset_time},...}
     #[test]
@@ -684,16 +587,5 @@ mod tests {
             "https://api.kimi.com".to_string()
         };
         assert_eq!(fixed, "https://api.kimi.com");
-    }
-
-    #[test]
-    fn test_encode_uri_component() {
-        assert_eq!(encode_uri_component("abc123-_."), "abc123-_.");
-        // 空格、&、=、+ 等会被编码
-        assert_eq!(encode_uri_component("a b"), "a%20b");
-        assert_eq!(encode_uri_component("a&b=c"), "a%26b%3Dc");
-        assert_eq!(encode_uri_component("pg+_cursor/"), "pg%2B_cursor%2F");
-        // 中文字节全部编码
-        assert_eq!(encode_uri_component("密"), "%E5%AF%86");
     }
 }

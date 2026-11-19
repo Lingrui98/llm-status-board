@@ -21,7 +21,7 @@
 | 提供商 | 接口 | 说明 |
 |---|---|---|
 | DeepSeek | `GET /user/balance` | 充值/赠送余额，CNY/USD |
-| OpenAI API | `GET /v1/organization/costs` | 本月用量（需 Admin key；OpenAI 不提供 key 级余额） |
+| OpenAI API | `/v1/organization/costs`、`/usage/completions`、`/spend_limit`（组织接口） | API Platform Admin Key |
 | OpenAI 订阅（Codex） | `GET https://chatgpt.com/backend-api/wham/usage` | ChatGPT 登录凭据；订阅窗口的已用/剩余比例及重置时间 |
 | SiliconFlow 硅基流动 | `GET /v1/user/info` | 总余额/充值/赠送，币种按域名（.cn=CNY） |
 | Moonshot / Kimi | 按 Key 前缀自动分流 | `sk-kimi-`（Kimi for Coding 订阅）→ 查订阅额度：5h/7d/月度窗口、并发、加油包；其他 `sk-` → 开放平台余额接口 |
@@ -125,6 +125,15 @@ macOS 出 `.app` / `.dmg`（需要 Mac 上构建或用下方 CI）。
 余额历史按账号分别保留 **最近 90 天、最多 150,000 条**，不再由全部账号共享 2,000 条上限。按每分钟一条计算，单账号 90 天约 129,600 条；更高频采样可能先达到条数上限。金额不变的成功查询也记录时间，重复的同一采样点去重。大量历史仅在绘图时减少点数，保留首末值和极值；原始记录仍按上述期限与条数保存。未采集或已清理的数据无法补回。
 
 每日消费账本独立于曲线保留策略：成功刷新先原子保存消费增量和处理基准，再清理旧快照，淘汰部分日期的曲线不会覆盖整日累计。重复刷新和重启不会重复入账；账本写入失败时保留未裁剪快照并提示，后续刷新可重试。升级时保留旧账本已有累计；已被旧版本覆盖且原始快照已清理的金额无法保证恢复。消费仍是本地余额差分估算，不能代替提供商账单。同一账号同一天的账本只保存一种币种，切换币种不会改写或混加已有日累计。
+
+### 官方提供商：OpenAI API 组织用量
+
+选择「OpenAI API」，使用 `https://api.openai.com` 和有读取权限的 API Platform Admin Key。每个组织添加一次即可，在详情中按项目和项目 Key 筛选。
+
+- 卡片显示 UTC 今日费用、组织本月花费和查询到的组织月度上限。上限只有在启用执行时才显示使用进度。账户预付 Credits 在 OpenAI 控制台 Billing 页面查看。
+- 全局统计纳入最近 30 个 UTC 日的每日费用、模型请求次数和 Token 用量。费用可按币种切换，模型用量可按请求数或 Token 合并排行。其他站点按各自返回的时段列入模型排行。
+- 详情支持本月、7／30／90 天和自定义日期，显示每日花费、月内累计花费、Token 和模型请求数，以及所选范围的模型用量排名。Token 和请求数来自 Responses／Chat Completions，成本覆盖 Costs 接口返回的收费项。今日数据可能延迟。
+- 费用与用量各自查询。项目与 Key 筛选选项、组织上限需要相应的读取权限。
 
 ### 官方提供商：ChatGPT 订阅中的 Codex 额度
 

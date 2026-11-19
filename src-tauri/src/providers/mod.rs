@@ -3,6 +3,7 @@ pub mod custom;
 pub mod modelserver;
 pub mod official;
 pub mod oneapi;
+pub mod openai_api;
 pub mod openai_subscription;
 pub mod sub2api;
 

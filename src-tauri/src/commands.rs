@@ -1,7 +1,9 @@
 use crate::config;
 use crate::http;
 use crate::providers;
-use crate::types::{AccountConfig, AccountInfo, AppConfig, BalanceSnapshot, RefreshOutcome};
+use crate::types::{
+    AccountConfig, AccountInfo, AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome,
+};
 use futures::future::join_all;
 use tauri::AppHandle;
 
@@ -96,7 +98,12 @@ pub async fn import_config(app: AppHandle, path: String) -> Result<AppConfig, St
 #[tauri::command]
 pub async fn test_account(app: AppHandle, account: AccountConfig) -> Result<AccountInfo, String> {
     let cfg = config::load(&app)?;
-    let client = http::make_client(cfg.settings.proxy.as_deref())?;
+    let proxy = cfg.settings.proxy.as_deref();
+    let client = if account.kind == ProviderKind::OpenAi {
+        http::make_no_redirect_client(proxy)?
+    } else {
+        http::make_client(proxy)?
+    };
     let info = providers::fetch_account(&client, &account).await?;
 
     // 一次性 refresh token 轮换回写：如果测试的是已保存在配置里的账号，
@@ -132,9 +139,18 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
     let client = http::make_client(cfg.settings.proxy.as_deref())?;
 
     let enabled: Vec<AccountConfig> = cfg.accounts.iter().filter(|a| a.enabled).cloned().collect();
+    let admin_client = if enabled.iter().any(|a| a.kind == ProviderKind::OpenAi) {
+        http::make_no_redirect_client(cfg.settings.proxy.as_deref())?
+    } else {
+        client.clone()
+    };
 
     let tasks = enabled.into_iter().map(|acc| {
-        let client = client.clone();
+        let client = if acc.kind == ProviderKind::OpenAi {
+            admin_client.clone()
+        } else {
+            client.clone()
+        };
         async move {
             let id = acc.id.clone();
             match providers::fetch_account(&client, &acc).await {
@@ -239,6 +255,53 @@ pub async fn refresh_all(app: AppHandle) -> Result<Vec<RefreshOutcome>, String> 
     }
 
     Ok(outcomes)
+}
+
+fn openai_account(
+    app: &AppHandle,
+    account_id: &str,
+) -> Result<(AccountConfig, reqwest::Client), String> {
+    let cfg = config::load(app)?;
+    let account = cfg
+        .accounts
+        .into_iter()
+        .find(|a| a.id == account_id && a.kind == ProviderKind::OpenAi && a.enabled)
+        .ok_or_else(|| "找不到已启用的 OpenAI API 组织账号".to_string())?;
+    Ok((
+        account,
+        http::make_no_redirect_client(cfg.settings.proxy.as_deref())?,
+    ))
+}
+
+#[tauri::command]
+pub async fn get_openai_usage_filters(
+    app: AppHandle,
+    account_id: String,
+    project_id: Option<String>,
+) -> Result<Vec<providers::openai_api::OptionItem>, String> {
+    let (account, client) = openai_account(&app, &account_id)?;
+    providers::openai_api::filters(&client, &account, project_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn get_openai_usage_report(
+    app: AppHandle,
+    account_id: String,
+    start: String,
+    end: String,
+    project_id: Option<String>,
+    api_key_id: Option<String>,
+) -> Result<providers::openai_api::Report, String> {
+    let (account, client) = openai_account(&app, &account_id)?;
+    providers::openai_api::report(
+        &client,
+        &account,
+        &start,
+        &end,
+        project_id.as_deref(),
+        api_key_id.as_deref(),
+    )
+    .await
 }
 
 fn balance_snapshots(outcomes: &[RefreshOutcome], ts: &str) -> Vec<BalanceSnapshot> {

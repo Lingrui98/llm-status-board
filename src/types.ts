@@ -220,6 +220,13 @@ export interface UsageHistoryFile {
 
 export interface AccountInfo {
   balance?: Money | null;
+  openAiBilling?: {
+    spendLimit: Money | null;
+    enforcing: boolean;
+    limitError: string | null;
+    costsError?: string | null;
+    usageError?: string | null;
+  } | null;
   used?: Money | null;
   total?: Money | null;
   requests?: number | null;
@@ -239,6 +246,24 @@ export interface AccountInfo {
   quotaScope?: string | null;
   quotaHistoryError?: string | null;
 }
+
+export interface OpenAiUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number | null;
+  cacheWriteTokens: number | null;
+  requests: number;
+}
+
+export interface OpenAiUsageReport {
+  days: ({ date: string; cost: number | null; monthToDate: number | null } & Partial<OpenAiUsageTotals>)[];
+  models: ({ name: string } & OpenAiUsageTotals)[];
+  currency: string | null;
+  costsError: string | null;
+  usageError: string | null;
+}
+
+export interface OpenAiFilterOption { id: string; name: string }
 
 export interface RefreshOutcome {
   accountId: string;

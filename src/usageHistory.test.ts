@@ -89,6 +89,18 @@ describe("usageHistory：日期键（时区无关）", () => {
 });
 
 describe("usageHistory：§1.2 A 站点行", () => {
+  it("OpenAI 费用与用量分别刷新时保留同日已入账字段，明确的零仍覆盖旧值", () => {
+    const date = "2026-06-15";
+    const openAiBilling = { spendLimit: null, enforcing: false, limitError: null };
+    const batch = (point: NonNullable<NonNullable<RefreshOutcome["info"]>["dailyUsage"]>[number], existing: UsageRecord[] = []) =>
+      buildUsageBatch([outcome("openai", { openAiBilling, dailyUsage: [{ ...point, date }] })], existing, ["openai"], UPDATED).records;
+    const initial = batch({ cost: 10, costUnit: "USD", requests: 20, inputTokens: 80, outputTokens: 20, tokens: 100 });
+    const costRefresh = batch({ cost: 11, costUnit: "USD" }, initial);
+    expect(costRefresh[0]).toMatchObject({ cost: 11, currency: "USD", requests: 20, inputTokens: 80, outputTokens: 20, tokens: 100 });
+    const usageRefresh = batch({ requests: 0, inputTokens: 0, outputTokens: 0, tokens: 0 }, costRefresh);
+    expect(usageRefresh[0]).toMatchObject({ cost: 11, currency: "USD", requests: 0, inputTokens: 0, outputTokens: 0, tokens: 0 });
+  });
+
   it("每个 dailyUsage 日期产出一行，字段原样带上，source=site", () => {
     const rows = siteRecordsFromOutcomes(
       [

@@ -13,6 +13,7 @@ import DetailDrawer from "./DetailDrawer";
 import DrawerSection from "./DrawerSection";
 import AccountTrends from "./AccountTrends";
 import QuotaHistory, { QuotaMini } from "./QuotaHistory";
+import OpenAiUsagePanel from "./OpenAiUsagePanel";
 import { mainSubscriptionWindow } from "../quotaHistory";
 import { useQuotaHistory } from "../useQuotaHistory";
 import { pickPrimaryMetric, readBalanceCredits } from "../primaryMetric";
@@ -115,6 +116,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   const st = statusClass(outcome, refreshing);
   const brand = providerBrand(account.kind);
   const subscription = account.kind === "openAiSubscription";
+  const openAi = account.kind === "openAi";
   // 当前刷新失败时，历史视图仍使用本账号最近一次已识别工作区的成功信息。
   const historyInfoRef = useRef<{ accountId: string; info: AccountInfo } | null>(null);
   const lastSuccessRef = useRef<{ accountId: string; info: AccountInfo } | null>(null);
@@ -177,7 +179,15 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
   }
 
   const balance = info?.balance ?? null;
-  const balanceParts = formatMoneyParts(balance);
+  const utcToday = new Date(now ?? Date.now()).toISOString().slice(0, 10);
+  const monthSpend = openAi && info && new Date(info.fetchedAt).toJSON()?.slice(0, 7) === utcToday.slice(0, 7) ? info.used : null;
+  const primaryMoney = openAi ? monthSpend : balance;
+  const balanceParts = formatMoneyParts(primaryMoney);
+  const openAiLimit = info?.openAiBilling?.spendLimit;
+  if (openAi && info?.openAiBilling?.enforcing && openAiLimit && openAiLimit.amount > 0
+    && monthSpend?.currency === openAiLimit.currency) {
+    pct = Math.max(0, (monthSpend.amount / openAiLimit.amount) * 100);
+  }
   const lowBalance = balance !== null && balance.amount >= 0 && balance.amount < 1 && (balance.currency === "USD" || balance.currency === "CNY");
 
   // R19 主指标：订阅制（有窗口且余额为 0/null）以「订阅剩余百分比」为主；否则余额为主（§1）
@@ -200,7 +210,7 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
 
   const ago = info ? formatTimeAgo(info.fetchedAt, now ?? Date.now()) : null;
 
-  const todayCost = accountCostForDate(info, todayKey ?? toLocalDateKey());
+  const todayCost = accountCostForDate(info, openAi ? utcToday : todayKey ?? toLocalDateKey());
   const todayCostParts = todayCost
     ? formatMoneyParts({ amount: Math.abs(todayCost.amount), currency: todayCost.currency })
     : null;
@@ -245,10 +255,10 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
       }`
     : null;
 
-  const showUsedRow = !subscription && info?.used != null;
-  const showTotalRow = !subscription && info?.total != null;
+  const showUsedRow = !openAi && !subscription && info?.used != null;
+  const showTotalRow = !openAi && !subscription && info?.total != null;
   const showRequestsRow = info?.requests !== null && info?.requests !== undefined;
-  const hasCardRows =
+  const hasCardRows = openAi ||
     (metric.kind === "quota" && balance !== null && balance.amount > 0) ||
     (metric.kind === "quota" && credits !== null && !extrasHasCreditsRow) ||
     showUsedRow ||
@@ -314,12 +324,12 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           </>
         ) : (
           <>
-            <span className="balance-label">{subscription ? "订阅剩余" : "余额"}</span>
+            <span className="balance-label">{openAi ? "本月花费 · UTC" : subscription ? "订阅剩余" : "余额"}</span>
             <span className={`balance-value${lowBalance ? " low" : ""}`}>
               {balanceParts ? (
                 <>
                   {/* 完整字符串给读屏与测试定位用；视觉层拆成「大数字 + 小号上标货币」 */}
-                  <span className="sr-only">{formatMoney(balance)}</span>
+                  <span className="sr-only">{formatMoney(primaryMoney)}</span>
                   <span className="balance-num" aria-hidden="true">
                     {balanceParts.num}
                   </span>
@@ -334,17 +344,17 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           </>
         )}
         </div>
-        {todayCostText && <span className="balance-delta">{todayCostText}</span>}
+        {!openAi && todayCostText && <span className="balance-delta">{todayCostText}</span>}
       </div>
 
       {pct !== null && (
         <div className="usage-block">
           <div className="usage-head">
-            <span>额度使用</span>
+            <span>{openAi ? "月度上限使用" : "额度使用"}</span>
             <span className={`usage-pct ${usageLevel(pct)}`}>{pct.toFixed(0)}%</span>
           </div>
           <div className="usage-bar">
-            <div className={`usage-bar-fill ${usageLevel(pct)}`} style={{ width: `${pct.toFixed(1)}%` }} />
+            <div className={`usage-bar-fill ${usageLevel(pct)}`} style={{ width: `${Math.min(100, pct).toFixed(1)}%` }} />
           </div>
         </div>
       )}
@@ -355,6 +365,27 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
 
       {hasCardRows && (
       <div className="card-rows">
+        {openAi && <>
+          <div className="card-row">
+            <span className="row-label">今日花费</span>
+            <span className="row-value" title={info?.openAiBilling?.costsError ?? undefined}>
+              {info?.openAiBilling?.costsError ? "查询失败" : formatMoney(todayCost)}
+            </span>
+          </div>
+          {info?.openAiBilling?.usageError && (
+            <div className="card-row">
+              <span className="row-label">模型用量</span>
+              <span className="row-value" title={info.openAiBilling.usageError}>查询失败</span>
+            </div>
+          )}
+          <div className="card-row">
+            <span className="row-label">组织月度上限</span>
+            <span className="row-value" title={info?.openAiBilling?.limitError ?? undefined}>
+              {openAiLimit ? `${formatMoney(openAiLimit)}${info?.openAiBilling?.enforcing ? "" : " · 未执行"}`
+                : info?.openAiBilling ? (info.openAiBilling.limitError ? "不可用" : "未设置") : "—"}
+            </span>
+          </div>
+        </>}
         {/* R19 次级口径：订阅主指标时，余额 >0 才显示钱包余额；raw.balance_credits >0 显示充值余额
             （若 extras 里已有后端下发的「充值余额」，则不重复渲染同一口径） */}
         {metric.kind === "quota" && balance !== null && balance.amount > 0 && (
@@ -502,7 +533,8 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
           onClose={() => setDetailOpen(false)}
         >
           <div className="drawer-charts">
-            {subscription ? <QuotaHistory key={`${account.id}:${historyInfo?.quotaScope ?? ""}`} samples={quotaHistory.samples} info={historyInfo} error={quotaHistory.error} now={historyNow} /> : <>
+            {openAi ? <OpenAiUsagePanel key={account.id} accountId={account.id} fetchedAt={info?.fetchedAt} now={now ?? historyNow} />
+            : subscription ? <QuotaHistory key={`${account.id}:${historyInfo?.quotaScope ?? ""}`} samples={quotaHistory.samples} info={historyInfo} error={quotaHistory.error} now={historyNow} /> : <>
             <AccountTrends accountId={account.id} snapshots={snapshots} info={info} now={historyNow} balanceEmptyNote={chartEmptyNote("balance")} />
             <DrawerSection title="额度构成" hasData={flags.breakdown} emptyNote={chartEmptyNote("breakdown")}>
               <BalanceBreakdownChart info={info} emptyNote={chartEmptyNote("breakdown")} />
@@ -559,9 +591,6 @@ export default function ProviderCard({ account, outcome, refreshing, snapshots, 
     }
     if (kind === "moonshot" && dimension === "balance") {
       return "订阅模式按窗口额度计费，没有余额概念（加油包/会员等级见卡片统计行）";
-    }
-    if (kind === "openAi" && dimension !== "balance" && dimension !== "breakdown") {
-      return "此图表依赖站点返回的按日/按模型统计；OpenAI 成本接口仅有按月聚合";
     }
     if (dimension === "breakdown") {
       return "该账号既无总额度/余额构成，也无配额窗口数据，无法绘制额度构成";
