@@ -60,6 +60,7 @@ function renderCard(props: {
   snapshots?: BalanceSnapshot[];
   id?: string;
   todayKey?: string;
+  now?: number;
   outcome?: RefreshOutcome;
   onRetry?: () => void;
   onEdit?: () => void;
@@ -72,7 +73,7 @@ function renderCard(props: {
       outcome={props.outcome ?? outcome(props.info === undefined ? info() : props.info, id)}
       refreshing={false}
       snapshots={props.snapshots ?? []}
-      now={Date.now()}
+      now={props.now ?? Date.now()}
       todayKey={props.todayKey}
       onRetry={props.onRetry}
       onEdit={props.onEdit}
@@ -102,6 +103,29 @@ describe("ProviderCard：AiHubMix", () => {
     fireEvent.click(screen.getByRole("button", { name: /详情/ }));
     expect(screen.getAllByText("AiHubMix 计费接口仅提供累计用量，无按日、按模型或 Token 明细").length).toBeGreaterThan(0);
   });
+});
+
+it("OpenAI API card displays real UTC costs and a separate enforced organization limit", () => {
+  renderCard({
+    account: account("openai", "openAi", "OpenAI API"),
+    now: Date.parse("2026-11-18T00:30:00Z"),
+    todayKey: "2026-11-17",
+    info: info({
+      fetchedAt: "2026-11-18T00:29:00Z",
+      used: { amount: 90, currency: "USD" },
+      openAiBilling: { spendLimit: { amount: 100, currency: "USD" }, enforcing: true, limitError: null },
+      dailyUsage: [
+        { date: "2026-11-17", cost: 5, costUnit: "USD" },
+        { date: "2026-11-18", cost: 2, costUnit: "USD" },
+      ],
+    }),
+  });
+  expect(tileText(".balance-label")).toBe("本月花费 · UTC");
+  expect(tileText(".balance-num")).toBe("90.00");
+  expect(screen.getByText("2.00 USD")).toBeTruthy();
+  expect(screen.queryByText("5.00 USD")).toBeNull();
+  expect(screen.getByText("100.00 USD")).toBeTruthy();
+  expect(screen.getByText("90%")).toBeTruthy();
 });
 
 describe("ProviderCard：订阅主指标（AC-4）", () => {

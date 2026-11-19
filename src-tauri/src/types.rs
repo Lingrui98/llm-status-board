@@ -405,9 +405,22 @@ pub struct QuotaWindow {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[derive(Default)]
+pub struct OpenAiBilling {
+    pub spend_limit: Option<Money>,
+    pub enforcing: bool,
+    pub limit_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub costs_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountInfo {
     pub balance: Option<Money>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_ai_billing: Option<OpenAiBilling>,
     pub used: Option<Money>,
     pub total: Option<Money>,
     pub requests: Option<i64>,

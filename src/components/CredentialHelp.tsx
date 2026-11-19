@@ -105,14 +105,14 @@ export const CREDENTIAL_GUIDES: Record<ProviderKind, CredentialGuide> = {
     note: "展示充值 / 赠送余额，支持 CNY 与 USD。",
   },
   openAi: {
-    need: "管理员权限的 API Key（sk-admin-... 或 sk-svcacct-...）。",
+    need: "OpenAI API Platform 的组织 Admin Key（sk-admin-...）。",
     steps: [
       "打开 platform.openai.com 并登录",
-      "创建带 admin 权限的 key（普通 sk- key 无法查询组织用量）",
-      "填入「API Key」—— 查询的是本月组织用量（OpenAI 不提供 key 级余额）",
+      "在组织设置创建 Admin Key，按需授权读取费用、用量、项目和消费上限",
+      "填入「API Platform Admin Key」，测试连接后保存",
     ],
     copyables: [{ label: "开放平台", value: "https://platform.openai.com" }],
-    note: "访问 OpenAI 接口通常需要代理：在「设置 → 通用设置」里填写网络代理（http:// 或 socks5://）。",
+    note: "费用按 UTC 统计，账户 Credits 余额可在 OpenAI 平台的 Billing 页面查看。需要代理时请在通用设置配置。",
   },
   openAiSubscription: {
     need: "ChatGPT Plus/Pro/团队等套餐的 Codex 登录凭据；API 平台的 sk- Key 无法查询订阅额度。",

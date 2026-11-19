@@ -61,7 +61,7 @@ export function isValidDateKey(date: string): boolean {  if (!DATE_RE.test(date)
 }
 
 /** token 口径（与 reportCsv.ts#tokenCell 一致）：优先 tokens，否则 input+output，两者都缺 → null */
-export function totalTokens(r: Pick<UsageRecord, "tokens" | "inputTokens" | "outputTokens">): number | null {
+export function totalTokens(r: Partial<Pick<UsageRecord, "tokens" | "inputTokens" | "outputTokens">>): number | null {
   if (typeof r.tokens === "number" && Number.isFinite(r.tokens)) return r.tokens;
   const hasIn = typeof r.inputTokens === "number" && Number.isFinite(r.inputTokens);
   const hasOut = typeof r.outputTokens === "number" && Number.isFinite(r.outputTokens);
@@ -123,8 +123,10 @@ export interface BuiltUsageBatch {
 export function siteRecordsFromOutcomes(
   outcomes: readonly RefreshOutcome[],
   updatedAt: string,
+  existing: readonly UsageRecord[] = [],
 ): UsageRecord[] {
   const out: UsageRecord[] = [];
+  const previousSite = new Map(existing.filter((record) => record.source === "site").map((record) => [recordKey(record), record]));
   for (const o of outcomes) {
     if (!o.ok || !o.info) continue;
     const daily = o.info.dailyUsage ?? [];
@@ -146,6 +148,18 @@ export function siteRecordsFromOutcomes(
         updatedAt,
       };
       if (isEmptyUsageRow(record)) continue; // 全空行不落盘
+      if (o.info.openAiBilling) {
+        // Costs 和 Usage 独立返回。缺失字段沿用同日已保存的值，明确返回的 0 正常覆盖。
+        const previous = previousSite.get(recordKey(record));
+        if (previous) {
+          if (record.currency === "UNKNOWN") record.currency = previous.currency;
+          if (record.currency === previous.currency) record.cost ??= previous.cost;
+          record.requests ??= previous.requests;
+          record.inputTokens ??= previous.inputTokens;
+          record.outputTokens ??= previous.outputTokens;
+          record.tokens ??= previous.tokens;
+        }
+      }
       out.push(record);
     }
   }
@@ -168,6 +182,7 @@ export function localRecordsFromUsedCounter(
   const out: UsageRecord[] = [];
   for (const o of outcomes) {
     if (!o.ok || !o.info || !o.info.used) continue;
+    if (o.info.openAiBilling) continue; // Costs 已提供每日实账，跨月累计金额不能用于差分。
     if (o.info.balance) continue; // 有余额走 B1，不走 used 计数器
     const usedNow = numOrNull(o.info.used.amount);
     if (usedNow === null) continue;
@@ -230,7 +245,7 @@ export function buildUsageBatch(
   const enabled = new Set(accountIds);
   const scopedOutcomes = outcomes.filter((o) => enabled.has(o.accountId) && !o.historyError);
 
-  const site = siteRecordsFromOutcomes(scopedOutcomes, updatedAt);
+  const site = siteRecordsFromOutcomes(scopedOutcomes, updatedAt, existing);
   const localUsed = localRecordsFromUsedCounter(scopedOutcomes, existing, updatedAt, dateKey, usedModeSince);
 
   // 同一 (账号,日期) 的 used 行合并；不从曲线快照重算余额消费。

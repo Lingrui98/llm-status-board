@@ -33,7 +33,7 @@ fn oauth_client() -> Result<reqwest::Client, String> {
         .ok_or("ChatGPT 配置目录无效")?
         .join("config.json");
     let cfg = crate::config::load_from_path(&config_path)?;
-    crate::http::make_oauth_client(cfg.settings.proxy.as_deref())
+    crate::http::make_no_redirect_client(cfg.settings.proxy.as_deref())
 }
 
 pub(crate) async fn credentials(

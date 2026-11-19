@@ -8,17 +8,17 @@ pub fn make_client(proxy: Option<&str>) -> Result<Client, String> {
     build_client(proxy, false)
 }
 
-/// Authorization codes and refresh tokens must never be forwarded by a redirect.
-pub(crate) fn make_oauth_client(proxy: Option<&str>) -> Result<Client, String> {
+/// Keep OAuth and organization credentials on the exact requested endpoint.
+pub(crate) fn make_no_redirect_client(proxy: Option<&str>) -> Result<Client, String> {
     build_client(proxy, true)
 }
 
-fn build_client(proxy: Option<&str>, oauth: bool) -> Result<Client, String> {
+fn build_client(proxy: Option<&str>, no_redirect: bool) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(15))
         .user_agent("llm-status-board/0.1");
-    if oauth {
+    if no_redirect {
         builder = builder.redirect(reqwest::redirect::Policy::none());
     }
     if let Some(p) = proxy.map(str::trim).filter(|p| !p.is_empty()) {

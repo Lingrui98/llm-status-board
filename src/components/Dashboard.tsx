@@ -8,7 +8,7 @@ import InsightsPanel from "./InsightsPanel";
 import AnalysisView from "./AnalysisView";
 import type { AppConfig, BalanceSnapshot, ProviderKind, RefreshOutcome, UsageRecord } from "../types";
 import { aggregateBalances } from "../balances";
-import { toLocalDateKey } from "../usageHistory";
+import { toLocalDateKey, totalTokens } from "../usageHistory";
 import { normalizeLocalDay } from "../localDay";
 
 interface Props {
@@ -72,7 +72,7 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
       const daily = (info?.dailyUsage ?? []).some(
         (point) => !!point.date && !!normalizeLocalDay(point.date) && (finite(point.requests) || finite(point.cost)),
       );
-      const models = (info?.modelUsage ?? []).some((point) => !!point.model && finite(point.requests));
+      const models = (info?.modelUsage ?? []).some((point) => !!point.model && (finite(point.requests) || totalTokens(point) !== null));
       return daily || models;
     });
     if (hasUsage) return true;
@@ -147,11 +147,12 @@ export default function Dashboard({ config, statuses, refreshing, lastRefreshAt,
         lastRefreshMs={lastRefreshMs}
         autoRefreshSec={autoRefreshSec}
         todayKey={todayKey}
+        now={now}
         onOpenNotifications={onOpenNotifications}
         onRefresh={onRefresh}
       />
 
-      {hasStats && <GlobalStatsCard accounts={enabled} statuses={statuses} snapshots={snapshots} />}
+      {hasStats && <GlobalStatsCard accounts={enabled} statuses={statuses} snapshots={snapshots} now={now} />}
 
       {/* 各列独立累计高度，避免普通 Grid 的行高耦合；保留 enabled 的原始顺序。 */}
       <MasonryGrid>

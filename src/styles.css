@@ -1024,6 +1024,37 @@ button.error-copy.copied .copy-hint {
 }
 
 .account-trends { gap: 18px; }
+
+.openai-usage-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr));
+  gap: 10px;
+}
+.openai-usage-filters .form-field { min-width: 0; }
+.openai-usage-filters select,
+.openai-usage-filters input { width: 100%; min-width: 0; }
+.openai-usage-range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.openai-model-table { overflow-x: auto; }
+.openai-model-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.openai-model-table th, .openai-model-table td {
+  padding: 8px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.openai-model-table th:first-child { text-align: left; overflow-wrap: anywhere; }
+.openai-model-table thead { color: var(--text-2); }
+
 .trend-range-buttons { display: flex; flex-wrap: wrap; gap: 5px; }
 .trend-range-buttons button {
   padding: 5px 9px;
@@ -1438,6 +1469,28 @@ button.error-copy.copied .copy-hint {
 .chart-with-tabs .chart-box,
 .chart-with-tabs .chart-empty {
   align-self: stretch;
+}
+
+.usage-chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.usage-chart-controls .metric-tabs {
+  margin-bottom: 0;
+}
+
+.chart-currency-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-1);
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
 }
 
 .metric-tabs {

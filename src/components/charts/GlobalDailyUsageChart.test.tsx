@@ -58,6 +58,8 @@ const status = (accountId: string, dailyUsage: UsagePoint[]): RefreshOutcome => 
   info: { extras: [], fetchedAt: "2026-10-20T00:00:00", dailyUsage },
 });
 
+const localNoon = (day: string) => new Date(`${day}T12:00:00`).getTime();
+
 function chartRows(): Array<Record<string, string | number>> {
   const chart = screen.queryByTestId("usage-line-chart") ?? screen.getByTestId("usage-area-chart");
   return JSON.parse(chart.getAttribute("data-rows")!);
@@ -76,7 +78,7 @@ describe("GlobalDailyUsageChart", () => {
         { date: "2026-10-02", requests: 5430 },
       ]),
     };
-    render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} />);
+    render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} now={localNoon("2026-10-02")} />);
 
     expect(screen.queryByTestId("usage-area-chart")).toBeNull();
     expect(chartRows()).toEqual([
@@ -107,6 +109,8 @@ describe("GlobalDailyUsageChart", () => {
         bosc: status("bosc", [{ date: "2026-10-01T08:00:00", requests: 5430 }]),
       },
       "requests",
+      14,
+      localNoon("2026-10-01"),
     );
 
     expect(result.rows).toEqual([{ date: "2026-10-01", bosc: 5430, eto: 9 }]);
@@ -120,14 +124,15 @@ describe("GlobalDailyUsageChart", () => {
     }));
     const accounts = [account("a1"), account("a2")];
     const statuses = { a1: status("a1", dailyUsage), a2: status("a2", dailyUsage) };
-    const { rerender } = render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} />);
+    const props = { accounts, statuses, now: localNoon("2026-10-16") };
+    const { rerender } = render(<GlobalDailyUsageChart {...props} />);
 
     expect(chartRows()).toHaveLength(14);
     expect(chartRows()[0]).toEqual({ date: "2026-10-03", a1: 3, a2: 3 });
-    rerender(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} days={7} />);
+    rerender(<GlobalDailyUsageChart {...props} days={7} />);
     expect(chartRows()).toHaveLength(7);
     expect(chartRows()[0]).toEqual({ date: "2026-10-10", a1: 10, a2: 10 });
-    rerender(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} days={30} />);
+    rerender(<GlobalDailyUsageChart {...props} days={30} />);
     expect(chartRows()).toHaveLength(16);
     expect(chartRows()[0]).toEqual({ date: "2026-10-01", a1: 1, a2: 1 });
     expect(screen.getByTestId("usage-x-axis").getAttribute("data-label")).toBe("10-01");
@@ -142,7 +147,8 @@ describe("GlobalDailyUsageChart", () => {
         status(acc.id, [{ date: "2026-10-01", requests: index + 1, cost: index + 0.5, costUnit: "USD" }]),
       ]),
     );
-    const built = buildGlobalDailyUsageData(accounts, statuses, "requests");
+    const now = localNoon("2026-10-02");
+    const built = buildGlobalDailyUsageData(accounts, statuses, "requests", 14, now);
     expect(built.series.map((item) => item.key)).toEqual(["a8", "a7", "a6", "a5", "a4", "a3", "__other__"]);
     expect(built.rows[0].__other__).toBe(3);
 
@@ -157,7 +163,7 @@ describe("GlobalDailyUsageChart", () => {
         { date: "2026-10-02", requests: 5430, cost: 20, costUnit: "USD" },
       ]),
     };
-    render(<GlobalDailyUsageChart accounts={twoAccounts} statuses={twoStatuses} />);
+    render(<GlobalDailyUsageChart accounts={twoAccounts} statuses={twoStatuses} now={now} />);
     fireEvent.click(screen.getByRole("tab", { name: "费用" }));
     expect(chartRows()).toEqual([
       { date: "2026-10-01", bosc: 12.5, eto: 0.25 },
@@ -171,7 +177,7 @@ describe("GlobalDailyUsageChart", () => {
       eto: status("eto", [{ date: "2026-10-27", requests: 0 }]),
       bosc: status("bosc", [{ date: "2026-10-27", requests: 5430 }]),
     };
-    render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} />);
+    render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} now={localNoon("2026-10-27")} />);
     expect(screen.queryByText("暂无用量数据")).toBeNull();
     const lines = screen.getAllByTestId("usage-line");
     expect(lines).toHaveLength(2);
@@ -187,7 +193,7 @@ describe("GlobalDailyUsageChart", () => {
         requests: acc.id === "old" ? (day === 0 ? 1000 : 0) : index,
       }))),
     ]));
-    const result = buildGlobalDailyUsageData(accounts, statuses, "requests", 7);
+    const result = buildGlobalDailyUsageData(accounts, statuses, "requests", 7, localNoon("2026-10-08"));
     expect(result.series.map((item) => item.key)).toEqual(["a6", "a5", "a4", "a3", "a2", "a1", "__other__"]);
     expect(result.rows.every((row) => row.__other__ === 0)).toBe(true);
   });
@@ -209,8 +215,41 @@ describe("GlobalDailyUsageChart", () => {
   it("带时区时间戳与 usage-history 使用同一日历日", () => {
     const outcome = status("eto", [{ date: "2026-10-27T16:30:00Z", requests: 12 }]);
     const records = siteRecordsFromOutcomes([outcome], "2026-10-27T18:00:00Z");
-    const chart = buildGlobalDailyUsageData([account("eto")], { eto: outcome }, "requests");
+    const chart = buildGlobalDailyUsageData([account("eto")], { eto: outcome }, "requests", 14, localNoon("2026-10-28"));
     expect(records[0].date).toBe("2026-10-27");
     expect(chart.rows[0].date).toBe(records[0].date);
+  });
+
+  it("OpenAI 日期跨月按真实天数过滤，缺失的日子与明确的 0 分开", () => {
+    const openai = { ...account("openai"), kind: "openAi" } as const;
+    const statuses = {
+      openai: status("openai", [
+        { date: "2026-10-26", requests: 50 },
+        { date: "2026-10-27", requests: 0 },
+        { date: "2026-10-28", cost: 1, costUnit: "USD" },
+        { date: "2026-10-29", requests: 3 },
+      ]),
+    };
+    const result = buildGlobalDailyUsageData([openai], statuses, "requests", 7, Date.parse("2026-11-02T00:30:00Z"));
+    expect(result.rows).toEqual([
+      { date: "2026-10-27", openai: 0 },
+      { date: "2026-10-28", openai: null },
+      { date: "2026-10-29", openai: 3 },
+    ]);
+  });
+
+  it("费用主币种为 CNY 时仍可切换查看 OpenAI 的 USD 费用", () => {
+    const accounts = [{ ...account("openai"), kind: "openAi" as const }, account("a"), account("b")];
+    const date = "2026-11-01";
+    const statuses = {
+      openai: status("openai", [{ date, cost: 3, costUnit: "USD" }]),
+      a: status("a", [{ date, cost: 20, costUnit: "CNY" }]),
+      b: status("b", [{ date, cost: 1, costUnit: "CNY" }, { date, cost: 4, costUnit: "usd" }]),
+    };
+    render(<GlobalDailyUsageChart accounts={accounts} statuses={statuses} now={Date.parse("2026-11-02T12:00:00Z")} />);
+    fireEvent.click(screen.getByRole("tab", { name: "费用" }));
+    expect(chartRows()).toEqual([{ date, a: 20, b: 1 }]);
+    fireEvent.change(screen.getByRole("combobox", { name: "费用币种" }), { target: { value: "USD" } });
+    expect(chartRows()).toEqual([{ date, b: 4, openai: 3 }]);
   });
 });

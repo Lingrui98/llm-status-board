@@ -104,7 +104,9 @@ export default function AnalysisView({ records, statuses, accounts, today, error
   );
 
   const period = useMemo(() => comparePeriods(merged, today), [merged, today]);
-  const efficiency = useMemo(() => compareEfficiency(merged, today), [merged, today]);
+  const openAiIds = useMemo(() => new Set(enabled.filter((account) => account.kind === "openAi").map((account) => account.id)), [enabled]);
+  // OpenAI Costs 覆盖全组织收费，Completions Usage 只覆盖文本模型请求。
+  const efficiency = useMemo(() => compareEfficiency(merged.filter((record) => !openAiIds.has(record.accountId)), today), [merged, today, openAiIds]);
   const anomalies = useMemo(() => detectAnomalies(merged, today), [merged, today]);
 
   const models = useMemo(() => {
@@ -296,6 +298,7 @@ export default function AnalysisView({ records, statuses, accounts, today, error
 
               {/* ③ 账号效率对比（按币种分组，跨币种不比较） */}
               <ChartSection title={`账号效率对比（近 ${PERIOD_DAYS} 天 · 按币种分组）`}>
+                {openAiIds.size > 0 && <p className="chart-footnote">OpenAI API 的组织费用与模型请求统计范围不同，无法计算可比的单次请求成本。</p>}
                 {efficiency.empty ? (
                   <ChartEmpty height={72} text="近 7 天无可比较的账号用量" />
                 ) : (

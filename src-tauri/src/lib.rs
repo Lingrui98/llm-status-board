@@ -146,6 +146,8 @@ pub fn run() {
             commands::refresh_all,
             commands::get_last_results,
             commands::get_history,
+            commands::get_openai_usage_filters,
+            commands::get_openai_usage_report,
             quota_history::get_quota_history,
             commands::get_usage_history,
             commands::upsert_usage_history,
